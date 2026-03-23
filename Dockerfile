@@ -1,42 +1,53 @@
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+# Nanobot Docker Image with LiteParse Integration
+# Multi-stage build for minimal production image
 
-# Install Node.js 20 for the WhatsApp bridge
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl ca-certificates gnupg git openssh-client && \
-    mkdir -p /etc/apt/keyrings && \
-    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg && \
-    echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" > /etc/apt/sources.list.d/nodesource.list && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends nodejs && \
-    apt-get purge -y gnupg && \
-    apt-get autoremove -y && \
-    rm -rf /var/lib/apt/lists/*
+FROM python:3.11-slim AS base
 
 WORKDIR /app
 
-# Install Python dependencies first (cached layer)
-COPY pyproject.toml README.md LICENSE ./
-RUN mkdir -p nanobot bridge && touch nanobot/__init__.py && \
-    uv pip install --system --no-cache . && \
-    rm -rf nanobot bridge
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy the full source and install
-COPY nanobot/ nanobot/
-COPY bridge/ bridge/
-RUN uv pip install --system --no-cache .
+FROM base AS dependencies
 
-# Build the WhatsApp bridge
-RUN git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+# Copy requirements
+COPY pyproject.toml .
 
-WORKDIR /app/bridge
-RUN npm install && npm run build
-WORKDIR /app
+# Install nanobot
+RUN pip install --no-cache-dir -e .
 
-# Create config directory
-RUN mkdir -p /root/.nanobot
+FROM base AS production
 
-# Gateway default port
-EXPOSE 18790
+# Copy Python from dependencies
+COPY --from=dependencies /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=dependencies /usr/local/bin/nanobot /usr/local/bin/nanobot
 
-ENTRYPOINT ["nanobot"]
-CMD ["status"]
+# Copy application code
+COPY nanobot/ ./nanobot/
+COPY bridge/ ./bridge/
+
+# Create non-root user
+RUN useradd --create-home --shell /bin/bash nanobot
+USER nanobot
+
+# Create data directory
+RUN mkdir -p /app/.data
+VOLUME /app/.data
+
+# Expose web interface port
+EXPOSE 8080
+
+# Set environment
+ENV NANOBOT_CONFIG=/app/config/config.yaml
+ENV PYTHONUNBUFFERED=1
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# Run nanobot
+CMD ["nanobot", "start", "--config", "/app/config/config.yaml"]
