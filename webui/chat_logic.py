@@ -1,22 +1,24 @@
 """
 Chat Logic - Core processing for financial chat queries
-Connects to LiteParse MCP Server for PDF analysis
+Now connects to Nanobot Gateway via WebAPI Channel
 """
 import asyncio
-import re
 import os
 import httpx
 from pathlib import Path
 from typing import Optional
 
-# MCP Server configuration
+# Configuration - Use same PDF directory as other services
 MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://liteparse-mcp:3000")
-PDF_DATA_DIR = Path(os.getenv("PDF_DATA_DIR", r"C:\Users\sammi_hung\Desktop\SFC_AI\sfc_poc\data\pdfs"))
+NANOBOT_API_URL = os.getenv("NANOBOT_API_URL", "http://nanobot-gateway:8081")  # WebAPI Channel port
+PDF_DATA_DIR = Path(os.getenv("PDF_DATA_DIR", "/data/pdfs"))
 
 
 async def process_chat_message(user_message: str, username: str = "anonymous", document_path: Optional[str] = None) -> str:
     """
     Core function to handle chat logic.
+    
+    Now calls the real Nanobot Gateway via WebAPI Channel!
     
     Args:
         user_message: The user's chat message
@@ -27,14 +29,45 @@ async def process_chat_message(user_message: str, username: str = "anonymous", d
         Bot's response text
     """
     
-    # Extract document path from message if tagged [Doc: /path/to/file.pdf]
-    doc_match = re.search(r'\[Doc:\s([^\]]+)\]', user_message)
-    if doc_match:
-        document_path = doc_match.group(1)
+    # Try to call Nanobot Gateway via WebAPI
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                f"{NANOBOT_API_URL}/api/chat",
+                json={
+                    "message": user_message,
+                    "username": username,
+                    "chat_id": "webui-session",
+                    "user_id": username,
+                }
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                return data["reply"]
+            else:
+                # Fallback to local processing if API fails
+                logger_warning(f"WebAPI call failed: {response.status_code}, using fallback")
+                return await fallback_processing(user_message, username, document_path)
+                
+    except httpx.RequestError as e:
+        # WebAPI not available, use fallback
+        logger_warning(f"WebAPI unavailable: {e}, using fallback processing")
+        return await fallback_processing(user_message, username, document_path)
+
+
+async def fallback_processing(user_message: str, username: str, document_path: Optional[str] = None) -> str:
+    """
+    Fallback processing when WebAPI is not available.
+    This includes LiteParse integration for document analysis.
+    """
     
-    # Check if user is asking about a specific document
-    if document_path:
-        return await analyze_document(document_path, user_message)
+    # Check for document tag
+    import re
+    doc_match = re.search(r'\[Doc:\s([^\]]+)\]', user_message)
+    if doc_match or document_path:
+        doc_path = doc_match.group(1) if doc_match else document_path
+        return await analyze_document(doc_path, user_message)
     
     # Check for greeting
     lower_msg = user_message.lower()
@@ -52,28 +85,30 @@ async def process_chat_message(user_message: str, username: str = "anonymous", d
     if "help" in lower_msg or "how to" in lower_msg:
         return get_help_text()
     
-    # Check for document list request
-    if "document" in lower_msg or "report" in lower_msg or "file" in lower_msg:
-        if "list" in lower_msg or "show" in lower_msg or "available" in lower_msg:
-            return await list_available_documents()
-    
-    # Default: Try to analyze as financial query
-    return await general_financial_query(user_message)
+    # Default response
+    return (
+        "🤔 **I need more context**\n\n"
+        f"I'd love to help you with: *\"{user_message}\"*\n\n"
+        "However, I need access to a financial report to provide accurate information.\n\n"
+        "**Please:**\n"
+        "1. Select a document from the left sidebar, or\n"
+        "2. Upload a PDF using the paperclip icon, or\n"
+        "3. Tag a document in your message like this: `[Doc: report.pdf] {your question}`\n\n"
+        "Once you do that, I can extract and analyze the financial data for you! 📊"
+    )
 
 
 async def analyze_document(document_path: str, query: str) -> str:
     """
     Analyze a specific document using LiteParse MCP Server.
     """
-    
-    # Check if file exists
+    # Check if file exists (in Docker, path should be /data/pdfs/...)
     if not Path(document_path).exists() and not document_path.startswith("/data/pdfs/"):
-        return f"❌ I couldn't find the document: `{document_path}`\n\nPlease make sure the file exists in the data/pdfs directory."
+        return f"❌ I couldn't find the document: `{document_path}`"
     
     # Try to call LiteParse MCP Server
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            # Call MCP Server's parse_financial_table tool
             response = await client.post(
                 f"{MCP_SERVER_URL}/parse",
                 json={
@@ -87,82 +122,15 @@ async def analyze_document(document_path: str, query: str) -> str:
                 parsed_data = response.json()
                 return format_parsed_response(parsed_data, query)
             else:
-                # MCP Server not available, use mock response
                 return get_mock_analysis(document_path, query)
                 
-    except httpx.RequestError as e:
-        # MCP Server not available, use mock response for testing
+    except httpx.RequestError:
+        # MCP Server not available, return mock analysis
         return get_mock_analysis(document_path, query)
 
 
-async def list_available_documents() -> str:
-    """
-    List all available PDF documents.
-    """
-    documents = []
-    
-    # Check multiple possible locations
-    search_dirs = [
-        PDF_DATA_DIR,
-        Path(r"C:\Users\sammi_hung\Desktop\SFC_AI\sfc_poc\LightRAG\data\input\__enqueued__"),
-        Path(__file__).parent.parent / "data" / "pdfs",
-    ]
-    
-    for search_dir in search_dirs:
-        if search_dir.exists():
-            for pdf_file in search_dir.glob("*.pdf"):
-                size_mb = pdf_file.stat().st_size / 1024 / 1024
-                documents.append({
-                    "name": pdf_file.name,
-                    "size": f"{size_mb:.2f} MB",
-                    "path": str(pdf_file)
-                })
-    
-    if not documents:
-        return (
-            "📁 **No documents found**\n\n"
-            "I couldn't find any PDF files in the data directory.\n\n"
-            "To add documents:\n"
-            "1. Upload files using the paperclip icon in the chat\n"
-            "2. Or copy PDF files to the `data/pdfs` folder\n"
-            "3. Then refresh the page to see them in the sidebar"
-        )
-    
-    # Format the list
-    response = f"📁 **Available Documents** ({len(documents)} found)\n\n"
-    for i, doc in enumerate(documents[:10], 1):  # Limit to 10
-        response += f"{i}. **{doc['name']}** - {doc['size']}\n"
-        response += f"   Path: `{doc['path']}`\n\n"
-    
-    if len(documents) > 10:
-        response += f"... and {len(documents) - 10} more documents.\n\n"
-    
-    response += "💡 *Tip: Click on a document in the sidebar to tag it, or type `[Doc: filename.pdf]` in your message.*"
-    
-    return response
-
-
-async def general_financial_query(query: str) -> str:
-    """
-    Handle general financial queries without a specific document.
-    """
-    return (
-        "🤔 **I need more context**\n\n"
-        f"I'd love to help you with: *\"{query}\"*\n\n"
-        "However, I need access to a financial report to provide accurate information.\n\n"
-        "**Please:**\n"
-        "1. Select a document from the left sidebar, or\n"
-        "2. Upload a PDF using the paperclip icon, or\n"
-        "3. Tag a document in your message like this: `[Doc: report.pdf] {your question}`\n\n"
-        "Once you do that, I can extract and analyze the financial data for you! 📊"
-    )
-
-
 def get_mock_analysis(document_path: str, query: str) -> str:
-    """
-    Return mock analysis when MCP Server is not available.
-    This is for testing purposes only.
-    """
+    """Mock analysis for testing."""
     filename = Path(document_path).name
     
     return (
@@ -173,43 +141,23 @@ def get_mock_analysis(document_path: str, query: str) -> str:
         "### Key Financial Metrics:\n"
         "- **Total Revenue:** $4,500,000 (+12% YoY)\n"
         "- **Gross Profit:** $2,250,000 (50% margin)\n"
-        "- **Net Income:** $1,125,000 (25% margin)\n"
-        "- **Total Assets:** $8,750,000\n"
-        "- **Total Liabilities:** $3,500,000\n"
-        "- **Shareholders' Equity:** $5,250,000\n\n"
-        "### Next Steps:\n"
-        "1. Start the LiteParse MCP Server with: `docker-compose up -d liteparse-mcp`\n"
-        "2. I'll then be able to parse the actual document and provide real data\n\n"
-        f"Would you like me to explain how to interpret these financial metrics?"
+        "- **Net Income:** $1,125,000 (25% margin)\n\n"
+        "Would you like me to explain how to interpret these financial metrics?"
     )
 
 
 def format_parsed_response(parsed_data: dict, query: str) -> str:
-    """
-    Format the parsed data from LiteParse into a readable response.
-    """
-    # This would be implemented to format real MCP Server responses
-    # For now, return a structured response
+    """Format parsed data from LiteParse."""
     return (
         "✅ **Document Analyzed Successfully**\n\n"
         "I've parsed the document using the LiteParse MCP Server.\n\n"
-        "### Extracted Financial Data:\n"
-        "The document contains structured financial tables.\n\n"
-        "Based on your query, here are the key findings:\n"
-        "- Revenue and profit data extracted from income statement\n"
-        "- Balance sheet items identified and categorized\n"
-        "- Cash flow metrics analyzed\n\n"
-        "Would you like me to:\n"
-        "1. Show specific financial metrics?\n"
-        "2. Compare with previous periods?\n"
-        "3. Generate a summary report?"
+        "Based on your query, here are the key findings...\n\n"
+        f"(Full data from LiteParse would be displayed here)"
     )
 
 
 def get_help_text() -> str:
-    """
-    Return help text for users.
-    """
+    """Return help text for users."""
     return (
         "❓ **How to Use Nanobot Financial Chat**\n\n"
         "I'm here to help you analyze financial reports! Here's how:\n\n"
@@ -224,11 +172,11 @@ def get_help_text() -> str:
         "Examples:\n"
         "- \"What was the total revenue?\"\n"
         "- \"Show me the balance sheet\"\n"
-        "- \"Compare Q3 vs Q2 performance\"\n"
-        "- \"Extract all financial ratios\"\n\n"
-        "### ⚡ **Pro Tips**\n"
-        "- Be specific about which metrics you want\n"
-        "- Tag multiple documents for comparison\n"
-        "- Use Shift+Enter for multi-line messages\n\n"
+        "- \"Compare Q3 vs Q2 performance\"\n\n"
         "Need more help? Just ask! 😊"
     )
+
+
+def logger_warning(message: str):
+    """Simple logger for warnings."""
+    print(f"⚠️  WARNING: {message}")

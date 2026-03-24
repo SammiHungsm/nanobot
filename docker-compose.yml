@@ -3,9 +3,10 @@ x-common-config: &common-config
     context: .
     dockerfile: Dockerfile
   volumes:
-    # Mount config for runtime customization (optional)
     - ./config:/app/config
     - ~/.nanobot:/root/.nanobot
+    # 【統一】加返你嘅絕對路徑，確保 Nanobot Gateway 都睇到 PDF
+    - "C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/LightRAG/data/input/__enqueued__:/data/pdfs"
 
 services:
   # LiteParse MCP Server - Financial PDF parsing
@@ -14,7 +15,8 @@ services:
       context: ./liteparse-mcp-server
       dockerfile: Dockerfile
     volumes:
-      - ./data/pdfs:/data/pdfs
+      # 【統一】MCP Server 必須要同 Gateway 睇同一個 Folder
+      - "C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/LightRAG/data/input/__enqueued__:/data/pdfs"
     networks:
       - default
     restart: unless-stopped
@@ -34,8 +36,8 @@ services:
     command: ["nanobot", "gateway", "--config", "/app/config/config.json"]
     restart: unless-stopped
     ports:
-      - 18790:18790
-      - 8080:8080
+      - "18790:18790"
+      - "8081:8081"  # WebAPI Channel port for HTTP REST API
     environment:
       - NANOBOT_CONFIG=/app/config/config.json
       - MINIMAX_API_KEY=sk-sp-28b3d4d8ba97410d9e464eaa3f8fde4c
@@ -50,17 +52,21 @@ services:
           cpus: '0.25'
           memory: 256M
   
-  # Web UI - Financial Chat Interface
+  # Web UI - Financial Chat Interface (FastAPI 後端 + 前端)
   nanobot-webui:
     build:
       context: ./webui
       dockerfile: Dockerfile
     container_name: nanobot-webui
+    # 【新增】確保 FastAPI 啟動嘅指令
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080", "--reload"]
     volumes:
-      - ./data/pdfs:/data/pdfs:ro
-      - ./webui:/app:ro
+      # 【統一】令 WebUI 都可以讀到同一堆 PDF
+      - "C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/LightRAG/data/input/__enqueued__:/data/pdfs:ro"
+      - ./webui:/app
     ports:
-      - 3000:8080
+      # 【更新】依家去 http://localhost:3000 就可以 Call 到個 API
+      - "3000:8080"
     environment:
       - MCP_SERVER_URL=http://liteparse-mcp:3000
       - PDF_DATA_DIR=/data/pdfs

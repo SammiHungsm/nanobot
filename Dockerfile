@@ -27,6 +27,7 @@ COPY bridge/ ./bridge/
 
 # Install nanobot
 RUN pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir fastapi uvicorn
 
 FROM base AS production
 
