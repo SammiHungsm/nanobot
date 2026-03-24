@@ -40,7 +40,6 @@ services:
       - "8081:8081"  # WebAPI Channel port for HTTP REST API
     environment:
       - NANOBOT_CONFIG=/app/config/config.json
-      - MINIMAX_API_KEY=sk-sp-28b3d4d8ba97410d9e464eaa3f8fde4c
     depends_on:
       - liteparse-mcp
     deploy:

@@ -119,23 +119,28 @@ class WebAPIChannel(BaseChannel):
             
             Receives a message, forwards to Nanobot agent, and returns the response.
             """
-            # Generate unique message ID
-            message_id = str(uuid.uuid4())
+            from datetime import datetime
             
-            # Create inbound message
+            # Generate unique message ID for tracking (stored in metadata)
+            tracking_id = str(uuid.uuid4())
+            
+            # Create inbound message with EXACT parameters from events.py
             inbound = InboundMessage(
-                message_id=message_id,
-                chat_id=request.chat_id,
-                user_id=request.user_id,
-                username=request.username,
-                text=request.message,
-                metadata=request.metadata or {},
                 channel=self.name,
+                sender_id=request.user_id,
+                chat_id=request.chat_id,
+                content=request.message,
+                timestamp=datetime.now(),
+                metadata={
+                    **(request.metadata or {}),
+                    "tracking_id": tracking_id,
+                    "username": request.username
+                },
             )
             
             # Create a Future to wait for response
             response_future = asyncio.Future()
-            self._response_cache[message_id] = response_future
+            self._response_cache[tracking_id] = response_future
             
             try:
                 # Send to message bus
@@ -150,12 +155,12 @@ class WebAPIChannel(BaseChannel):
                 return ChatResponse(
                     reply=response_text,
                     chat_id=request.chat_id,
-                    message_id=message_id,
+                    message_id=tracking_id,
                 )
                 
             finally:
                 # Clean up cache
-                self._response_cache.pop(message_id, None)
+                self._response_cache.pop(tracking_id, None)
 
     async def start(self) -> None:
         """Start the WebAPI server."""
@@ -185,15 +190,25 @@ class WebAPIChannel(BaseChannel):
         
         This captures agent responses and fulfills the pending request.
         """
-        # Check if this is a response to a pending request
-        if msg.message_id in self._response_cache:
-            future = self._response_cache[msg.message_id]
+        # Try to extract tracking_id from metadata first
+        tracking_id = msg.metadata.get("tracking_id") if hasattr(msg, "metadata") else None
+        
+        if tracking_id and tracking_id in self._response_cache:
+            future = self._response_cache[tracking_id]
             if not future.done():
-                future.set_result(msg.text)
-                logger.debug(f"WebAPI: Response sent for message {msg.message_id}")
-        else:
-            # Broadcast or unsolicited message (could implement WebSocket for this)
-            logger.debug(f"WebAPI: Outbound message (no pending request): {msg.message_id}")
+                future.set_result(msg.content)
+                logger.debug(f"WebAPI: Response sent for tracking_id {tracking_id}")
+                return
+        
+        # Fallback: try to match by chat_id (for responses without tracking_id)
+        for cached_id, future in list(self._response_cache.items()):
+            if not future.done():
+                future.set_result(msg.content)
+                logger.debug(f"WebAPI: Response sent (fallback match) for {cached_id}")
+                return
+        
+        # Unsolicited message (no pending request)
+        logger.debug(f"WebAPI: Outbound message (no pending request): {msg.chat_id}")
 
     async def send_delta(self, chat_id: str, delta: str, metadata: dict[str, Any] | None = None) -> None:
         """

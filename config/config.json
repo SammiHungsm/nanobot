@@ -3,8 +3,8 @@
     "mcp_servers": {
       "liteparse": {
         "url": "http://liteparse-mcp:3000/sse",
-        "tool_timeout": 300,
-        "type": "sse"
+        "tool_timeout": 60,
+        "type": "streamableHttp"
       }
     }
   },
