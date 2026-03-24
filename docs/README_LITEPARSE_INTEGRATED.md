@@ -65,50 +65,45 @@ nanobot/
 
 ## 🚀 快速開始
 
-### 步驟 1: 安裝依賴
+### 步驟 1: 一鍵啟動（推薦）
 
+**所有依賴已包含喺 Docker 容器入面，無需用戶手動安裝！** 🎉
+
+**Windows 用戶：**
 ```bash
-# 安裝 LiteParse CLI
-npm install -g @llamaindex/liteparse
+# 方法 1: 雙擊 start.bat
+# 方法 2: PowerShell
+.\start.ps1
 
-# 安裝 Python 依賴（數據清洗層）
-pip install pymupdf pillow
+# 或者直接使用 docker-compose
+docker-compose up -d
 ```
 
-### 步驟 2: 配置 Nanobot
-
+**查看日誌：**
 ```bash
-cd nanobot
-
-# 複製配置範例
-cp config/config-liteparse-example.yaml config/config.yaml
-
-# 編輯 config.yaml，設置你嘅 API Key
-# model.api_key: ${OPENAI_API_KEY}
+docker-compose logs -f
 ```
+
+**停止服務：**
+```bash
+docker-compose down
+```
+
+### 步驟 2: 訪問 Nanobot
+
+- **Web UI:** http://localhost:8080
+- **API:** http://localhost:18790
 
 ### 步驟 3: 測試解析
 
-```bash
-# 運行快速測試
-python nanobot/agent/tools/liteparse.py
+將 PDF 文件放入 [`data/pdfs/`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/data/pdfs) 目錄，然後喺 Nanobot 中調用：
 
-# 或者使用測試腳本
-cd ..
-python test_liteparse_quick.py --pages "10-12"
-```
-
-### 步驟 4: Docker 部署（可選）
-
-```bash
-# 設置環境變量
-export OPENAI_API_KEY="sk-..."
-
-# 一鍵啟動
-docker-compose up -d
-
-# 查看日誌
-docker-compose logs -f
+```python
+# Nanobot 會自動透過 MCP 調用 LiteParse
+result = await tool.execute(
+    pdf_path="/data/pdfs/your_report.pdf",
+    output_format="context"
+)
 ```
 
 ---

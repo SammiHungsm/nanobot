@@ -50,6 +50,33 @@ services:
           cpus: '0.25'
           memory: 256M
   
+  # Web UI - Financial Chat Interface
+  nanobot-webui:
+    build:
+      context: ./webui
+      dockerfile: Dockerfile
+    container_name: nanobot-webui
+    volumes:
+      - ./data/pdfs:/data/pdfs:ro
+      - ./webui:/app:ro
+    ports:
+      - 3000:8080
+    environment:
+      - MCP_SERVER_URL=http://liteparse-mcp:3000
+      - PDF_DATA_DIR=/data/pdfs
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      - liteparse-mcp
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+  
   nanobot-cli:
     <<: *common-config
     profiles:
