@@ -10,12 +10,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
     git \
+    nodejs \
+    npm \
     && rm -rf /var/lib/apt/lists/*
+
+# Install LiteParse global dependencies
+RUN npm install -g @llamaindex/liteparse && \
+    pip install --no-cache-dir pymupdf pillow
 
 FROM base AS dependencies
 
-# Copy requirements
-COPY pyproject.toml .
+# Copy requirements, README, and source code needed for hatchling build
+COPY pyproject.toml README.md ./
+COPY nanobot/ ./nanobot/
+COPY bridge/ ./bridge/
 
 # Install nanobot
 RUN pip install --no-cache-dir -e .
@@ -30,12 +38,17 @@ COPY --from=dependencies /usr/local/bin/nanobot /usr/local/bin/nanobot
 COPY nanobot/ ./nanobot/
 COPY bridge/ ./bridge/
 
-# Create non-root user
-RUN useradd --create-home --shell /bin/bash nanobot
+# Create config directory (will be mounted at runtime)
+RUN mkdir -p /app/config
+
+# Create non-root user and setup directories
+RUN useradd --create-home --shell /bin/bash nanobot \
+    && mkdir -p /app/.data /app/config \
+    && chown -R nanobot:nanobot /app
+
 USER nanobot
 
-# Create data directory
-RUN mkdir -p /app/.data
+# Data volume
 VOLUME /app/.data
 
 # Expose web interface port

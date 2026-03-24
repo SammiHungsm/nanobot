@@ -3,16 +3,44 @@ x-common-config: &common-config
     context: .
     dockerfile: Dockerfile
   volumes:
+    # Mount config for runtime customization (optional)
+    - ./config:/app/config
     - ~/.nanobot:/root/.nanobot
 
 services:
+  # LiteParse MCP Server - Financial PDF parsing
+  liteparse-mcp:
+    build:
+      context: ./liteparse-mcp-server
+      dockerfile: Dockerfile
+    volumes:
+      - ./data/pdfs:/data/pdfs
+    networks:
+      - default
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+
+  # Nanobot Gateway - Main bot service
   nanobot-gateway:
     container_name: nanobot-gateway
     <<: *common-config
-    command: ["gateway"]
+    command: ["nanobot", "gateway", "--config", "/app/config/config.json"]
     restart: unless-stopped
     ports:
       - 18790:18790
+      - 8080:8080
+    environment:
+      - NANOBOT_CONFIG=/app/config/config.json
+      - MINIMAX_API_KEY=sk-sp-28b3d4d8ba97410d9e464eaa3f8fde4c
+    depends_on:
+      - liteparse-mcp
     deploy:
       resources:
         limits:

@@ -25,7 +25,7 @@ FROM node-base AS dependencies
 COPY package*.json ./
 
 # Install MCP SDK and dependencies
-RUN npm ci --only=production
+RUN npm install --omit=dev
 
 FROM node-base AS production
 
@@ -40,20 +40,25 @@ COPY --from=dependencies /app/node_modules ./node_modules
 COPY index.js ./
 COPY liteparse_data_cleaner.py ./
 
+# Create data directory for PDFs and set ownership (must be before USER change)
+RUN mkdir -p /data/pdfs
+
 # Create non-root user for security
 RUN addgroup -g 1001 -S nodejs && \
-    adduser -S nodejs -u 1001
+    adduser -S nodejs -u 1001 && \
+    chown nodejs:nodejs /data/pdfs
 
 USER nodejs
 
-# Create data directory for PDFs
-RUN mkdir -p /data/pdfs && chown nodejs:nodejs /data/pdfs
-
-# Expose port for SSE transport (if needed)
+# Expose port for HTTP transport
 EXPOSE 3000
 
 # Set working directory
 WORKDIR /app
 
-# Default command runs MCP server on stdio
+# Set environment for HTTP mode
+ENV MODE=http
+ENV PORT=3000
+
+# Default command runs MCP server on HTTP
 CMD ["node", "index.js"]

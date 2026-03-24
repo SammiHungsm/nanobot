@@ -12,12 +12,18 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import express from "express";
 import { spawn } from "child_process";
 import { existsSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// Server mode: 'stdio' or 'http'
+const MODE = process.env.MODE || 'stdio';
+const PORT = process.env.PORT || 3000;
 
 // LiteParse CLI wrapper
 class LiteParseCLI {
@@ -413,9 +419,45 @@ server.tool(
 
 // Start server
 async function main() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  console.error("LiteParse MCP Server running on stdio");
+  if (MODE === 'http') {
+    // HTTP/SSE mode for Docker containerization
+    const app = express();
+    
+    let transport;
+    
+    // SSE endpoint for MCP communication
+    app.get("/sse", async (req, res) => {
+      transport = new SSEServerTransport("/message", res);
+      await server.connect(transport);
+      
+      transport.onclose = () => {
+        console.error("SSE connection closed");
+      };
+    });
+    
+    // Message endpoint for MCP communication
+    app.post("/message", async (req, res) => {
+      if (transport) {
+        await transport.handlePostMessage(req, res);
+      } else {
+        res.status(500).json({ error: "No active transport" });
+      }
+    });
+    
+    // Health check endpoint
+    app.get("/health", (req, res) => {
+      res.json({ status: "ok", mode: "http", port: PORT });
+    });
+    
+    app.listen(PORT, "0.0.0.0", () => {
+      console.error(`LiteParse MCP Server running on HTTP port ${PORT}`);
+    });
+  } else {
+    // Stdio mode for local development
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+    console.error("LiteParse MCP Server running on stdio");
+  }
 }
 
 main().catch((error) => {
