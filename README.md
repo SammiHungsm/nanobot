@@ -1,24 +1,12 @@
-<div align="center">
-  <img src="nanobot_logo.png" alt="nanobot" width="500">
-  <h1>nanobot: Ultra-Lightweight Personal AI Assistant</h1>
-  <p>
-    <a href="https://pypi.org/project/nanobot-ai/"><img src="https://img.shields.io/pypi/v/nanobot-ai" alt="PyPI"></a>
-    <a href="https://pepy.tech/project/nanobot-ai"><img src="https://static.pepy.tech/badge/nanobot-ai" alt="Downloads"></a>
-    <img src="https://img.shields.io/badge/python-≥3.11-blue" alt="Python">
-    <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
-    <a href="./COMMUNICATION.md"><img src="https://img.shields.io/badge/Feishu-Group-E9DBFC?style=flat&logo=feishu&logoColor=white" alt="Feishu"></a>
-    <a href="./COMMUNICATION.md"><img src="https://img.shields.io/badge/WeChat-Group-C5EAB4?style=flat&logo=wechat&logoColor=white" alt="WeChat"></a>
-    <a href="https://discord.gg/MnCvHqpUGB"><img src="https://img.shields.io/badge/Discord-Community-5865F2?style=flat&logo=discord&logoColor=white" alt="Discord"></a>
-  </p>
-</div>
+# 🚀 財報分析 Chatbot - LiteParse + Nanobot
 
-🐈 **nanobot** is an **ultra-lightweight** personal AI assistant inspired by [OpenClaw](https://github.com/openclaw/openclaw).
+> **第一步 ✅ 已完成：所有依賴已包含喺 Docker 容器入面，無需用戶手動安裝！**
 
-⚡️ Delivers core agent functionality with **99% fewer lines of code** than OpenClaw.
+一個基於 MCP 協議嘅高準確度財報分析 Chatbot，結合 Nanobot Agent 同 LiteParse PDF 解析工具。
 
-📏 Real-time line count: run `bash core_agent_lines.sh` to verify anytime.
+---
 
-## 📢 News
+## 🎯 一分鐘快速開始
 
 > [!IMPORTANT]
 > **Security note:** Due to `litellm` supply chain poisoning, **please check your Python environment ASAP** and refer to this [advisory](https://github.com/HKUDS/nanobot/discussions/2445) for details. We have fully removed the `litellm` dependency in [this commit](https://github.com/HKUDS/nanobot/commit/3dfdab7).
@@ -40,115 +28,33 @@
 - **2026-03-07** 🚀 Azure OpenAI provider, WhatsApp media, QQ group chats, and more Telegram/Feishu polish.
 - **2026-03-06** 🪄 Lighter providers, smarter media handling, and sturdier memory and CLI compatibility.
 
-<details>
-<summary>Earlier news</summary>
-
-- **2026-03-05** ⚡️ Telegram draft streaming, MCP SSE support, and broader channel reliability fixes.
-- **2026-03-04** 🛠️ Dependency cleanup, safer file reads, and another round of test and Cron fixes.
-- **2026-03-03** 🧠 Cleaner user-message merging, safer multimodal saves, and stronger Cron guards.
-- **2026-03-02** 🛡️ Safer default access control, sturdier Cron reloads, and cleaner Matrix media handling.
-- **2026-03-01** 🌐 Web proxy support, smarter Cron reminders, and Feishu rich-text parsing improvements.
-- **2026-02-28** 🚀 Released **v0.1.4.post3** — cleaner context, hardened session history, and smarter agent. Please see [release notes](https://github.com/HKUDS/nanobot/releases/tag/v0.1.4.post3) for details.
-- **2026-02-27** 🧠 Experimental thinking mode support, DingTalk media messages, Feishu and QQ channel fixes.
-- **2026-02-26** 🛡️ Session poisoning fix, WhatsApp dedup, Windows path guard, Mistral compatibility.
-- **2026-02-25** 🧹 New Matrix channel, cleaner session context, auto workspace template sync.
-- **2026-02-24** 🚀 Released **v0.1.4.post2** — a reliability-focused release with a redesigned heartbeat, prompt cache optimization, and hardened provider & channel stability. See [release notes](https://github.com/HKUDS/nanobot/releases/tag/v0.1.4.post2) for details.
-- **2026-02-23** 🔧 Virtual tool-call heartbeat, prompt cache optimization, Slack mrkdwn fixes.
-- **2026-02-22** 🛡️ Slack thread isolation, Discord typing fix, agent reliability improvements.
-- **2026-02-21** 🎉 Released **v0.1.4.post1** — new providers, media support across channels, and major stability improvements. See [release notes](https://github.com/HKUDS/nanobot/releases/tag/v0.1.4.post1) for details.
-- **2026-02-20** 🐦 Feishu now receives multimodal files from users. More reliable memory under the hood.
-- **2026-02-19** ✨ Slack now sends files, Discord splits long messages, and subagents work in CLI mode.
-- **2026-02-18** ⚡️ nanobot now supports VolcEngine, MCP custom auth headers, and Anthropic prompt caching.
-- **2026-02-17** 🎉 Released **v0.1.4** — MCP support, progress streaming, new providers, and multiple channel improvements. Please see [release notes](https://github.com/HKUDS/nanobot/releases/tag/v0.1.4) for details.
-- **2026-02-16** 🦞 nanobot now integrates a [ClawHub](https://clawhub.ai) skill — search and install public agent skills.
-- **2026-02-15** 🔑 nanobot now supports OpenAI Codex provider with OAuth login support.
-- **2026-02-14** 🔌 nanobot now supports MCP! See [MCP section](#mcp-model-context-protocol) for details.
-- **2026-02-13** 🎉 Released **v0.1.3.post7** — includes security hardening and multiple improvements. **Please upgrade to the latest version to address security issues**. See [release notes](https://github.com/HKUDS/nanobot/releases/tag/v0.1.3.post7) for more details.
-- **2026-02-12** 🧠 Redesigned memory system — Less code, more reliable. Join the [discussion](https://github.com/HKUDS/nanobot/discussions/566) about it!
-- **2026-02-11** ✨ Enhanced CLI experience and added MiniMax support!
-- **2026-02-10** 🎉 Released **v0.1.3.post6** with improvements! Check the updates [notes](https://github.com/HKUDS/nanobot/releases/tag/v0.1.3.post6) and our [roadmap](https://github.com/HKUDS/nanobot/discussions/431).
-- **2026-02-09** 💬 Added Slack, Email, and QQ support — nanobot now supports multiple chat platforms!
-- **2026-02-08** 🔧 Refactored Providers—adding a new LLM provider now takes just 2 simple steps! Check [here](#providers).
-- **2026-02-07** 🚀 Released **v0.1.3.post5** with Qwen support & several key improvements! Check [here](https://github.com/HKUDS/nanobot/releases/tag/v0.1.3.post5) for details.
-- **2026-02-06** ✨ Added Moonshot/Kimi provider, Discord integration, and enhanced security hardening!
-- **2026-02-05** ✨ Added Feishu channel, DeepSeek provider, and enhanced scheduled tasks support!
-- **2026-02-04** 🚀 Released **v0.1.3.post4** with multi-provider & Docker support! Check [here](https://github.com/HKUDS/nanobot/releases/tag/v0.1.3.post4) for details.
-- **2026-02-03** ⚡ Integrated vLLM for local LLM support and improved natural language task scheduling!
-- **2026-02-02** 🎉 nanobot officially launched! Welcome to try 🐈 nanobot!
-
-</details>
-
-> 🐈 nanobot is for educational, research, and technical exchange purposes only. It is unrelated to crypto and does not involve any official token or coin.
-
-## Key Features of nanobot:
-
-🪶 **Ultra-Lightweight**: A super lightweight implementation of OpenClaw — 99% smaller, significantly faster.
-
-🔬 **Research-Ready**: Clean, readable code that's easy to understand, modify, and extend for research.
-
-⚡️ **Lightning Fast**: Minimal footprint means faster startup, lower resource usage, and quicker iterations.
-
-💎 **Easy-to-Use**: One-click to deploy and you're ready to go.
-
-## 🏗️ Architecture
-
-<p align="center">
-  <img src="nanobot_arch.png" alt="nanobot architecture" width="800">
-</p>
-
-## Table of Contents
-
-- [News](#-news)
-- [Key Features](#key-features-of-nanobot)
-- [Architecture](#️-architecture)
-- [Features](#-features)
-- [Install](#-install)
-- [Quick Start](#-quick-start)
-- [Chat Apps](#-chat-apps)
-- [Agent Social Network](#-agent-social-network)
-- [Configuration](#️-configuration)
-- [Multiple Instances](#-multiple-instances)
-- [CLI Reference](#-cli-reference)
-- [Docker](#-docker)
-- [Linux Service](#-linux-service)
-- [Project Structure](#-project-structure)
-- [Contribute & Roadmap](#-contribute--roadmap)
-- [Star History](#-star-history)
-
-## ✨ Features
-
-<table align="center">
-  <tr align="center">
-    <th><p align="center">📈 24/7 Real-Time Market Analysis</p></th>
-    <th><p align="center">🚀 Full-Stack Software Engineer</p></th>
-    <th><p align="center">📅 Smart Daily Routine Manager</p></th>
-    <th><p align="center">📚 Personal Knowledge Assistant</p></th>
-  </tr>
-  <tr>
-    <td align="center"><p align="center"><img src="case/search.gif" width="180" height="400"></p></td>
-    <td align="center"><p align="center"><img src="case/code.gif" width="180" height="400"></p></td>
-    <td align="center"><p align="center"><img src="case/scedule.gif" width="180" height="400"></p></td>
-    <td align="center"><p align="center"><img src="case/memory.gif" width="180" height="400"></p></td>
-  </tr>
-  <tr>
-    <td align="center">Discovery • Insights • Trends</td>
-    <td align="center">Develop • Deploy • Scale</td>
-    <td align="center">Schedule • Automate • Organize</td>
-    <td align="center">Learn • Memory • Reasoning</td>
-  </tr>
-</table>
-
-## 📦 Install
-
-**Install from source** (latest features, recommended for development)
-
-```bash
-git clone https://github.com/HKUDS/nanobot.git
-cd nanobot
-pip install -e .
+**方法 1: 雙擊啟動**
+```
+雙擊 start.bat
 ```
 
-**Install with [uv](https://github.com/astral-sh/uv)** (stable, fast)
+**方法 2: PowerShell**
+```powershell
+.\start.ps1
+```
+
+**方法 3: Docker Compose**
+```bash
+docker-compose up -d
+```
+
+### 訪問服務
+
+- **Web UI:** http://localhost:8080
+- **API:** http://localhost:18790
+
+### 停止服務
+
+```bash
+docker-compose down
+```
+
+**就係咁簡單！** 🎉
 
 ```bash
 uv tool install nanobot-ai
@@ -389,71 +295,26 @@ If you prefer to configure manually, add the following to `~/.nanobot/config.jso
 - Bot Permissions: `Send Messages`, `Read Message History`
 - Open the generated invite URL and add the bot to your server
 
-**6. Run**
+## 📋 系統架構
 
-```bash
-nanobot gateway
+```
+┌─────────────┐      ┌──────────────────┐      ┌─────────────────┐
+│   Nanobot   │ ───→ │  MCP Server      │ ───→ │  LiteParse CLI  │
+│   (Agent)   │ HTTP │  (Node.js + HTTP) │ CLI  │  (PDF Parser)   │
+└─────────────┘      └──────────────────┘      └──────────────────┘
+                              │
+                              ↓
+                     ┌─────────────────┐
+                     │ Data Cleaner    │
+                     │ (Python)        │
+                     └─────────────────┘
 ```
 
-</details>
+---
 
-<details>
-<summary><b>Matrix (Element)</b></summary>
+## 🐳 Docker 容器包含咩？
 
-Install Matrix dependencies first:
-
-```bash
-pip install nanobot-ai[matrix]
-```
-
-**1. Create/choose a Matrix account**
-
-- Create or reuse a Matrix account on your homeserver (for example `matrix.org`).
-- Confirm you can log in with Element.
-
-**2. Get credentials**
-
-- You need:
-  - `userId` (example: `@nanobot:matrix.org`)
-  - `accessToken`
-  - `deviceId` (recommended so sync tokens can be restored across restarts)
-- You can obtain these from your homeserver login API (`/_matrix/client/v3/login`) or from your client's advanced session settings.
-
-**3. Configure**
-
-```json
-{
-  "channels": {
-    "matrix": {
-      "enabled": true,
-      "homeserver": "https://matrix.org",
-      "userId": "@nanobot:matrix.org",
-      "accessToken": "syt_xxx",
-      "deviceId": "NANOBOT01",
-      "e2eeEnabled": true,
-      "allowFrom": ["@your_user:matrix.org"],
-      "groupPolicy": "open",
-      "groupAllowFrom": [],
-      "allowRoomMentions": false,
-      "maxMediaBytes": 20971520
-    }
-  }
-}
-```
-
-> Keep a persistent `matrix-store` and stable `deviceId` — encrypted session state is lost if these change across restarts.
-
-| Option | Description |
-|--------|-------------|
-| `allowFrom` | User IDs allowed to interact. Empty denies all; use `["*"]` to allow everyone. |
-| `groupPolicy` | `open` (default), `mention`, or `allowlist`. |
-| `groupAllowFrom` | Room allowlist (used when policy is `allowlist`). |
-| `allowRoomMentions` | Accept `@room` mentions in mention mode. |
-| `e2eeEnabled` | E2EE support (default `true`). Set `false` for plaintext-only. |
-| `maxMediaBytes` | Max attachment size (default `20MB`). Set `0` to block all media. |
-
-
-
+### `liteparse-mcp` 容器
 
 **4. Run**
 
@@ -822,22 +683,22 @@ nanobot gateway
 
 </details>
 
-## 🌐 Agent Social Network
+### `nanobot-gateway` 容器
 
-🐈 nanobot is capable of linking to the agent social network (agent community). **Just send one message and your nanobot joins automatically!**
+- Python 3.11
+- Nanobot Agent 框架
+- MCP Client
 
-| Platform | How to Join (send this message to your bot) |
-|----------|-------------|
-| [**Moltbook**](https://www.moltbook.com/) | `Read https://moltbook.com/skill.md and follow the instructions to join Moltbook` |
-| [**ClawdChat**](https://clawdchat.ai/) | `Read https://clawdchat.ai/skill.md and follow the instructions to join ClawdChat` |
+**所有依賴已自動安裝，無需用戶手動配置！**
 
-Simply send the command above to your nanobot (via CLI or any chat channel), and it will handle the rest.
+---
 
-## ⚙️ Configuration
+## 💡 使用範例
 
-Config file: `~/.nanobot/config.json`
+### 場景：分析 SFC 年報
 
-### Providers
+1. **上傳 PDF**
+   將 PDF 放入 `data/pdfs/` 目錄
 
 > [!TIP]
 > - **Groq** provides free voice transcription via Whisper. If configured, Telegram voice messages will be automatically transcribed.
@@ -1646,82 +1507,116 @@ systemctl --user restart nanobot-gateway       # restart after config changes
 journalctl --user -u nanobot-gateway -f        # follow logs
 ```
 
-If you edit the `.service` file itself, run `systemctl --user daemon-reload` before restarting.
+4. **結果**
+   Agent 返回結構化分析結果
 
-> **Note:** User services only run while you are logged in. To keep the gateway running after logout, enable lingering:
->
-> ```bash
-> loginctl enable-linger $USER
-> ```
+---
 
-## 📁 Project Structure
+## 📁 目錄結構
 
 ```
 nanobot/
-├── agent/          # 🧠 Core agent logic
-│   ├── loop.py     #    Agent loop (LLM ↔ tool execution)
-│   ├── context.py  #    Prompt builder
-│   ├── memory.py   #    Persistent memory
-│   ├── skills.py   #    Skills loader
-│   ├── subagent.py #    Background task execution
-│   └── tools/      #    Built-in tools (incl. spawn)
-├── skills/         # 🎯 Bundled skills (github, weather, tmux...)
-├── channels/       # 📱 Chat channel integrations (supports plugins)
-├── bus/            # 🚌 Message routing
-├── cron/           # ⏰ Scheduled tasks
-├── heartbeat/      # 💓 Proactive wake-up
-├── providers/      # 🤖 LLM providers (OpenRouter, etc.)
-├── session/        # 💬 Conversation sessions
-├── config/         # ⚙️ Configuration
-└── cli/            # 🖥️ Commands
+├── start.bat              # Windows 一鍵啟動
+├── start.ps1              # PowerShell 一鍵啟動
+├── docker-compose.yml     # Docker 配置
+├── config/                # 配置文件
+├── data/pdfs/             # PDF 文件目錄
+├── liteparse-mcp-server/  # MCP 服務
+│   ├── index.js           # MCP Server
+│   ├── liteparse_data_cleaner.py  # 數據清洗
+│   └── Dockerfile
+├── nanobot/               # Nanobot 主程式
+│   └── agent/tools/liteparse.py   # LiteParse 工具
+└── tests/                 # 測試套件
 ```
 
-## 🤝 Contribute & Roadmap
+---
 
-PRs welcome! The codebase is intentionally small and readable. 🤗
+## 📚 文檔
 
-### Branching Strategy
+| 文檔 | 說明 |
+|------|------|
+| [`FIRST_STEP_COMPLETE.md`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/FIRST_STEP_COMPLETE.md) | **第一步完成報告** |
+| [`QUICKSTART_MCP.md`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/QUICKSTART_MCP.md) | 快速開始指南 |
+| [`liteparse-mcp-server/README_DOCKER.md`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/liteparse-mcp-server/README_DOCKER.md) | Docker 部署指南 |
+| [`README_LITEPARSE_INTEGRATED.md`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/README_LITEPARSE_INTEGRATED.md) | 集成說明 |
 
-| Branch | Purpose |
-|--------|---------|
-| `main` | Stable releases — bug fixes and minor improvements |
-| `nightly` | Experimental features — new features and breaking changes |
+---
 
-**Unsure which branch to target?** See [CONTRIBUTING.md](./CONTRIBUTING.md) for details.
+## 🧪 測試
 
-**Roadmap** — Pick an item and [open a PR](https://github.com/HKUDS/nanobot/pulls)!
+### 端到端測試
 
-- [ ] **Multi-modal** — See and hear (images, voice, video)
-- [ ] **Long-term memory** — Never forget important context
-- [ ] **Better reasoning** — Multi-step planning and reflection
-- [ ] **More integrations** — Calendar and more
-- [ ] **Self-improvement** — Learn from feedback and mistakes
+```bash
+py test_end_to_end.py
+```
 
-### Contributors
+### Docker 測試
 
-<a href="https://github.com/HKUDS/nanobot/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=HKUDS/nanobot&max=100&columns=12&updated=20260210" alt="Contributors" />
-</a>
+```bash
+docker-compose ps
+docker-compose logs -f
+```
 
+---
 
-## ⭐ Star History
+## 🔧 常見命令
 
-<div align="center">
-  <a href="https://star-history.com/#HKUDS/nanobot&Date">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=HKUDS/nanobot&type=Date&theme=dark" />
-      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=HKUDS/nanobot&type=Date" />
-      <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=HKUDS/nanobot&type=Date" style="border-radius: 15px; box-shadow: 0 0 30px rgba(0, 217, 255, 0.3);" />
-    </picture>
-  </a>
-</div>
+```bash
+# 啟動服務
+docker-compose up -d
 
-<p align="center">
-  <em> Thanks for visiting ✨ nanobot!</em><br><br>
-  <img src="https://visitor-badge.laobi.icu/badge?page_id=HKUDS.nanobot&style=for-the-badge&color=00d4ff" alt="Views">
-</p>
+# 查看日誌
+docker-compose logs -f
 
+# 停止服務
+docker-compose down
 
-<p align="center">
-  <sub>nanobot is for educational, research, and technical exchange purposes only</sub>
-</p>
+# 重建容器
+docker-compose build --no-cache
+
+# 進入容器調試
+docker-compose exec liteparse-mcp sh
+```
+
+---
+
+## ❓ 常見問題
+
+### Q: 需要手動安裝依賴嗎？
+
+**A:** 唔需要！所有依賴已包含喺 Docker 容器入面。
+
+### Q: Docker 容器佔用幾多資源？
+
+**A:** 最多 1.5GB RAM, 1.5 CPU（實際使用更少）
+
+### Q: 點樣上傳 PDF 文件？
+
+**A:** 將 PDF 放入 `data/pdfs/` 目錄，容器會自動掛載。
+
+### Q: 遇到問題點算？
+
+**A:** 查看 [`FIRST_STEP_COMPLETE.md`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/FIRST_STEP_COMPLETE.md) 嘅常見問題章節。
+
+---
+
+## 🎯 下一步
+
+**第一步 ✅ 已完成** - Docker 化部署，零手動安裝
+
+**下一步：** 第二步（數據清洗與 Prompt 設計）
+
+1. 優化數據清洗邏輯
+2. 設計 System Prompt
+3. 測試真實場景
+
+---
+
+## 📞 需要幫助？
+
+查看完整文檔：[`FIRST_STEP_COMPLETE.md`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/FIRST_STEP_COMPLETE.md)
+
+---
+
+**記住：所有依賴已包含喺 Docker 容器入面，你只需要運行 `docker-compose up -d`！** 🚀

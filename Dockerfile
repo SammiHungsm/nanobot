@@ -1,42 +1,67 @@
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+# Nanobot Docker Image with LiteParse Integration
+# Multi-stage build for minimal production image
 
-# Install Node.js 20 for the WhatsApp bridge
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl ca-certificates gnupg git openssh-client && \
-    mkdir -p /etc/apt/keyrings && \
-    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg && \
-    echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" > /etc/apt/sources.list.d/nodesource.list && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends nodejs && \
-    apt-get purge -y gnupg && \
-    apt-get autoremove -y && \
-    rm -rf /var/lib/apt/lists/*
+FROM python:3.11-slim AS base
 
 WORKDIR /app
 
-# Install Python dependencies first (cached layer)
-COPY pyproject.toml README.md LICENSE ./
-RUN mkdir -p nanobot bridge && touch nanobot/__init__.py && \
-    uv pip install --system --no-cache . && \
-    rm -rf nanobot bridge
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    git \
+    nodejs \
+    npm \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy the full source and install
-COPY nanobot/ nanobot/
-COPY bridge/ bridge/
-RUN uv pip install --system --no-cache .
+# Install LiteParse global dependencies
+RUN npm install -g @llamaindex/liteparse && \
+    pip install --no-cache-dir pymupdf pillow
 
-# Build the WhatsApp bridge
-RUN git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+FROM base AS dependencies
 
-WORKDIR /app/bridge
-RUN npm install && npm run build
-WORKDIR /app
+# Copy requirements, README, and source code needed for hatchling build
+COPY pyproject.toml README.md ./
+COPY nanobot/ ./nanobot/
+COPY bridge/ ./bridge/
 
-# Create config directory
-RUN mkdir -p /root/.nanobot
+# Install nanobot
+RUN pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir fastapi uvicorn
 
-# Gateway default port
-EXPOSE 18790
+FROM base AS production
 
-ENTRYPOINT ["nanobot"]
-CMD ["status"]
+# Copy Python from dependencies
+COPY --from=dependencies /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=dependencies /usr/local/bin/nanobot /usr/local/bin/nanobot
+
+# Copy application code
+COPY nanobot/ ./nanobot/
+COPY bridge/ ./bridge/
+
+# Create config directory (will be mounted at runtime)
+RUN mkdir -p /app/config
+
+# Create non-root user and setup directories
+RUN useradd --create-home --shell /bin/bash nanobot \
+    && mkdir -p /app/.data /app/config \
+    && chown -R nanobot:nanobot /app
+
+USER nanobot
+
+# Data volume
+VOLUME /app/.data
+
+# Expose web interface port
+EXPOSE 8080
+
+# Set environment
+ENV NANOBOT_CONFIG=/app/config/config.yaml
+ENV PYTHONUNBUFFERED=1
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# Run nanobot
+CMD ["nanobot", "start", "--config", "/app/config/config.yaml"]

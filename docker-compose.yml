@@ -3,16 +3,45 @@ x-common-config: &common-config
     context: .
     dockerfile: Dockerfile
   volumes:
+    - ./config:/app/config
     - ~/.nanobot:/root/.nanobot
+    # 【統一】加返你嘅絕對路徑，確保 Nanobot Gateway 都睇到 PDF
+    - "C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/LightRAG/data/input/__enqueued__:/data/pdfs"
 
 services:
+  # LiteParse MCP Server - Financial PDF parsing
+  liteparse-mcp:
+    build:
+      context: ./liteparse-mcp-server
+      dockerfile: Dockerfile
+    volumes:
+      # 【統一】MCP Server 必須要同 Gateway 睇同一個 Folder
+      - "C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/LightRAG/data/input/__enqueued__:/data/pdfs"
+    networks:
+      - default
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+
+  # Nanobot Gateway - Main bot service
   nanobot-gateway:
     container_name: nanobot-gateway
     <<: *common-config
-    command: ["gateway"]
+    command: ["nanobot", "gateway", "--config", "/app/config/config.json"]
     restart: unless-stopped
     ports:
-      - 18790:18790
+      - "18790:18790"
+      - "8081:8081"  # WebAPI Channel port for HTTP REST API
+    environment:
+      - NANOBOT_CONFIG=/app/config/config.json
+    depends_on:
+      - liteparse-mcp
     deploy:
       resources:
         limits:
@@ -21,6 +50,37 @@ services:
         reservations:
           cpus: '0.25'
           memory: 256M
+  
+  # Web UI - Financial Chat Interface (FastAPI 後端 + 前端)
+  nanobot-webui:
+    build:
+      context: ./webui
+      dockerfile: Dockerfile
+    container_name: nanobot-webui
+    # 【新增】確保 FastAPI 啟動嘅指令
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080", "--reload"]
+    volumes:
+      # 【統一】令 WebUI 都可以讀到同一堆 PDF
+      - "C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/LightRAG/data/input/__enqueued__:/data/pdfs:ro"
+      - ./webui:/app
+    ports:
+      # 【更新】依家去 http://localhost:3000 就可以 Call 到個 API
+      - "3000:8080"
+    environment:
+      - MCP_SERVER_URL=http://liteparse-mcp:3000
+      - PDF_DATA_DIR=/data/pdfs
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      - liteparse-mcp
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
   
   nanobot-cli:
     <<: *common-config
