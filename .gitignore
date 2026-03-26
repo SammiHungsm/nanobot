@@ -1,4 +1,5 @@
 .worktrees/
+config.json
 .assets
 .docs
 .env
