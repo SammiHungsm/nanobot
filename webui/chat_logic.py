@@ -31,7 +31,7 @@ async def process_chat_message(user_message: str, username: str = "anonymous", d
     
     # Try to call Nanobot Gateway via WebAPI
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=300.0) as client:
             response = await client.post(
                 f"{NANOBOT_API_URL}/api/chat",
                 json={
@@ -108,7 +108,7 @@ async def analyze_document(document_path: str, query: str) -> str:
     
     # Try to call LiteParse MCP Server
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=300.0) as client:
             response = await client.post(
                 f"{MCP_SERVER_URL}/parse",
                 json={
@@ -180,3 +180,32 @@ def get_help_text() -> str:
 def logger_warning(message: str):
     """Simple logger for warnings."""
     print(f"⚠️  WARNING: {message}")
+
+# 喺 chat_logic.py 新增呢個非同步生成器 (Async Generator)
+async def process_chat_message_stream(user_message: str, username: str = "anonymous", document_path: Optional[str] = None):
+    """
+    Stream data from Nanobot Gateway to the WebUI frontend.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            # 🌟 注意：呢度假設你嘅 nanobot-gateway 已經支援 /api/stream 
+            async with client.stream(
+                "POST",
+                f"{NANOBOT_API_URL}/api/stream", # 呼叫 Gateway 的串流接口
+                json={
+                    "message": user_message,
+                    "username": username,
+                    "chat_id": "webui-session",
+                    "user_id": username,
+                }
+            ) as response:
+                
+                if response.status_code == 200:
+                    # 🌟 核心改動：一收到 chunk 就 yield (拋出) 畀 FastAPI，再推畀前端
+                    async for chunk in response.aiter_text():
+                        yield chunk
+                else:
+                    yield f"⚠️ Gateway Error: {response.status_code}"
+                    
+    except httpx.RequestError as e:
+        yield f"⚠️ WebAPI unavailable: {str(e)}"

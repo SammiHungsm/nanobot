@@ -13,6 +13,7 @@ from pathlib import Path
 
 # Import the core logic
 from chat_logic import process_chat_message
+from fastapi.responses import StreamingResponse
 
 # Initialize FastAPI application
 app = FastAPI(title="Nanobot Financial Chat", version="1.0.0")
@@ -126,6 +127,19 @@ async def health_check():
         "mcp_connection": "ready",
         "version": "1.0.0"
     }
+    
+@app.post("/api/chat/stream")
+async def chat_stream_endpoint(request: ChatRequest):
+    """
+    Streaming endpoint for the web frontend to receive typewriter effect.
+    """
+    # 注意：我哋唔再 return JSON，而係 return 一個 Generator (生成器)
+    from chat_logic import process_chat_message_stream
+    
+    return StreamingResponse(
+        process_chat_message_stream(request.message, request.username, request.document_path),
+        media_type="text/event-stream"
+    )
 
 if __name__ == "__main__":
     # Run the server

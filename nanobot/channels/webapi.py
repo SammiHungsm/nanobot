@@ -5,28 +5,18 @@ This channel exposes Nanobot as a REST API for web frontends.
 Perfect for custom web UIs, mobile apps, or any HTTP client.
 
 Endpoints:
-  POST /api/chat - Send a message and get a response
+  POST /api/chat   - Send a message and get full response
+  POST /api/stream - Send a message and get streaming response (New!)
   GET  /api/health - Health check
-  GET  /api/status - Agent status
-
-Usage:
-  Enable in config.json:
-  {
-    "channels": {
-      "webapi": {
-        "enabled": true,
-        "host": "0.0.0.0",
-        "port": 8081
-      }
-    }
-  }
 """
 
 import asyncio
 import uuid
-from typing import Any
+import json
+from typing import Any, Union
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from uvicorn import Config, Server
@@ -68,8 +58,7 @@ class WebAPIChannel(BaseChannel):
     This channel creates a lightweight FastAPI server that:
     1. Receives messages from web frontends
     2. Forwards them to the Nanobot message bus
-    3. Waits for agent response
-    4. Returns the response to the client
+    3. Handles both synchronous and streaming responses
     """
 
     name = "webapi"
@@ -89,7 +78,9 @@ class WebAPIChannel(BaseChannel):
         
         # Server instance
         self._server: Server | None = None
-        self._response_cache: dict[str, asyncio.Future] = {}
+        
+        # 🌟 Cache 可以裝 Future (用於同步 /api/chat) 或者 Queue (用於串流 /api/stream)
+        self._response_cache: dict[str, Union[asyncio.Future, asyncio.Queue]] = {}
 
     def _setup_cors(self):
         """Configure CORS for web frontend access."""
@@ -114,105 +105,96 @@ class WebAPIChannel(BaseChannel):
 
         @self.app.post("/api/chat", response_model=ChatResponse)
         async def chat_endpoint(request: ChatRequest):
-            """
-            Main chat endpoint.
-            
-            Receives a message, forwards to Nanobot agent, and returns the response.
-            """
+            """舊版：同步等待完整回覆 (保留作向下相容)"""
             from datetime import datetime
-            
-            # Generate unique message ID for tracking (stored in metadata)
             tracking_id = str(uuid.uuid4())
             
-            # 🔥 DEBUG: Log incoming request details
-            logger.info(f"🔥 WebAPI: Received chat request")
-            logger.info(f"   - user_id: {request.user_id}")
-            logger.info(f"   - chat_id: {request.chat_id}")
-            logger.info(f"   - message: {request.message[:50]}...")
-            logger.info(f"   - tracking_id: {tracking_id[:8]}...")
+            inbound = InboundMessage(
+                channel=self.name,
+                sender_id=request.user_id,
+                chat_id=request.chat_id,
+                content=request.message,
+                timestamp=datetime.now(),
+                metadata={
+                    **(request.metadata or {}),
+                    "tracking_id": tracking_id,
+                    "username": request.username,
+                    "actual_msg_id": tracking_id
+                },
+            )
+            
+            response_future = asyncio.Future()
+            self._response_cache[tracking_id] = response_future
             
             try:
-                # Create inbound message with EXACT parameters from events.py
-                # Note: DO NOT pass message_id - InboundMessage doesn't have this field
-                logger.debug(f"Creating InboundMessage instance...")
-                inbound = InboundMessage(
-                    channel=self.name,
-                    sender_id=request.user_id,
-                    chat_id=request.chat_id,
-                    content=request.message,
-                    timestamp=datetime.now(),
-                    metadata={
-                        **(request.metadata or {}),
-                        "tracking_id": tracking_id,
-                        "username": request.username,
-                        "actual_msg_id": tracking_id  # Store tracking ID for response matching
-                    },
-                )
-                logger.debug(f"✅ InboundMessage created successfully")
-                logger.debug(f"   - channel: {inbound.channel}")
-                logger.debug(f"   - sender_id: {inbound.sender_id}")
-                logger.debug(f"   - chat_id: {inbound.chat_id}")
-                logger.debug(f"   - session_key: {inbound.session_key}")
-                
-                # Create a Future to wait for response
-                response_future = asyncio.Future()
-                self._response_cache[tracking_id] = response_future
-                logger.debug(f"✅ Response future created and cached")
-                
-                # Send to message bus
-                logger.info(f"Publishing 'inbound_message' event to bus via publish_inbound()...")
-                try:
-                    await self.bus.publish_inbound(inbound)
-                    logger.info(f"✅ Message published to bus successfully via publish_inbound()")
-                except AttributeError as ae:
-                    logger.error(f"❌ MessageBus does not have 'publish_inbound' method: {ae}", exc_info=True)
-                    raise HTTPException(status_code=500, detail=f"Bus API error: {str(ae)}")
-                except Exception as publish_error:
-                    logger.error(f"❌ Failed to publish message: {publish_error}", exc_info=True)
-                    raise HTTPException(status_code=500, detail=f"Bus publish failed: {str(publish_error)}")
-                
-                # Wait for response (timeout: 300 seconds for MCP tools)
-                logger.info(f"Waiting for agent response (timeout: 300s)...")
-                try:
-                    response_text = await asyncio.wait_for(response_future, timeout=300.0)
-                    logger.info(f"✅ Got response: {response_text[:100]}...")
-                except asyncio.TimeoutError:
-                    logger.error(f"❌ Agent response timeout for tracking_id {tracking_id}")
-                    raise HTTPException(status_code=504, detail="Agent response timeout (300s)")
-                
-                logger.info(f"✅ Returning ChatResponse")
+                await self.bus.publish_inbound(inbound)
+                response_text = await asyncio.wait_for(response_future, timeout=300.0)
                 return ChatResponse(
                     reply=response_text,
                     chat_id=request.chat_id,
                     message_id=tracking_id,
                 )
-                
-            except HTTPException:
-                # Re-raise HTTP exceptions as-is
-                raise
+            except asyncio.TimeoutError:
+                raise HTTPException(status_code=504, detail="Agent response timeout (300s)")
             except Exception as e:
-                logger.error(f"❌ WebAPI: Unexpected error processing chat request: {e}", exc_info=True)
-                logger.error(f"   Error type: {type(e).__name__}")
-                import traceback
-                logger.error(f"   Traceback: {traceback.format_exc()}")
-                raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+                raise HTTPException(status_code=500, detail=str(e))
             finally:
-                # Clean up cache (delayed cleanup to allow response matching)
                 asyncio.create_task(self._cleanup_tracking_id(tracking_id))
+
+        @self.app.post("/api/stream")
+        async def stream_endpoint(request: ChatRequest):
+            """新版：串流打字機效果 (Server-Sent Events)"""
+            from datetime import datetime
+            tracking_id = str(uuid.uuid4())
+            
+            # 🌟 使用 Queue 來接收即時字粒
+            message_queue = asyncio.Queue()
+            self._response_cache[tracking_id] = message_queue
+            
+            inbound = InboundMessage(
+                channel=self.name,
+                sender_id=request.user_id,
+                chat_id=request.chat_id,
+                content=request.message,
+                timestamp=datetime.now(),
+                metadata={
+                    **(request.metadata or {}),
+                    "tracking_id": tracking_id,
+                    "username": request.username,
+                    "actual_msg_id": tracking_id
+                },
+            )
+
+            async def event_generator():
+                try:
+                    await self.bus.publish_inbound(inbound)
+                    while True:
+                        # 等待下一個字粒，超時設為 120 秒 (避免一直卡死)
+                        chunk = await asyncio.wait_for(message_queue.get(), timeout=120.0)
+                        
+                        if chunk == "[DONE]":
+                            break
+                            
+                        # 🌟 SSE 格式輸出
+                        yield f"data: {json.dumps({'content': chunk})}\n\n"
+                except asyncio.TimeoutError:
+                    yield f"data: {json.dumps({'error': 'Agent thinking timeout (120s)'})}\n\n"
+                except Exception as e:
+                    yield f"data: {json.dumps({'error': f'Stream Error: {str(e)}'})}\n\n"
+                finally:
+                    await self._cleanup_tracking_id(tracking_id, delay=0)
+
+            return StreamingResponse(event_generator(), media_type="text/event-stream")
 
     async def start(self) -> None:
         """Start the WebAPI server."""
         self._running = True
-        
-        # Configure uvicorn server
         config = Config(app=self.app, host=self.host, port=self.port, log_level="info")
         self._server = Server(config=config)
-        
         logger.info(f"WebAPI Channel started on http://{self.host}:{self.port}")
-        logger.info(f"  POST /api/chat - Send messages")
+        logger.info(f"  POST /api/chat   - Send messages (Sync)")
+        logger.info(f"  POST /api/stream - Send messages (Streaming)")
         logger.info(f"  GET  /api/health - Health check")
-        
-        # Run server
         await self._server.serve()
 
     async def stop(self) -> None:
@@ -223,50 +205,47 @@ class WebAPIChannel(BaseChannel):
             logger.info("WebAPI Channel stopped")
 
     async def send(self, msg: OutboundMessage) -> None:
-        """
-        Handle outbound messages from the agent.
-        
-        This captures agent responses and fulfills the pending request.
-        """
-        # Try to extract tracking_id from metadata first
+        """處理最終完整回覆與進度回報"""
         tracking_id = None
+        is_progress = False # 👈 新增：檢查係咪進度回報
+        
         if hasattr(msg, "metadata") and msg.metadata:
             tracking_id = msg.metadata.get("tracking_id") or msg.metadata.get("actual_msg_id")
+            is_progress = msg.metadata.get("_progress", False) # 👈 新增：讀取進度標籤
         
         if tracking_id and tracking_id in self._response_cache:
-            future = self._response_cache[tracking_id]
-            if not future.done():
-                future.set_result(msg.content)
-                logger.info(f"WebAPI: Response sent for tracking_id {tracking_id[:8]}...")
-                return
+            target = self._response_cache[tracking_id]
+            
+            if isinstance(target, asyncio.Future):
+                if not target.done() and not is_progress: 
+                    target.set_result(msg.content)
+            elif isinstance(target, asyncio.Queue):
+                if is_progress:
+                    # 🌟 如果只係進度 (例如: "Executing read_file...")
+                    # 加上 Markdown 引用格式同 Emoji 推畀 WebUI，但【唔好】結束 Stream
+                    await target.put(f"\n> ⏳ *{msg.content}*\n\n")
+                else:
+                    # 🌟 如果係最終答案，推入結果並標記 [DONE] 結束
+                    await target.put(msg.content)
+                    await target.put("[DONE]")
+            return
+
+    async def send_delta(self, chat_id: str, delta: str, metadata: dict[str, Any] | None = None) -> None:
+        """處理串流字粒"""
+        tracking_id = metadata.get("tracking_id") if metadata else None
         
-        # Fallback: try to match by chat_id (for responses without tracking_id)
-        for cached_id, future in list(self._response_cache.items()):
-            if not future.done():
-                future.set_result(msg.content)
-                logger.debug(f"WebAPI: Response sent (fallback match) for {cached_id[:8]}...")
-                return
-        
-        # Unsolicited message (no pending request)
-        logger.debug(f"WebAPI: Outbound message (no pending request): {msg.chat_id}")
+        if tracking_id and tracking_id in self._response_cache:
+            target = self._response_cache[tracking_id]
+            if isinstance(target, asyncio.Queue):
+                # 🌟 將字粒放進 Queue 推俾前端
+                await target.put(delta)
 
     async def _cleanup_tracking_id(self, tracking_id: str, delay: float = 5.0) -> None:
         """Clean up tracking ID from cache after a delay."""
         await asyncio.sleep(delay)
         self._response_cache.pop(tracking_id, None)
-        logger.debug(f"WebAPI: Cleaned up tracking_id {tracking_id[:8]}...")
-
-    async def send_delta(self, chat_id: str, delta: str, metadata: dict[str, Any] | None = None) -> None:
-        """
-        Stream partial responses (optional enhancement).
-        
-        For now, we just accumulate deltas in the response cache.
-        Could be enhanced with Server-Sent Events or WebSocket.
-        """
-        # TODO: Implement streaming response via SSE or WebSocket
-        pass
 
     @property
     def supports_streaming(self) -> bool:
-        """This channel can support streaming (future enhancement)."""
+        """This channel CAN now support streaming!"""
         return True

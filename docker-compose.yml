@@ -40,6 +40,8 @@ services:
       - "8081:8081"  # WebAPI Channel port for HTTP REST API
     environment:
       - NANOBOT_CONFIG=/app/config/config.json
+      - LOG_LEVEL=DEBUG
+      - HTTPX_LOG_LEVEL=DEBUG
     depends_on:
       - liteparse-mcp
     deploy:

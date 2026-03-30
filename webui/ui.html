@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -10,35 +11,75 @@
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
         /* Custom scrollbar */
-        ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
-        ::-webkit-scrollbar-thumb:hover { background: #64748b; }
-        
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #475569;
+            border-radius: 3px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #64748b;
+        }
+
         /* Chat scrollbar specific */
-        .chat-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; }
-        .chat-scroll::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        .chat-scroll::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+        }
+
+        .chat-scroll::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
 
         .typing-indicator span {
             animation: blink 1.4s infinite both;
-            height: 6px; width: 6px; background-color: #94a3b8; border-radius: 50%; display: inline-block; margin: 0 1px;
+            height: 6px;
+            width: 6px;
+            background-color: #94a3b8;
+            border-radius: 50%;
+            display: inline-block;
+            margin: 0 1px;
         }
-        .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
-        .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+
+        .typing-indicator span:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        .typing-indicator span:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+
         @keyframes blink {
-            0% { opacity: 0.2; }
-            20% { opacity: 1; }
-            100% { opacity: 0.2; }
+            0% {
+                opacity: 0.2;
+            }
+
+            20% {
+                opacity: 1;
+            }
+
+            100% {
+                opacity: 0.2;
+            }
         }
     </style>
 </head>
+
 <body class="bg-slate-50 h-screen flex font-sans text-slate-800 overflow-hidden">
 
     <!-- Login Overlay -->
-    <div id="login-overlay" class="fixed inset-0 bg-slate-900/95 z-50 flex items-center justify-center backdrop-blur-sm transition-opacity duration-300">
+    <div id="login-overlay"
+        class="fixed inset-0 bg-slate-900/95 z-50 flex items-center justify-center backdrop-blur-sm transition-opacity duration-300">
         <div class="bg-white p-8 rounded-2xl shadow-2xl w-full max-w-md mx-4 transform transition-transform">
             <div class="text-center mb-8">
-                <div class="bg-blue-600 w-14 h-14 rounded-xl text-white flex items-center justify-center mx-auto mb-4 shadow-lg">
+                <div
+                    class="bg-blue-600 w-14 h-14 rounded-xl text-white flex items-center justify-center mx-auto mb-4 shadow-lg">
                     <i class="fas fa-robot text-2xl"></i>
                 </div>
                 <h2 class="text-2xl font-bold text-slate-800">Nanobot Workspace</h2>
@@ -51,7 +92,9 @@
                         <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                             <i class="fas fa-user text-slate-400"></i>
                         </div>
-                        <input type="text" id="login-username" required class="w-full pl-10 pr-4 py-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all" placeholder="Enter your username">
+                        <input type="text" id="login-username" required
+                            class="w-full pl-10 pr-4 py-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                            placeholder="Enter your username">
                     </div>
                 </div>
                 <div>
@@ -60,10 +103,13 @@
                         <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                             <i class="fas fa-lock text-slate-400"></i>
                         </div>
-                        <input type="password" id="login-password" required class="w-full pl-10 pr-4 py-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all" placeholder="••••••••">
+                        <input type="password" id="login-password" required
+                            class="w-full pl-10 pr-4 py-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                            placeholder="••••••••">
                     </div>
                 </div>
-                <button type="submit" class="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 transition shadow-md font-medium flex justify-center items-center">
+                <button type="submit"
+                    class="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 transition shadow-md font-medium flex justify-center items-center">
                     <span>Sign In</span>
                     <i class="fas fa-arrow-right ml-2 text-sm"></i>
                 </button>
@@ -72,7 +118,8 @@
     </div>
 
     <!-- Left Sidebar: Document List -->
-    <aside class="w-72 bg-slate-900 text-slate-300 flex flex-col flex-shrink-0 transition-all duration-300 shadow-xl z-10 hidden md:flex">
+    <aside
+        class="w-72 bg-slate-900 text-slate-300 flex flex-col flex-shrink-0 transition-all duration-300 shadow-xl z-10 hidden md:flex">
         <!-- Sidebar Header -->
         <div class="p-5 border-b border-slate-700/50 flex items-center space-x-3">
             <div class="bg-blue-600 p-2 rounded-lg text-white">
@@ -88,17 +135,18 @@
         <div class="p-4 flex-1 overflow-y-auto">
             <div class="flex items-center justify-between mb-4">
                 <h2 class="text-xs font-bold text-slate-500 uppercase tracking-wider">Available Documents</h2>
-                <button class="text-slate-400 hover:text-white transition-colors" title="Refresh List" onclick="renderDocumentList()">
+                <button class="text-slate-400 hover:text-white transition-colors" title="Refresh List"
+                    onclick="renderDocumentList()">
                     <i class="fas fa-sync-alt text-xs"></i>
                 </button>
             </div>
-            
+
             <!-- Dynamic Document List Container -->
             <ul id="document-list" class="space-y-3">
                 <!-- JS will populate documents here -->
             </ul>
         </div>
-        
+
         <!-- Sidebar Footer -->
         <div class="p-4 border-t border-slate-700/50 text-xs text-slate-500 bg-slate-900/50">
             <p><i class="fas fa-info-circle mr-1"></i> Click a document to tag it in your chat.</p>
@@ -108,7 +156,8 @@
     <!-- Right Main Area: Chat Interface -->
     <main class="flex-1 flex flex-col h-full relative">
         <!-- Top Header -->
-        <header class="bg-white border-b border-slate-200 p-4 shadow-sm flex justify-between items-center shrink-0 z-10">
+        <header
+            class="bg-white border-b border-slate-200 p-4 shadow-sm flex justify-between items-center shrink-0 z-10">
             <div class="flex items-center md:hidden space-x-3">
                 <div class="bg-blue-600 p-2 rounded-lg text-white">
                     <i class="fas fa-robot text-sm"></i>
@@ -118,26 +167,32 @@
             <div class="hidden md:block">
                 <h2 class="text-lg font-semibold text-slate-800">Financial Analysis Chat</h2>
             </div>
-            
+
             <!-- Header Right Side: Status and User Profile -->
             <div class="flex items-center space-x-4">
-                <div class="hidden md:flex items-center space-x-2 bg-green-50 px-3 py-1.5 rounded-full border border-green-200">
+                <div
+                    class="hidden md:flex items-center space-x-2 bg-green-50 px-3 py-1.5 rounded-full border border-green-200">
                     <span class="relative flex h-2 w-2">
-                      <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                      <span class="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                        <span
+                            class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                        <span class="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
                     </span>
                     <span class="text-xs font-medium text-green-700">MCP Online</span>
                 </div>
-                
+
                 <!-- User Profile & Logout -->
                 <div class="flex items-center space-x-3 border-l border-slate-200 pl-4">
                     <div class="flex items-center space-x-2">
-                        <div class="bg-blue-100 text-blue-700 h-8 w-8 rounded-full flex items-center justify-center font-bold text-sm">
+                        <div
+                            class="bg-blue-100 text-blue-700 h-8 w-8 rounded-full flex items-center justify-center font-bold text-sm">
                             <i class="fas fa-user-alt text-xs"></i>
                         </div>
-                        <span id="display-username" class="text-sm font-medium text-slate-700 hidden sm:block">Guest</span>
+                        <span id="display-username"
+                            class="text-sm font-medium text-slate-700 hidden sm:block">Guest</span>
                     </div>
-                    <button id="logout-btn" type="button" class="text-slate-400 hover:text-red-500 hover:bg-red-50 p-2 rounded-lg transition-colors" title="Log Out">
+                    <button id="logout-btn" type="button"
+                        class="text-slate-400 hover:text-red-500 hover:bg-red-50 p-2 rounded-lg transition-colors"
+                        title="Log Out">
                         <i class="fas fa-sign-out-alt"></i>
                     </button>
                 </div>
@@ -148,10 +203,12 @@
         <div class="flex-1 overflow-y-auto p-4 md:p-6 chat-scroll" id="chat-container">
             <!-- System Greeting -->
             <div class="flex justify-start mb-6">
-                <div class="bg-white border border-slate-200 rounded-2xl rounded-tl-sm shadow-sm p-4 max-w-[85%] md:max-w-[75%]">
+                <div
+                    class="bg-white border border-slate-200 rounded-2xl rounded-tl-sm shadow-sm p-4 max-w-[85%] md:max-w-[75%]">
                     <p class="text-sm md:text-base leading-relaxed">
                         Hello! I am your AI Financial Assistant.<br>
-                        Select a document from the left panel to tag it, upload a new report using the paperclip icon, or ask me to analyze financial tables directly.
+                        Select a document from the left panel to tag it, upload a new report using the paperclip icon,
+                        or ask me to analyze financial tables directly.
                     </p>
                 </div>
             </div>
@@ -163,19 +220,26 @@
                 <form id="chat-form" class="flex flex-col relative">
                     <!-- Hidden File Input -->
                     <input type="file" id="file-upload" class="hidden" accept=".pdf,.csv,.txt">
-                    
+
                     <!-- Text Input Container -->
-                    <div class="flex items-end bg-slate-100 rounded-xl border border-slate-200 focus-within:border-blue-500 focus-within:bg-white focus-within:ring-2 focus-within:ring-blue-100 transition-all overflow-hidden relative pb-1">
-                        
+                    <div
+                        class="flex items-end bg-slate-100 rounded-xl border border-slate-200 focus-within:border-blue-500 focus-within:bg-white focus-within:ring-2 focus-within:ring-blue-100 transition-all overflow-hidden relative pb-1">
+
                         <!-- Attachment Button -->
-                        <button type="button" id="attach-btn" class="p-3.5 text-slate-400 hover:text-blue-600 transition-colors flex-shrink-0 rounded-l-xl z-10" title="Upload Document">
+                        <button type="button" id="attach-btn"
+                            class="p-3.5 text-slate-400 hover:text-blue-600 transition-colors flex-shrink-0 rounded-l-xl z-10"
+                            title="Upload Document">
                             <i class="fas fa-paperclip text-lg"></i>
                         </button>
 
-                        <textarea id="chat-input" rows="1" class="w-full bg-transparent pr-16 py-3.5 outline-none resize-none text-sm md:text-base self-center" placeholder="Ask a question... e.g., 'Extract revenue from @report.pdf'" oninput="this.style.height = ''; this.style.height = Math.min(this.scrollHeight, 120) + 'px'"></textarea>
-                        
+                        <textarea id="chat-input" rows="1"
+                            class="w-full bg-transparent pr-16 py-3.5 outline-none resize-none text-sm md:text-base self-center"
+                            placeholder="Ask a question... e.g., 'Extract revenue from @report.pdf'"
+                            oninput="this.style.height = ''; this.style.height = Math.min(this.scrollHeight, 120) + 'px'"></textarea>
+
                         <!-- Send Button (Inside Input) -->
-                        <button type="submit" id="send-btn" class="absolute right-2 bottom-2 bg-blue-600 text-white h-9 w-9 rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed z-10">
+                        <button type="submit" id="send-btn"
+                            class="absolute right-2 bottom-2 bg-blue-600 text-white h-9 w-9 rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed z-10">
                             <i class="fas fa-paper-plane text-sm"></i>
                         </button>
                     </div>
@@ -228,14 +292,14 @@
             if (username) {
                 currentUser = username;
                 displayUsername.textContent = currentUser;
-                
+
                 // Hide overlay with animation
                 loginOverlay.classList.add('opacity-0');
                 setTimeout(() => {
                     loginOverlay.classList.add('hidden');
                     loginOverlay.classList.remove('opacity-0');
                 }, 300);
-                
+
                 // Load real document list from API
                 loadDocumentList();
             }
@@ -245,10 +309,10 @@
             currentUser = null;
             loginUsername.value = '';
             loginPassword.value = '';
-            
+
             // Show overlay
             loginOverlay.classList.remove('hidden');
-            
+
             // Clear chat history on logout
             const messages = chatContainer.querySelectorAll('.animate-fade-in-up');
             messages.forEach(msg => msg.remove());
@@ -328,7 +392,7 @@
                 const isUploading = doc.status === 'Uploading...';
                 li.className = `group flex items-start p-3 rounded-xl transition-colors border border-transparent 
                     ${isUploading ? 'bg-slate-800/50 opacity-80' : 'hover:bg-slate-800 cursor-pointer hover:border-slate-700/50'}`;
-                
+
                 if (!isUploading) {
                     li.onclick = () => tagDocument(doc.path);
                 }
@@ -342,8 +406,8 @@
                 }
 
                 // Uploader Badge logic
-                const uploaderBadge = (doc.uploader === currentUser || doc.uploader === 'You') 
-                    ? `<span class="text-blue-300 font-medium">${doc.uploader}</span>` 
+                const uploaderBadge = (doc.uploader === currentUser || doc.uploader === 'You')
+                    ? `<span class="text-blue-300 font-medium">${doc.uploader}</span>`
                     : `<span class="text-slate-500">${doc.uploader}</span>`;
 
                 li.innerHTML = `
@@ -373,20 +437,20 @@
         function tagDocument(filepath) {
             const currentVal = chatInput.value;
             const tagText = `[Doc: ${filepath}] `;
-            
+
             if (currentVal.length === 0 || currentVal.endsWith(' ')) {
                 chatInput.value += tagText;
             } else {
                 chatInput.value += ' ' + tagText;
             }
-            
+
             chatInput.focus();
             chatInput.style.height = 'auto';
             chatInput.style.height = Math.min(chatInput.scrollHeight, 120) + 'px';
         }
 
         // --- Chat Interaction Logic ---
-        chatInput.addEventListener('keydown', function(e) {
+        chatInput.addEventListener('keydown', function (e) {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 chatForm.dispatchEvent(new Event('submit'));
@@ -397,21 +461,20 @@
             const isUser = sender === 'user';
             const msgDiv = document.createElement('div');
             msgDiv.className = `flex ${isUser ? 'justify-end' : 'justify-start'} mb-6 animate-fade-in-up`;
-            
+
             const bubbleDiv = document.createElement('div');
-            bubbleDiv.className = `p-4 max-w-[85%] md:max-w-[75%] shadow-sm ${
-                isUser 
-                ? 'bg-blue-600 text-white rounded-2xl rounded-tr-sm' 
-                : 'bg-white border border-slate-200 text-slate-800 rounded-2xl rounded-tl-sm'
-            }`;
-            
+            bubbleDiv.className = `p-4 max-w-[85%] md:max-w-[75%] shadow-sm ${isUser
+                    ? 'bg-blue-600 text-white rounded-2xl rounded-tr-sm'
+                    : 'bg-white border border-slate-200 text-slate-800 rounded-2xl rounded-tl-sm'
+                }`;
+
             // Format [Doc: ...] tags visually
             let formattedText = text.replace(/\[Doc:\s([^\]]+)\]/g, '<span class="inline-block bg-blue-500/20 text-blue-100 px-2 py-0.5 rounded text-xs font-mono mb-1 mr-1 border border-blue-500/30"><i class="fas fa-paperclip mr-1"></i>$1</span>');
-            
+
             // Basic Markdown-to-HTML
             formattedText = formattedText.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
             formattedText = formattedText.replace(/\n/g, '<br>');
-            
+
             bubbleDiv.innerHTML = `<p class="text-sm md:text-base leading-relaxed">${formattedText}</p>`;
             msgDiv.appendChild(bubbleDiv);
             chatContainer.appendChild(msgDiv);
@@ -440,51 +503,97 @@
             chatContainer.scrollTop = chatContainer.scrollHeight;
         }
 
-        chatForm.addEventListener('submit', async (e) => {
+       chatForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             const message = chatInput.value.trim();
             if (!message) return;
 
+            // 1. 顯示 User 嘅問題
             appendMessage('user', message);
             chatInput.value = '';
             chatInput.style.height = 'auto';
             sendBtn.disabled = true;
-            appendLoadingIndicator();
+            appendLoadingIndicator(); // 顯示三個點點點 Loading
 
             try {
-                // Call real API
-                const response = await fetch(`${API_BASE_URL}/api/chat`, {
+                // 2. 呼叫串流 API
+                const response = await fetch(`${API_BASE_URL}/api/chat/stream`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ 
+                    body: JSON.stringify({
                         message: message,
                         username: currentUser || 'anonymous'
                     })
                 });
 
+                // 收到 API 回應，立刻移除三個點點點 Loading
                 removeLoadingIndicator();
-                
-                if (response.ok) {
-                    const data = await response.json();
-                    appendMessage('bot', data.reply);
-                } else {
-                    // API error, show error message
-                    const error = await response.text();
-                    appendMessage('bot', `❌ **Error**: ${error || 'Failed to get response'}`);
-                }
-                
-                sendBtn.disabled = false;
 
+                if (!response.ok) {
+                    const errorMsg = await response.text();
+                    throw new Error(errorMsg);
+                }
+
+                // 3. 🌟 核心修正：動態建立一個空嘅 Bot 對話框 (取代 appendStreamBubble)
+                const botMsgId = 'msg-' + Date.now();
+                const botMsg = document.createElement('div');
+                botMsg.className = `flex justify-start mb-6`;
+                botMsg.innerHTML = `
+                    <div class="p-4 max-w-[85%] md:max-w-[75%] bg-white border border-slate-200 text-slate-800 rounded-2xl rounded-tl-sm shadow-sm">
+                        <p id="${botMsgId}" class="text-sm md:text-base leading-relaxed"><span class="typing-indicator"><span></span><span></span><span></span></span></p>
+                    </div>
+                `;
+                chatContainer.appendChild(botMsg);
+                scrollToBottom();
+
+                const bubbleText = document.getElementById(botMsgId);
+                let accumulatedText = "";
+
+                // 4. 🌟 處理 Server-Sent Events (SSE) 數據流
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value, { stream: true });
+                    const lines = chunk.split('\n');
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const dataStr = line.slice(6).trim();
+                            
+                            // 忽略空白或結束信號
+                            if (!dataStr || dataStr === '[DONE]') continue;
+
+                            try {
+                                // 將 Gateway 傳過來嘅 JSON 解碼
+                                const data = JSON.parse(dataStr);
+                                if (data.error) {
+                                    accumulatedText += `<br><span class="text-red-500">❌ ${data.error}</span>`;
+                                } else if (data.content) {
+                                    accumulatedText += data.content; // 逐粒字加上去
+                                }
+                                // 實時更新畫面並套用 Markdown 格式
+                                bubbleText.innerHTML = formatMarkdown(accumulatedText);
+                                scrollToBottom();
+                            } catch (err) {
+                                console.error("Error parsing stream JSON:", err, dataStr);
+                            }
+                        }
+                    }
+                }
             } catch (error) {
                 removeLoadingIndicator();
-                // Network error, show friendly message
-                appendMessage('bot', `❌ **Connection Error**\n\nUnable to reach the server. Please make sure the Nanobot Web UI is running.\n\nTechnical details: ${error.message}`);
-                sendBtn.disabled = false;
+                appendMessage('bot', `❌ **連線錯誤**\n\n伺服器發生異常或無法連線。\n\n錯誤詳情: ${error.message}`);
             }
+            sendBtn.disabled = false;
         });
-
+        
         // Initialize UI
         renderDocumentList();
     </script>
 </body>
+
 </html>

@@ -48,6 +48,9 @@ dependencies = [
     "chardet>=3.0.2,<6.0.0",
     "openai>=2.8.0",
     "tiktoken>=0.12.0,<1.0.0",
+    "opendataloader-pdf[hybrid]>=2.2.0",
+    "psycopg2-binary>=2.9.11",
+    "pymongo>=4.16.0",
 ]
 
 [project.optional-dependencies]

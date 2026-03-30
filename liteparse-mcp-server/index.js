@@ -18,7 +18,7 @@ import { spawn } from "child_process";
 import { existsSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-
+import { z } from "zod";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // Server mode: 'stdio' or 'http'
@@ -119,26 +119,12 @@ server.tool(
   "parse_financial_table",
   "Parse a financial PDF document with spatial awareness. Preserves table structures, indentation, and bounding boxes. Ideal for balance sheets, income statements, and cash flow statements. Returns cleaned, LLM-ready Markdown tables.",
   {
-    pdf_path: {
-      type: "string",
-      description: "Absolute or relative path to the PDF file",
-    },
-    pages: {
-      type: "string",
-      description: "Optional page range (e.g., '1-5', '10', '1-3,5,7-9')",
-      optional: true,
-    },
-    output_format: {
-      type: "string",
-      description: "Output format: 'json' (raw), 'markdown' (cleaned tables), or 'context' (LLM-ready)",
-      enum: ["json", "markdown", "context"],
-      optional: true,
-    },
-    max_tables: {
-      type: "integer",
-      description: "Maximum number of tables to return (default: 10, used for markdown/context modes)",
-      optional: true,
-    },
+    pdf_path: z.string().describe("Absolute or relative path to the PDF file"),
+    pages: z.string().optional().describe("Optional page range (e.g., '1-5', '10', '1-3,5,7-9')"),
+    output_format: z.enum(["json", "markdown", "context"])
+                    .optional()
+                    .describe("Output format: 'json' (raw), 'markdown' (cleaned tables), or 'context' (LLM-ready)"),
+    max_tables: z.number().int().optional().describe("Maximum number of tables to return (default: 10, used for markdown/context modes)")
   },
   async ({ pdf_path, pages, output_format, max_tables }) => {
     try {
@@ -269,19 +255,9 @@ server.tool(
   "get_pdf_screenshot",
   "Generate screenshots of specific PDF pages for visual analysis of charts, graphs, and complex layouts.",
   {
-    pdf_path: {
-      type: "string",
-      description: "Absolute or relative path to the PDF file",
-    },
-    pages: {
-      type: "string",
-      description: "Page range to screenshot (e.g., '10', '10-12', '1-3,5,7-9')",
-    },
-    output_dir: {
-      type: "string",
-      description: "Directory to save screenshots",
-      optional: true,
-    },
+    pdf_path: z.string().describe("Absolute or relative path to the PDF file"),
+    pages: z.string().describe("Page range to screenshot (e.g., '10', '10-12', '1-3,5,7-9')"),
+    output_dir: z.string().optional().describe("Directory to save screenshots")
   },
   async ({ pdf_path, pages, output_dir }) => {
     try {
@@ -348,19 +324,9 @@ server.tool(
   "query_financial_data",
   "Extract specific financial metrics from parsed data (revenue, profit, assets, liabilities, etc.).",
   {
-    parsed_data: {
-      type: "string",
-      description: "JSON string of parsed LiteParse output",
-    },
-    metric: {
-      type: "string",
-      description: "Financial metric to extract (e.g., 'revenue', 'net profit', 'total assets')",
-    },
-    year: {
-      type: "string",
-      description: "Optional year or period (e.g., '2023', 'FY2024', 'Q3')",
-      optional: true,
-    },
+    parsed_data: z.string().describe("JSON string of parsed LiteParse output"),
+    metric: z.string().describe("Financial metric to extract (e.g., 'revenue', 'net profit', 'total assets')"),
+    year: z.string().optional().describe("Optional year or period (e.g., '2023', 'FY2024', 'Q3')")
   },
   async ({ parsed_data, metric, year }) => {
     try {
