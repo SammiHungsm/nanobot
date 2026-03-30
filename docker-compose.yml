@@ -37,30 +37,6 @@ services:
           cpus: '1'
           memory: 1G
 
-  # MongoDB - Document Storage
-  mongodb-docs:
-    image: mongo:7
-    container_name: mongodb-docs
-    restart: unless-stopped
-    ports:
-      - "27018:27017"
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: mongo
-      MONGO_INITDB_ROOT_PASSWORD: mongo_password_change_me
-      MONGO_INITDB_DATABASE: annual_reports
-    volumes:
-      - mongodb_data:/data/db
-    healthcheck:
-      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-
   # Nanobot Gateway - Main bot service
   nanobot-gateway:
     container_name: nanobot-gateway
@@ -75,11 +51,8 @@ services:
       - LOG_LEVEL=DEBUG
       - HTTPX_LOG_LEVEL=DEBUG
       - DATABASE_URL=postgresql://postgres:postgres_password_change_me@postgres-financial:5432/annual_reports
-      - MONGODB_URL=mongodb://mongo:mongo_password_change_me@mongodb-docs:27017/annual_reports
     depends_on:
       postgres-financial:
-        condition: service_healthy
-      mongodb-docs:
         condition: service_healthy
     deploy:
       resources:
@@ -102,10 +75,29 @@ services:
     environment:
       - PDF_DATA_DIR=/data/pdfs
       - DATABASE_URL=postgresql://postgres:postgres_password_change_me@postgres-financial:5432/annual_reports
-      - MONGODB_URL=mongodb://mongo:mongo_password_change_me@mongodb-docs:27017/annual_reports
       - PYTHONUNBUFFERED=1
     depends_on:
       - nanobot-gateway
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+  
+  # Vanna AI Service - Text-to-SQL with persistence
+  vanna-service:
+    build:
+      context: ./vanna-service
+      dockerfile: Dockerfile
+    container_name: vanna-service
+    volumes:
+      - vanna_data:/app/data
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres_password_change_me@postgres-financial:5432/annual_reports
+      - VANNA_MODEL=financial-sql
+    depends_on:
+      - postgres-financial
     restart: unless-stopped
     deploy:
       resources:
@@ -124,7 +116,7 @@ services:
 volumes:
   postgres_data:
     driver: local
-  mongodb_data:
+  vanna_data:
     driver: local
 
 networks:

@@ -50,6 +50,8 @@ def call_opendataloader(pdf_path: str, pages: str = "all") -> dict:
     """
     使用 OpenDataLoader 解析複雜表格（尤其是財務報表）
     
+    OpenDataLoader 已作為 nanobot 的依賴安裝 (opendataloader-pdf[hybrid])
+    
     Args:
         pdf_path: PDF 文件路徑
         pages: 頁碼範圍，例如 "1-5" 或 "all"
@@ -63,11 +65,16 @@ def call_opendataloader(pdf_path: str, pages: str = "all") -> dict:
             ["opendataloader-pdf", "--version"],
             capture_output=True,
             text=True,
-            timeout=10
+            timeout=10,
+            check=False
         )
         
         if result.returncode != 0:
-            logger.warning("OpenDataLoader 未安裝或無法執行，使用 PyMuPDF 後備方案")
+            logger.warning(
+                f"OpenDataLoader 未安裝或無法執行 (returncode={result.returncode})，"
+                f"使用 PyMuPDF 後備方案。"
+                f"stderr: {result.stderr}"
+            )
             return None
         
         # 調用 OpenDataLoader 提取表格
@@ -85,17 +92,26 @@ def call_opendataloader(pdf_path: str, pages: str = "all") -> dict:
             cmd,
             capture_output=True,
             text=True,
-            timeout=300  # 5 分鐘超時
+            timeout=300,  # 5 分鐘超時
+            check=False
         )
         
         if result.returncode == 0:
-            data = json.loads(result.stdout)
-            logger.info(f"OpenDataLoader 成功解析 {len(data.get('tables', []))} 個表格")
-            return data
+            # 嘗試解析 JSON 輸出
+            try:
+                data = json.loads(result.stdout)
+                logger.info(f"OpenDataLoader 成功解析 {len(data.get('tables', []))} 個表格")
+                return data
+            except json.JSONDecodeError as je:
+                logger.warning(f"OpenDataLoader 輸出了非 JSON 格式：{result.stdout[:200]}")
+                return None
         else:
-            logger.warning(f"OpenDataLoader 失敗：{result.stderr}")
+            logger.warning(f"OpenDataLoader 失敗 (returncode={result.returncode})：{result.stderr}")
             return None
             
+    except FileNotFoundError:
+        logger.warning("OpenDataLoader 命令未找到，使用 PyMuPDF 後備方案")
+        return None
     except subprocess.TimeoutExpired:
         logger.warning("OpenDataLoader 超時，使用 PyMuPDF 後備方案")
         return None

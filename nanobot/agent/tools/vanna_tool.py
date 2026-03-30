@@ -67,20 +67,29 @@ class VannaSQL:
                 if self.api_key:
                     self._vn = VannaDefault(model=self.model_name, api_key=self.api_key)
                 else:
-                    # Use ChromaDB-backed local instance
+                    # Use ChromaDB-backed local instance with persistence
                     from vanna.chromadb import ChromaDB_VectorStore
-                    from vanna.pgvector import PGVector_Connector
+                    import chromadb
+                    from pathlib import Path
                     
-                    self._vn = ChromaDB_VectorStore()
+                    # 指定 ChromaDB 持久化路徑 (Docker 容器內為 /app/data/vanna_db)
+                    persist_dir = os.getenv("VANNA_PERSIST_DIR", "/app/data/vanna_db")
+                    Path(persist_dir).mkdir(parents=True, exist_ok=True)
+                    
+                    # 初始化帶有持久化的 ChromaDB
+                    chroma_client = chromadb.PersistentClient(path=persist_dir)
+                    self._vn = ChromaDB_VectorStore(chroma_client=chroma_client)
+                    
+                    # 連接 PostgreSQL
                     self._vn.connect_to_postgres(
-                        host="localhost",
-                        port="5433",
-                        dbname="annual_reports",
-                        user="postgres",
-                        password="postgres_password_change_me"
+                        host=os.getenv("POSTGRES_HOST", "localhost"),
+                        port=os.getenv("POSTGRES_PORT", "5432"),
+                        dbname=os.getenv("POSTGRES_DB", "annual_reports"),
+                        user=os.getenv("POSTGRES_USER", "postgres"),
+                        password=os.getenv("POSTGRES_PASSWORD", "postgres_password_change_me")
                     )
                 
-                logger.info("Vanna instance created")
+                logger.info(f"Vanna instance created with ChromaDB persistence at {persist_dir}")
             except Exception as e:
                 logger.error(f"Failed to create Vanna instance: {e}")
                 raise
