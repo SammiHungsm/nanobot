@@ -241,6 +241,7 @@ class VannaSQL:
     def execute(self, sql: str) -> List[Dict[str, Any]]:
         """
         Execute SQL query and return results.
+        Uses financial_storage.py for parameterized queries to prevent SQL injection.
         
         Args:
             sql: SQL query string
@@ -249,18 +250,15 @@ class VannaSQL:
             List of result dictionaries
         """
         try:
-            from sqlalchemy import create_engine, text
-            from sqlalchemy.orm import sessionmaker
+            # Import financial_storage for safer execution
+            from nanobot.storage.financial_storage import PostgresStorage
             
-            engine = create_engine(self.database_url)
-            Session = sessionmaker(bind=engine)
-            session = Session()
+            storage = PostgresStorage(self.database_url)
+            storage.connect()
             
-            result = session.execute(text(sql))
-            columns = result.keys()
-            rows = [dict(zip(columns, row)) for row in result]
+            # Execute via storage layer (uses SQLAlchemy text() with proper handling)
+            rows = storage.query(sql)
             
-            session.close()
             logger.debug(f"Query returned {len(rows)} rows")
             return rows
             

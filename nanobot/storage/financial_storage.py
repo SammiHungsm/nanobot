@@ -392,6 +392,135 @@ class MongoDocumentStore:
         logger.debug(f"Added document: {title}")
         return str(result.inserted_id)
     
+    def semantic_search(self, query: str, company_name: Optional[str] = None,
+                       year: Optional[int] = None, limit: int = 10) -> List[Dict]:
+        """
+        語義檢索（Semantic Search）使用 MongoDB $vectorSearch 或 $text search
+        
+        如果安裝咗 RagAnything 或者 MongoDB Atlas，可以用向量檢索。
+        否則使用 MongoDB $text search 作為後備方案。
+        
+        Args:
+            query: 檢索查詢
+            company_name: 公司名稱過濾
+            year: 年份過濾
+            limit: 返回結果數量限制
+        
+        Returns:
+            List of matching documents with relevance scores
+        
+        Example:
+            results = store.semantic_search("營收增長", company_name="Tencent", year=2023)
+        """
+        if not self.db:
+            self.connect()
+        
+        try:
+            # 方法 1: 使用 MongoDB $vectorSearch (如果有向量索引)
+            # 需要先安裝 mongodb-atlas 或者 raganything
+            try:
+                from pymongo import errors
+                
+                # 檢查是否有 vector_search 方法 (MongoDB Atlas)
+                if hasattr(self.db.documents, 'vector_search'):
+                    # 使用向量檢索
+                    pipeline = [
+                        {
+                            '$vectorSearch': {
+                                'index': 'vector_index',
+                                'path': 'content_embedding',
+                                'queryVector': self._get_embedding(query),
+                                'numCandidates': 100,
+                                'limit': limit
+                            }
+                        },
+                        {
+                            '$addFields': {
+                                'score': { '$meta': 'vectorSearchScore' }
+                            }
+                        }
+                    ]
+                    
+                    # 添加過濾條件
+                    match_stage = {'$match': {}}
+                    if company_name:
+                        match_stage['$match']['company_name'] = company_name
+                    if year:
+                        match_stage['$match']['year'] = year
+                    
+                    if match_stage['$match']:
+                        pipeline.insert(1, match_stage)
+                    
+                    results = list(self.db.documents.aggregate(pipeline))
+                    
+                    # 轉換 ObjectId 為字符串
+                    for doc in results:
+                        doc['_id'] = str(doc['_id'])
+                    
+                    logger.info(f"語義檢索 (向量) 返回 {len(results)} 個結果")
+                    return results
+                    
+            except (ImportError, errors.OperationFailure) as e:
+                # 向量檢索不可用，使用 $text search 作為後備
+                logger.debug(f"向量檢索不可用：{e}，使用 $text search")
+                pass
+            
+            # 方法 2: 使用 MongoDB $text search (後備方案)
+            search_query = {}
+            
+            # 文本檢索
+            if query:
+                search_query['$text'] = {'$search': query}
+            
+            # 過濾條件
+            if company_name:
+                search_query['company_name'] = company_name
+            if year:
+                search_query['year'] = year
+            
+            # 執行檢索並添加相關性評分
+            results = list(
+                self.db.documents.find(
+                    search_query,
+                    {'score': {'$meta': 'textScore'}}
+                )
+                .sort([('score', {'$meta': 'textScore'})])
+                .limit(limit)
+            )
+            
+            # 轉換 ObjectId 為字符串
+            for doc in results:
+                doc['_id'] = str(doc['_id'])
+            
+            logger.info(f"語義檢索 (text search) 返回 {len(results)} 個結果")
+            return results
+            
+        except Exception as e:
+            logger.error(f"語義檢索失敗：{e}")
+            return []
+    
+    def _get_embedding(self, text: str) -> List[float]:
+        """
+        獲取文本的向量嵌入 (需要 RagAnything 或其他嵌入模型)
+        
+        這是一個佔位符方法，實際使用時需要連接 RagAnything API
+        或者其他嵌入模型服務。
+        
+        Args:
+            text: 要轉換為向量的文本
+        
+        Returns:
+            向量嵌入列表
+        """
+        # TODO: 整合 RagAnything 或者其他嵌入模型 API
+        # 例如：
+        # from raganything import RagAnything
+        # rag = RagAnything(api_key="...")
+        # return rag.embed(text)
+        
+        logger.warning("嵌入模型未配置，返回空向量")
+        return [0.0] * 768  # 返回 768 維空向量作為佔位符
+    
     def search_text(self, query: str, company_name: Optional[str] = None,
                    year: Optional[int] = None, limit: int = 10) -> List[Dict]:
         """
