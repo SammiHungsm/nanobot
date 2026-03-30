@@ -51,6 +51,7 @@ dependencies = [
     "opendataloader-pdf[hybrid]>=2.2.0",
     "psycopg2-binary>=2.9.11",
     "pymongo>=4.16.0",
+    "vanna[postgres]>=2.0.2",
 ]
 
 [project.optional-dependencies]
