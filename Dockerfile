@@ -25,6 +25,15 @@ COPY pyproject.toml README.md ./
 COPY nanobot/ ./nanobot/
 COPY bridge/ ./bridge/
 
+ARG USE_CUDA=false
+
+RUN if [ "$USE_CUDA" = "false" ] ; then \
+      echo "Installing CPU-only PyTorch for faster build..." && \
+      pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu ; \
+    else \
+      echo "Installing default (GPU-enabled) PyTorch..." ; \
+    fi
+
 # Install nanobot
 RUN pip install --no-cache-dir -e .
 RUN pip install --no-cache-dir fastapi uvicorn

@@ -25,3 +25,15 @@ nano.*.save
 .DS_Store
 uv.lock
 config\config.json
+
+# AI Context
+.cobridge
+
+# .traerules
+.traerules
+
+# .cursorrules
+.cursorrules
+
+# GitHub Copilot Instructions
+.github/copilot-instructions.md

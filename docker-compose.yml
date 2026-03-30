@@ -2,13 +2,65 @@ x-common-config: &common-config
   build:
     context: .
     dockerfile: Dockerfile
+    # 🌟 新增：將 USE_CUDA 參數傳畀 Dockerfile，預設為 false (CPU極速模式)
+    args:
+      - USE_CUDA=false
   volumes:
     - ./config:/app/config
     - ~/.nanobot:/root/.nanobot
-    # 【統一】加返你嘅絕對路徑，確保 Nanobot Gateway 都睇到 PDF
     - "C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/LightRAG/data/input/__enqueued__:/data/pdfs"
 
 services:
+  # PostgreSQL Database - Financial Metrics Storage
+  postgres-financial:
+    image: pgvector/pgvector:pg16
+    container_name: postgres-financial
+    restart: unless-stopped
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: annual_reports
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres_password_change_me
+      POSTGRES_INITDB_ARGS: "-E UTF8"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./storage/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+
+  # MongoDB - Document Storage
+  mongodb-docs:
+    image: mongo:7
+    container_name: mongodb-docs
+    restart: unless-stopped
+    ports:
+      - "27018:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: mongo
+      MONGO_INITDB_ROOT_PASSWORD: mongo_password_change_me
+      MONGO_INITDB_DATABASE: annual_reports
+    volumes:
+      - mongodb_data:/data/db
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
   # Nanobot Gateway - Main bot service
   nanobot-gateway:
     container_name: nanobot-gateway
@@ -17,47 +69,49 @@ services:
     restart: unless-stopped
     ports:
       - "18790:18790"
-      - "8081:8081"  # WebAPI Channel port for HTTP REST API
+      - "8081:8081"
     environment:
       - NANOBOT_CONFIG=/app/config/config.json
       - LOG_LEVEL=DEBUG
       - HTTPX_LOG_LEVEL=DEBUG
+      - DATABASE_URL=postgresql://postgres:postgres_password_change_me@postgres-financial:5432/annual_reports
+      - MONGODB_URL=mongodb://mongo:mongo_password_change_me@mongodb-docs:27017/annual_reports
+    depends_on:
+      postgres-financial:
+        condition: service_healthy
+      mongodb-docs:
+        condition: service_healthy
     deploy:
       resources:
         limits:
           cpus: '1'
           memory: 1G
-        reservations:
-          cpus: '0.25'
-          memory: 256M
-  
-  # Web UI - Financial Chat Interface (FastAPI 後端 + 前端)
+
+  # Web UI - Financial Chat Interface
   nanobot-webui:
     build:
       context: ./webui
       dockerfile: Dockerfile
     container_name: nanobot-webui
-    # 【新增】確保 FastAPI 啟動嘅指令
     command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080", "--reload"]
     volumes:
-      # 【統一】令 WebUI 都可以讀到同一堆 PDF
       - "C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/LightRAG/data/input/__enqueued__:/data/pdfs:ro"
       - ./webui:/app
     ports:
-      # 【更新】依家去 http://localhost:3000 就可以 Call 到個 API
       - "3000:8080"
     environment:
       - PDF_DATA_DIR=/data/pdfs
+      - DATABASE_URL=postgresql://postgres:postgres_password_change_me@postgres-financial:5432/annual_reports
+      - MONGODB_URL=mongodb://mongo:mongo_password_change_me@mongodb-docs:27017/annual_reports
       - PYTHONUNBUFFERED=1
+    depends_on:
+      - nanobot-gateway
     restart: unless-stopped
     deploy:
       resources:
         limits:
           cpus: '0.5'
           memory: 512M
-        reservations:
-          cpus: '0.1'
-          memory: 128M
   
   nanobot-cli:
     <<: *common-config
@@ -66,3 +120,32 @@ services:
     command: ["status"]
     stdin_open: true
     tty: true
+
+volumes:
+  postgres_data:
+    driver: local
+  mongodb_data:
+    driver: local
+
+networks:
+  default:
+    driver: bridge
+
+
+#     # 在 nanobot-gateway 服務下修改
+# nanobot-gateway:
+#   container_name: nanobot-gateway
+#   <<: *common-config
+#   build:
+#     context: .
+#     dockerfile: Dockerfile
+#     args:
+#       - USE_CUDA=true  # 🌟 1. 改為 true，Docker 會安裝完整的 GPU 版 PyTorch
+#   # ... 其他設定 ...
+#   deploy:
+#     resources:
+#       reservations:
+#         devices:
+#           - driver: nvidia  # 🌟 2. 讓 Docker 容器可以使用電腦的 NVIDIA GPU
+#             count: 1
+#             capabilities: [gpu]
