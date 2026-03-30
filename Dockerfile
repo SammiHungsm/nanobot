@@ -1,5 +1,5 @@
-# Nanobot Docker Image with LiteParse Integration
-# Multi-stage build for minimal production image
+# Nanobot Docker Image
+# Lightweight production image without heavy ML dependencies
 
 FROM python:3.11-slim AS base
 
@@ -10,13 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
     git \
-    nodejs \
-    npm \
     && rm -rf /var/lib/apt/lists/*
-
-# Install LiteParse global dependencies
-RUN npm install -g @llamaindex/liteparse && \
-    pip install --no-cache-dir pymupdf pillow
 
 FROM base AS dependencies
 
@@ -25,16 +19,7 @@ COPY pyproject.toml README.md ./
 COPY nanobot/ ./nanobot/
 COPY bridge/ ./bridge/
 
-ARG USE_CUDA=false
-
-RUN if [ "$USE_CUDA" = "false" ] ; then \
-      echo "Installing CPU-only PyTorch for faster build..." && \
-      pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu ; \
-    else \
-      echo "Installing default (GPU-enabled) PyTorch..." ; \
-    fi
-
-# Install nanobot
+# Install nanobot and dependencies (no PyTorch by default)
 RUN pip install --no-cache-dir -e .
 RUN pip install --no-cache-dir fastapi uvicorn
 

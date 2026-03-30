@@ -2,9 +2,6 @@ x-common-config: &common-config
   build:
     context: .
     dockerfile: Dockerfile
-    # 🌟 新增：將 USE_CUDA 參數傳畀 Dockerfile，預設為 false (CPU極速模式)
-    args:
-      - USE_CUDA=false
   volumes:
     - ./config:/app/config
     - ~/.nanobot:/root/.nanobot
@@ -122,22 +119,3 @@ volumes:
 networks:
   default:
     driver: bridge
-
-
-#     # 在 nanobot-gateway 服務下修改
-# nanobot-gateway:
-#   container_name: nanobot-gateway
-#   <<: *common-config
-#   build:
-#     context: .
-#     dockerfile: Dockerfile
-#     args:
-#       - USE_CUDA=true  # 🌟 1. 改為 true，Docker 會安裝完整的 GPU 版 PyTorch
-#   # ... 其他設定 ...
-#   deploy:
-#     resources:
-#       reservations:
-#         devices:
-#           - driver: nvidia  # 🌟 2. 讓 Docker 容器可以使用電腦的 NVIDIA GPU
-#             count: 1
-#             capabilities: [gpu]
