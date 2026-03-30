@@ -323,7 +323,7 @@
             fileUploadInput.click();
         });
 
-        fileUploadInput.addEventListener('change', (e) => {
+        fileUploadInput.addEventListener('change', async (e) => {
             const file = e.target.files[0];
             if (!file) return;
 
@@ -332,7 +332,7 @@
             const timeStr = now.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
             const fileSize = (file.size / 1024 / 1024).toFixed(2) + ' MB';
 
-            // Create new document entry
+            // Create new document entry with "Uploading..." status
             const newDoc = {
                 id: Date.now(),
                 name: file.name,
@@ -343,21 +343,53 @@
                 status: 'Uploading...'
             };
 
-            // Add to the top of the list
+            // Add to the top of the list and render immediately
             mockDocuments.unshift(newDoc);
             renderDocumentList();
 
             // Notify in chat visually
-            appendMessage('bot', `Started uploading **${file.name}**... Please wait.`);
+            appendMessage('bot', `📤 Started uploading **${file.name}**... Please wait.`);
 
-            // TODO: Implement real file upload API
-            // For now, simulate upload delay
-            setTimeout(() => {
+            try {
+                // Create FormData for file upload
+                const formData = new FormData();
+                formData.append('file', file);
+                formData.append('username', currentUser || 'anonymous');
+
+                // Upload file to API
+                const response = await fetch(`${API_BASE_URL}/api/upload`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || 'Upload failed');
+                }
+
+                const result = await response.json();
+                
+                // Update document status to "Ready"
                 newDoc.status = 'Ready';
+                newDoc.id = result.file.id;
+                newDoc.path = result.file.path;
+                
+                // Re-render with updated status
                 renderDocumentList();
-                appendMessage('bot', `✅ Upload complete! **${file.name}** is ready for analysis.`);
-            }, 2500);
+                
+                // Success message
+                appendMessage('bot', `✅ Upload complete! **${file.name}** is ready for analysis.\n\n📊 File size: ${result.file.size}`);
+                
+            } catch (error) {
+                // Update status to failed
+                newDoc.status = 'Failed';
+                renderDocumentList();
+                
+                // Error message
+                appendMessage('bot', `❌ Upload failed: ${error.message}\n\nPlease try again or check if the file is a valid PDF.`);
+            }
 
+            // Clear file input
             fileUploadInput.value = '';
         });
 
@@ -373,7 +405,8 @@
                         mockDocuments.push(...data.documents.map(doc => ({
                             ...doc,
                             uploader: doc.uploader || 'System',
-                            date: new Date(doc.date * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) || doc.date
+                            date: new Date(doc.date * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) || doc.date,
+                            status: doc.status || 'Ready'
                         })));
                         renderDocumentList();
                     }
@@ -388,12 +421,16 @@
             docListContainer.innerHTML = '';
             mockDocuments.forEach(doc => {
                 const li = document.createElement('li');
-                // Adjust styling based on status (disable hover/click if uploading)
+                // Adjust styling based on status
                 const isUploading = doc.status === 'Uploading...';
+                const isFailed = doc.status === 'Failed';
+                
                 li.className = `group flex items-start p-3 rounded-xl transition-colors border border-transparent 
-                    ${isUploading ? 'bg-slate-800/50 opacity-80' : 'hover:bg-slate-800 cursor-pointer hover:border-slate-700/50'}`;
+                    ${isUploading ? 'bg-slate-800/50 opacity-80' : ''}
+                    ${isFailed ? 'bg-red-900/20 opacity-80' : ''}
+                    ${!isUploading && !isFailed ? 'hover:bg-slate-800 cursor-pointer hover:border-slate-700/50' : ''}`;
 
-                if (!isUploading) {
+                if (!isUploading && !isFailed) {
                     li.onclick = () => tagDocument(doc.path);
                 }
 
@@ -401,6 +438,8 @@
                 let statusHtml = '';
                 if (isUploading) {
                     statusHtml = `<span class="text-blue-400 font-medium flex items-center text-[10px] mt-1.5"><i class="fas fa-spinner fa-spin mr-1.5"></i> Uploading...</span>`;
+                } else if (isFailed) {
+                    statusHtml = `<span class="text-red-400 font-medium flex items-center text-[10px] mt-1.5"><i class="fas fa-exclamation-circle mr-1.5"></i> Failed</span>`;
                 } else {
                     statusHtml = `<span class="text-emerald-500 flex items-center text-[10px] mt-1.5"><i class="fas fa-check-circle mr-1.5"></i> Ready</span>`;
                 }
@@ -412,7 +451,7 @@
 
                 li.innerHTML = `
                     <div class="mr-3 p-2.5 bg-slate-800 group-hover:bg-blue-600/20 group-hover:text-blue-400 rounded-lg text-slate-400 transition-colors mt-0.5">
-                        <i class="fas ${isUploading ? 'fa-cloud-upload-alt text-blue-400' : 'fa-file-pdf'}"></i>
+                        <i class="fas ${isUploading ? 'fa-cloud-upload-alt text-blue-400' : isFailed ? 'fa-file-pdf text-red-400' : 'fa-file-pdf'}"></i>
                     </div>
                     <div class="flex-1 min-w-0">
                         <h3 class="text-sm font-medium text-slate-200 truncate group-hover:text-white transition-colors" title="${doc.name}">${doc.name}</h3>
@@ -423,7 +462,7 @@
                         <p class="text-[10px] text-slate-500 mt-0.5">${doc.date}</p>
                         ${statusHtml}
                     </div>
-                    ${!isUploading ? `
+                    ${!isUploading && !isFailed ? `
                     <div class="opacity-0 group-hover:opacity-100 transition-opacity text-slate-400 hover:text-white self-center">
                         <i class="fas fa-plus-circle text-sm"></i>
                     </div>

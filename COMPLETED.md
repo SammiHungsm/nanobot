@@ -31,6 +31,7 @@
 - ✅ `docker-compose.yml` - 更新版
   - 使用完整 Schema
   - 添加 Raw Data Volume
+  - **新增 PDF Upload Volume (持久化)**
   - 添加 Ingestion Worker Service
   
 - ✅ `docker-compose.gpu.yml` - GPU Profile
@@ -60,6 +61,31 @@
   - 數據庫 Schema 詳解
   - 數據流 Workflow
   - 性能優化策略
+
+### 8. **PDF Upload 功能 (NEW! 🎉)**
+- ✅ `webui/main.py` - Upload API
+  - `POST /api/upload` - 文件上傳 endpoint
+  - `GET /api/documents` - 文件列表
+  - Background task queue
+  - SHA256 hash deduplication
+  
+- ✅ `webui/ui.html` - Upload UI
+  - 紙夾按鈕 📎
+  - 實時上傳進度
+  - 狀態指示 (Uploading/Ready/Failed)
+  - 錯誤處理
+  
+- ✅ Docker Volume 配置
+  - `pdf_upload_data` - PDF 持久化存儲
+  - `postgres_data` - 數據庫持久化
+  - 跨容器共享 (webui → ingestion-worker)
+
+### 9. **新功能文檔**
+- ✅ `UPLOAD_FEATURE.md` - Upload 功能詳解
+  - API 使用指南
+  - Volume 配置
+  - 安全考慮
+  - 故障排查
 
 ---
 

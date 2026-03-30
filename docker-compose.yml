@@ -5,7 +5,7 @@ x-common-config: &common-config
   volumes:
     - ./config:/app/config
     - ~/.nanobot:/root/.nanobot
-    - "C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/LightRAG/data/input/__enqueued__:/data/pdfs"
+    - pdf_upload_data:/data/pdfs  # Named volume for PDF uploads
     - ./data/raw:/app/data/raw
 
 services:
@@ -70,16 +70,16 @@ services:
     container_name: nanobot-webui
     command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080", "--reload"]
     volumes:
-      - "C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/LightRAG/data/input/__enqueued__:/data/pdfs:ro"
+      - pdf_upload_data:/data/pdfs  # Named volume for PDF uploads (read-write)
       - ./webui:/app
     ports:
       - "3000:8080"
     environment:
-      - PDF_DATA_DIR=/data/pdfs
+      - PDF_UPLOAD_DIR=/data/pdfs
       - DATABASE_URL=postgresql://postgres:postgres_password_change_me@postgres-financial:5432/annual_reports
       - PYTHONUNBUFFERED=1
     depends_on:
-      - nanobot-gateway
+      - postgres-financial
     restart: unless-stopped
     deploy:
       resources:
@@ -122,6 +122,7 @@ services:
       - BATCH_SIZE=10
     depends_on:
       - postgres-financial
+    restart: unless-stopped
     deploy:
       resources:
         limits:
@@ -140,6 +141,8 @@ volumes:
   postgres_data:
     driver: local
   vanna_data:
+    driver: local
+  pdf_upload_data:
     driver: local
 
 networks:
