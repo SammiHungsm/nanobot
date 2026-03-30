@@ -6,6 +6,7 @@ x-common-config: &common-config
     - ./config:/app/config
     - ~/.nanobot:/root/.nanobot
     - "C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/LightRAG/data/input/__enqueued__:/data/pdfs"
+    - ./data/raw:/app/data/raw
 
 services:
   # PostgreSQL Database - Financial Metrics Storage
@@ -22,7 +23,7 @@ services:
       POSTGRES_INITDB_ARGS: "-E UTF8"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./storage/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./storage/init_complete.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
@@ -33,6 +34,10 @@ services:
         limits:
           cpus: '1'
           memory: 1G
+    command: >
+      postgres 
+      -c shared_preload_libraries=vector 
+      -c max_connections=200
 
   # Nanobot Gateway - Main bot service
   nanobot-gateway:
@@ -101,6 +106,27 @@ services:
         limits:
           cpus: '0.5'
           memory: 512M
+  
+  # Ingestion Service - PDF Processing
+  ingestion-worker:
+    <<: *common-config
+    container_name: ingestion-worker
+    profiles:
+      - worker
+    command: ["python", "-m", "nanobot.ingestion.batch_processor"]
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres_password_change_me@postgres-financial:5432/annual_reports
+      - DATA_DIR=/app/data/raw
+      - PDF_INPUT_DIR=/data/pdfs
+      - MAX_CONCURRENT_TASKS=5
+      - BATCH_SIZE=10
+    depends_on:
+      - postgres-financial
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
   
   nanobot-cli:
     <<: *common-config

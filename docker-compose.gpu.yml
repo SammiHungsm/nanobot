@@ -1,0 +1,54 @@
+# Docker Compose GPU Override
+# GPU 用家使用：docker-compose -f docker-compose.yml -f docker-compose.gpu.yml up
+
+services:
+  # Nanobot Gateway - GPU Version
+  nanobot-gateway:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      - USE_CUDA=true
+      - TORCH_DEVICE=cuda
+
+  # Vanna Service - GPU Version
+  vanna-service:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+  
+  # Additional GPU-accelerated parsing service (optional)
+  gpu-parser:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gpu-parser
+    profiles:
+      - gpu
+    volumes:
+      - ./config:/app/config
+      - ~/.nanobot:/root/.nanobot
+      - "C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/LightRAG/data/input/__enqueued__:/data/pdfs"
+      - ./data/raw:/app/data/raw
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres_password_change_me@postgres-financial:5432/annual_reports
+      - DATA_DIR=/app/data/raw
+      - USE_CUDA=true
+      - LLM_BACKEND=local
+      - VLLM_PORT=5000
+    command: ["python", "-m", "nanobot.ingestion.batch_processor"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
