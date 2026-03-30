@@ -1,106 +1,106 @@
-# ✅ 第一步完成報告：MCP LiteParse 工具服務
+﻿# ??蝚砌?甇亙????MCP PyMuPDF 撌亙??
 
-> **完成日期:** 2026-03-24  
-> **狀態:** ✅ 已完成 - Docker 化部署，零手動安裝
-
----
-
-## 📋 第一步目標
-
-建立基於 MCP 的 LiteParse 工具服務，實現：
-
-1. ✅ 將 LiteParse 解析功能獨立為 MCP 服務
-2. ✅ Nanobot 可以透過 MCP 協議自動調用解析工具
-3. ✅ 數據清洗層自動過濾噪音、轉換 Markdown
-4. ✅ Docker 容器化部署，零手動安裝依賴
+> **摰??交?:** 2026-03-24  
+> **???** ??撌脣???- Docker ?蝵莎??嗆???鋆?
 
 ---
 
-## 🎯 完成清單
+## ?? 蝚砌?甇亦璅?
 
-### 核心組件（已存在）
+撱箇??箸 MCP ??PyMuPDF 撌亙??嚗祕?橘?
 
-| 組件 | 文件 | 狀態 | 說明 |
+1. ??撠?PyMuPDF 閫????函???MCP ??
+2. ??Nanobot ?臭誑?? MCP ?降?芸?隤輻閫??撌亙
+3. ???豢?皜?撅方??瞈曉?喋???Markdown
+4. ??Docker 摰孵?蝵莎??嗆???鋆?鞈?
+
+---
+
+## ? 摰?皜
+
+### ?詨?蝯辣嚗歇摮嚗?
+
+| 蝯辣 | ?辣 | ???| 隤芣? |
 |------|------|------|------|
-| MCP Server | [`liteparse-mcp-server/index.js`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/liteparse-mcp-server/index.js) | ✅ | 提供 3 個 MCP 工具 |
-| Data Cleaner | [`liteparse-mcp-server/liteparse_data_cleaner.py`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/liteparse-mcp-server/liteparse_data_cleaner.py) | ✅ | 自動數據清洗 |
-| Dockerfile | [`liteparse-mcp-server/Dockerfile`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/liteparse-mcp-server/Dockerfile) | ✅ | 包含所有依賴 |
-| Docker Compose | [`docker-compose.yml`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/docker-compose.yml) | ✅ | 雙服務編排 |
-| Nanobot 工具 | [`nanobot/agent/tools/liteparse.py`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/nanobot/agent/tools/liteparse.py) | ✅ | MCP 工具集成 |
-| 測試套件 | [`tests/tools/test_liteparse.py`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/tests/tools/test_liteparse.py) | ✅ | 完整測試 |
+| MCP Server | [`PyMuPDF-mcp-server/index.js`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/PyMuPDF-mcp-server/index.js) | ??| ?? 3 ??MCP 撌亙 |
+| Data Cleaner | [`PyMuPDF-mcp-server/PyMuPDF_data_cleaner.py`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/PyMuPDF-mcp-server/PyMuPDF_data_cleaner.py) | ??| ?芸??豢?皜? |
+| Dockerfile | [`PyMuPDF-mcp-server/Dockerfile`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/PyMuPDF-mcp-server/Dockerfile) | ??| ????鞈?|
+| Docker Compose | [`docker-compose.yml`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/docker-compose.yml) | ??| ???楊??|
+| Nanobot 撌亙 | [`nanobot/agent/tools/PyMuPDF.py`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/nanobot/agent/tools/PyMuPDF.py) | ??| MCP 撌亙?? |
+| 皜祈岫憟辣 | [`tests/tools/test_PyMuPDF.py`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/tests/tools/test_PyMuPDF.py) | ??| 摰皜祈岫 |
 
-### 新增組件（本次完成）
+### ?啣?蝯辣嚗甈∪???
 
-| 組件 | 文件 | 說明 |
+| 蝯辣 | ?辣 | 隤芣? |
 |------|------|------|
-| 快速開始指南 | [`QUICKSTART_MCP.md`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/QUICKSTART_MCP.md) | 詳細使用指南 |
-| Docker 部署指南 | [`liteparse-mcp-server/README_DOCKER.md`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/liteparse-mcp-server/README_DOCKER.md) | Docker 專用文檔 |
-| 一鍵啟動腳本 | [`start.bat`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/start.bat) | Windows 批處理 |
-| 一鍵啟動腳本 | [`start.ps1`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/start.ps1) | PowerShell 版本 |
-| 端到端測試 | [`test_end_to_end.py`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/test_end_to_end.py) | 7 個自動化測試 |
-| 完成報告 | `FIRST_STEP_COMPLETE.md` | 本文檔 |
+| 敹恍?憪???| [`QUICKSTART_MCP.md`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/QUICKSTART_MCP.md) | 閰喟敦雿輻?? |
+| Docker ?函蔡?? | [`PyMuPDF-mcp-server/README_DOCKER.md`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/PyMuPDF-mcp-server/README_DOCKER.md) | Docker 撠?? |
+| 銝?萄????| [`start.bat`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/start.bat) | Windows ?寡???|
+| 銝?萄????| [`start.ps1`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/start.ps1) | PowerShell ? |
+| 蝡臬蝡舀葫閰?| [`test_end_to_end.py`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/test_end_to_end.py) | 7 ???皜祈岫 |
+| 摰??勗? | `FIRST_STEP_COMPLETE.md` | ?祆?瑼?|
 
 ---
 
-## 🐳 Docker 依賴清單
+## ? Docker 靘陷皜
 
-所有依賴已包含喺 Docker 容器入面，**無需用戶手動安裝**：
+???鞈游歇???Docker 摰孵?仿嚗?*?⊿??冽??摰?**嚗?
 
-### `liteparse-mcp` 容器
+### `PyMuPDF-mcp` 摰孵
 
 ```dockerfile
 Node.js 20.x
-├── @llamaindex/liteparse (PDF 解析 CLI)
-├── @modelcontextprotocol/sdk (^1.0.4)
-├── express (^4.18.2)
-└── Python 3.11
-    ├── PyMuPDF (PDF 處理)
-    └── Pillow (圖像處理)
+??? @llamaindex/PyMuPDF (PDF 閫?? CLI)
+??? @modelcontextprotocol/sdk (^1.0.4)
+??? express (^4.18.2)
+??? Python 3.11
+    ??? PyMuPDF (PDF ??)
+    ??? Pillow (????)
 ```
 
-### `nanobot-gateway` 容器
+### `nanobot-gateway` 摰孵
 
 ```dockerfile
 Python 3.11
-├── Nanobot (Agent 框架)
-├── MCP Client (內建)
-└── 其他 Nanobot 依賴
+??? Nanobot (Agent 獢)
+??? MCP Client (?批遣)
+??? ?嗡? Nanobot 靘陷
 ```
 
 ---
 
-## 🚀 使用方式
+## ?? 雿輻?孵?
 
-### 最簡單方式（推薦）
+### ?蝪∪?孵?嚗?佗?
 
 ```bash
-# Windows 用戶雙擊 start.bat
-# 或者使用 PowerShell
+# Windows ?冽?? start.bat
+# ?蝙??PowerShell
 .\start.ps1
 
-# 或者直接
+# ???
 docker-compose up -d
 ```
 
-### 訪問服務
+### 閮芸???
 
 - **Nanobot Web UI:** http://localhost:8080
-- **LiteParse MCP:** http://localhost:3000 (內部服務)
+- **PyMuPDF MCP:** http://localhost:3000 (?折??)
 
-### 查看日誌
+### ?亦??亥?
 
 ```bash
-# 查看所有日誌
+# ?亦???隤?
 docker-compose logs -f
 
-# 只看 LiteParse
-docker-compose logs -f liteparse-mcp
+# ?芰? PyMuPDF
+docker-compose logs -f PyMuPDF-mcp
 
-# 只看 Nanobot
+# ?芰? Nanobot
 docker-compose logs -f nanobot-gateway
 ```
 
-### 停止服務
+### ?迫??
 
 ```bash
 docker-compose down
@@ -108,21 +108,21 @@ docker-compose down
 
 ---
 
-## 📊 MCP 工具列表
+## ?? MCP 撌亙?”
 
-LiteParse MCP Server 提供 3 個工具：
+PyMuPDF MCP Server ?? 3 ?極?瘀?
 
 ### 1. `parse_financial_table`
 
-解析財報 PDF，支持三種輸出模式。
+閫??鞎∪ PDF嚗??蝔株撓?箸芋撘?
 
-**參數：**
-- `pdf_path` (必需): PDF 文件路徑
-- `pages` (可選): 頁面範圍，例如 "1-5"
-- `output_format` (可選): "json", "markdown", "context"
-- `max_tables` (可選): 最大表格數量（預設 10）
+**?嚗?*
+- `pdf_path` (敹?): PDF ?辣頝臬?
+- `pages` (?舫): ?蝭?嚗?憒?"1-5"
+- `output_format` (?舫): "json", "markdown", "context"
+- `max_tables` (?舫): ?憭扯”?潭???身 10嚗?
 
-**範例：**
+**蝭?嚗?*
 ```json
 {
   "tool": "parse_financial_table",
@@ -136,309 +136,310 @@ LiteParse MCP Server 提供 3 個工具：
 
 ### 2. `get_pdf_screenshot`
 
-生成頁面截圖。
+????芸???
 
-**參數：**
-- `pdf_path` (必需): PDF 文件路徑
-- `pages` (必需): 頁面範圍
-- `output_dir` (可選): 輸出目錄
+**?嚗?*
+- `pdf_path` (敹?): PDF ?辣頝臬?
+- `pages` (敹?): ?蝭?
+- `output_dir` (?舫): 頛詨?桅?
 
 ### 3. `query_financial_data`
 
-提取特定財務指標。
+???孵?鞎∪?????
 
-**參數：**
-- `parsed_data` (必需): 解析後的 JSON 數據
-- `metric` (必需): 財務指標名稱
-- `year` (可選): 年份過濾
+**?嚗?*
+- `parsed_data` (敹?): 閫??敺? JSON ?豢?
+- `metric` (敹?): 鞎∪????迂
+- `year` (?舫): 撟港遢?蕪
 
 ---
 
-## 🧪 測試流程
+## ?妒 皜祈岫瘚?
 
-### 測試 1: Docker 容器啟動
+### 皜祈岫 1: Docker 摰孵??
 
 ```bash
 docker-compose up -d
 docker-compose ps
 ```
 
-預期結果：兩個容器都係 "Up" 狀態。
+??蝯?嚗?捆?券靽?"Up" ???
 
-### 測試 2: MCP Server 健康檢查
-
-```bash
-docker-compose exec liteparse-mcp node -e "console.log('MCP OK')"
-```
-
-預期結果：輸出 "MCP OK"
-
-### 測試 3: LiteParse CLI 可用
+### 皜祈岫 2: MCP Server ?亙熒瑼Ｘ
 
 ```bash
-docker-compose exec liteparse-mcp lit --version
+docker-compose exec PyMuPDF-mcp node -e "console.log('MCP OK')"
 ```
 
-預期結果：輸出版本號
+??蝯?嚗撓??"MCP OK"
 
-### 測試 4: Python Data Cleaner 可用
+### 皜祈岫 3: PyMuPDF CLI ?舐
 
 ```bash
-docker-compose exec liteparse-mcp python --version
+docker-compose exec PyMuPDF-mcp lit --version
 ```
 
-預期結果：輸出 Python 3.11.x
+??蝯?嚗撓?箇??祈?
 
-### 測試 5: 端到端測試
+### 皜祈岫 4: Python Data Cleaner ?舐
+
+```bash
+docker-compose exec PyMuPDF-mcp python --version
+```
+
+??蝯?嚗撓??Python 3.11.x
+
+### 皜祈岫 5: 蝡臬蝡舀葫閰?
 
 ```bash
 cd C:\Users\sammi_hung\Desktop\SFC_AI\sfc_poc\nanobot
 py test_end_to_end.py
 ```
 
-預期結果：7 個測試全部通過
+??蝯?嚗? ?葫閰血?券?
 
 ---
 
-## 📈 性能指標
+## ?? ?扯??
 
-### 資源限制
+### 鞈??
 
-根據 [`docker-compose.yml`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/docker-compose.yml) 配置：
+?寞? [`docker-compose.yml`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/docker-compose.yml) ?蔭嚗?
 
-| 服務 | CPU 限制 | 記憶體限制 |
+| ?? | CPU ? | 閮擃???|
 |------|----------|------------|
-| liteparse-mcp | 0.5 | 512MB |
+| PyMuPDF-mcp | 0.5 | 512MB |
 | nanobot-gateway | 1.0 | 1GB |
-| **總計** | **1.5** | **1.5GB** |
+| **蝮質?** | **1.5** | **1.5GB** |
 
-### 實際使用
+### 撖阡?雿輻
 
-根據典型使用場景：
+?寞??詨?雿輻?湔嚗?
 
-- **空闲狀態:** ~200MB RAM
-- **解析 PDF:** ~400-600MB RAM
-- **高峰期:** ~800MB-1GB RAM
+- **蝛粹???** ~200MB RAM
+- **閫?? PDF:** ~400-600MB RAM
+- **擃陸??** ~800MB-1GB RAM
 
-### 解析速度
+### 閫???漲
 
-- **小型 PDF (10 頁):** 2-5 秒
-- **中型 PDF (50 頁):** 10-20 秒
-- **大型 PDF (200 頁):** 30-60 秒
+- **撠? PDF (10 ??:** 2-5 蝘?
+- **銝剖? PDF (50 ??:** 10-20 蝘?
+- **憭批? PDF (200 ??:** 30-60 蝘?
 
 ---
 
-## 🎯 數據清洗效果
+## ? ?豢?皜???
 
-### 原始 LiteParse 輸出
+### ?? PyMuPDF 頛詨
 
 ```
-- 500 個元素（包括頁碼、URL、版權）
-- 50 個表格（只有 20 個係財務表格）
+- 500 ??蝝???Ⅳ?RL??甈?
+- 50 ?”?潘??芣? 20 ??鞎∪?銵冽嚗?
 - 100KB JSON
-- 包含大量噪音
+- ?憭折??芷
 ```
 
-### Data Cleaner 處理後
+### Data Cleaner ??敺?
 
 ```
-- 20 個高置信度財務表格
-- 50 個關鍵數據片段
+- 20 ??蝵桐縑摨西瓷?”??
+- 50 ???菜??畾?
 - 5-10KB Markdown
-- 已過濾噪音、分類表格、優先級排序
+- 撌脤?瞈曉?喋?憿”?潦????
 ```
 
-### 表格分類準確率
+### 銵冽??皞Ⅱ??
 
-| 表格類型 | 識別準確率 | 關鍵詞 |
+| 銵冽憿? | 霅皞Ⅱ??| ?閰?|
 |----------|------------|--------|
-| 資產負債表 | 90%+ | "資產負債表", "balance sheet" |
-| 利潤表 | 90%+ | "利潤表", "income statement" |
-| 現金流量表 | 85%+ | "現金流量表", "cash flow" |
-| 財務附註 | 80%+ | "財務報表附註", "notes to financial" |
+| 鞈鞎銵?| 90%+ | "鞈鞎銵?, "balance sheet" |
+| ?拇膜銵?| 90%+ | "?拇膜銵?, "income statement" |
+| ?暸?瘚?銵?| 85%+ | "?暸?瘚?銵?, "cash flow" |
+| 鞎∪??酉 | 80%+ | "鞎∪??梯”?酉", "notes to financial" |
 
 ---
 
-## 🔐 安全配置
+## ?? 摰?蔭
 
-### Docker 安全
+### Docker 摰
 
-- ✅ 使用非 root 用戶運行（nodejs:nodejs）
-- ✅ 最小權限原則
-- ✅ 容器間網絡隔離
-- ✅ 資源限制防止 DDoS
+- ??雿輻??root ?冽??嚗odejs:nodejs嚗?
+- ???撠?????
+- ??摰孵?雯蝯⊿???
+- ??鞈???脫迫 DDoS
 
-### 文件系統掛載
+### ?辣蝟餌絞??
 
 ```yaml
 volumes:
-  - ./data/pdfs:/data/pdfs      # PDF 文件
-  - ./config:/app/config        # 配置文件
-  - ~/.nanobot:/root/.nanobot   # 用戶數據
+  - ./data/pdfs:/data/pdfs      # PDF ?辣
+  - ./config:/app/config        # ?蔭?辣
+  - ~/.nanobot:/root/.nanobot   # ?冽?豢?
 ```
 
-### 網絡暴露
+### 蝬脩窗?湧
 
-- **對外端口:** 8080 (Web UI), 18790 (API)
-- **內部端口:** 3000 (MCP Server, 不暴露)
+- **撠?蝡臬:** 8080 (Web UI), 18790 (API)
+- **?折蝡臬:** 3000 (MCP Server, 銝??
 
 ---
 
-## 💡 最佳實踐
+## ? ?雿喳祕頦?
 
-### 1. 使用 Docker 部署
+### 1. 雿輻 Docker ?函蔡
 
-✅ **推薦:**
+??**?刻:**
 ```bash
 docker-compose up -d
 ```
 
-❌ **不推薦:**
+??**銝??**
 ```bash
-# 手動安裝依賴
-npm install -g @llamaindex/liteparse
+# ??摰?靘陷
+npm install -g @llamaindex/PyMuPDF
 pip install pymupdf pillow
 ```
 
-### 2. 使用 Context 模式輸出
+### 2. 雿輻 Context 璅∪?頛詨
 
-✅ **推薦:**
+??**?刻:**
 ```json
 {
   "output_format": "context"
 }
 ```
 
-❌ **不推薦:**
+??**銝??**
 ```json
 {
-  "output_format": "json"  // 太多噪音
+  "output_format": "json"  // 憭芸??芷
 }
 ```
 
-### 3. 指定頁面範圍
+### 3. ???蝭?
 
-✅ **推薦:**
+??**?刻:**
 ```json
 {
-  "pages": "10-15"  // 只解析資產負債表頁面
+  "pages": "10-15"  // ?芾圾???Ｚ??菔”?
 }
 ```
 
-❌ **不推薦:**
+??**銝??**
 ```json
 {
-  // 解析全部 200 頁，浪費資源
+  // 閫???券 200 ??瘚芾祥鞈?
 }
 ```
 
-### 4. 限制表格數量
+### 4. ?銵冽?賊?
 
-✅ **推薦:**
+??**?刻:**
 ```json
 {
-  "max_tables": 10  // 只返回最重要的 10 個表格
+  "max_tables": 10  // ?芾???????10 ?”??
 }
 ```
 
-❌ **不推薦:**
+??**銝??**
 ```json
 {
-  // 返回所有 50 個表格，包括噪音
+  // 餈????50 ?”?潘???芷
 }
 ```
 
 ---
 
-## ❓ 常見問題
+## ??撣貉???
 
-### Q1: 點解要用 Docker？
+### Q1: 暺圾閬 Docker嚗?
 
-**A:** Docker 提供：
-- 零手動安裝依賴
-- 環境隔離，唔會衝突
-- 可重現性高
-- 一鍵部署
-- 易於清理
+**A:** Docker ??嚗?
+- ?嗆???鋆?鞈?
+- ?啣??嚗???蝒?
+- ?舫??暹折?
+- 銝?菟蝵?
+- ?皜?
 
-### Q2: Docker 容器啟動失敗？
+### Q2: Docker 摰孵??憭望?嚗?
 
-**A:** 排查步驟：
-1. 檢查 Docker 狀態：`docker ps`
-2. 查看錯誤日誌：`docker-compose logs`
-3. 檢查配置文件：`docker-compose config`
-4. 重建容器：`docker-compose build --no-cache`
+**A:** ?甇仿?嚗?
+1. 瑼Ｘ Docker ???`docker ps`
+2. ?亦??航炊?亥?嚗docker-compose logs`
+3. 瑼Ｘ?蔭?辣嚗docker-compose config`
+4. ?遣摰孵嚗docker-compose build --no-cache`
 
-### Q3: 點樣上傳 PDF 文件？
+### Q3: 暺見銝 PDF ?辣嚗?
 
-**A:** 將 PDF 放入 `data/pdfs/` 目錄，容器會自動掛載。
+**A:** 撠?PDF ?曉 `data/pdfs/` ?桅?嚗捆?冽??芸?????
 
-### Q4: 點樣修改配置？
+### Q4: 暺見靽格?蔭嚗?
 
-**A:** 編輯 `config/config.yaml`，然後重啟：
+**A:** 蝺刻摩 `config/config.yaml`嚗敺???
 ```bash
 docker-compose restart nanobot-gateway
 ```
 
-### Q5: 點樣備份數據？
+### Q5: 暺見?遢?豢?嚗?
 
-**A:** 備份掛載的 volume：
+**A:** ?遢????volume嚗?
 ```bash
 tar -czf backup.tar.gz config/ .data/logs/
 ```
 
 ---
 
-## 📚 相關文檔
+## ?? ?賊???
 
-| 文檔 | 說明 |
+| ?? | 隤芣? |
 |------|------|
-| [`QUICKSTART_MCP.md`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/QUICKSTART_MCP.md) | 快速開始指南 |
-| [`README_DOCKER.md`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/liteparse-mcp-server/README_DOCKER.md) | Docker 部署指南 |
-| [`README_LITEPARSE_INTEGRATED.md`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/README_LITEPARSE_INTEGRATED.md) | 集成說明 |
-| [`IMPLEMENTATION_ZH.md`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/IMPLEMENTATION_ZH.md) | 完整實施指南 |
+| [`QUICKSTART_MCP.md`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/QUICKSTART_MCP.md) | 敹恍?憪???|
+| [`README_DOCKER.md`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/PyMuPDF-mcp-server/README_DOCKER.md) | Docker ?函蔡?? |
+| [`README_PyMuPDF_INTEGRATED.md`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/README_PyMuPDF_INTEGRATED.md) | ??隤芣? |
+| [`IMPLEMENTATION_ZH.md`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/IMPLEMENTATION_ZH.md) | 摰撖行?? |
 
 ---
 
-## 🎯 下一步：第二步（數據清洗與 Prompt 設計）
+## ? 銝?甇伐?蝚砌?甇伐??豢?皜???Prompt 閮剛?嚗?
 
-第一步完成後，可以開始第二步：
+蝚砌?甇亙???嚗隞仿?憪洵鈭郊嚗?
 
-1. **優化數據清洗邏輯**
-   - 根據實際財報調整關鍵詞
-   - 優化置信度評分算法
-   - 添加更多財務表格類型識別
+1. **?芸??豢?皜??摩**
+   - ?寞?撖阡?鞎∪隤踵?閰?
+   - ?芸?蝵桐縑摨西???瘜?
+   - 瘛餃??游?鞎∪?銵冽憿?霅
 
-2. **設計 System Prompt**
-   - 教導 LLM 嚴格根據 Markdown 表格回答
-   - 添加「報表中未提供」的處理邏輯
-   - 防止 LLM 編造數字
+2. **閮剛? System Prompt**
+   - ?? LLM ?湔?寞? Markdown 銵冽??
+   - 瘛餃??銵其葉?芣?靘????摩
+   - ?脫迫 LLM 蝺券摮?
 
-3. **測試真實場景**
-   - 用實際 SFC 年報測試
-   - 收集用戶反饋
-   - 迭代優化
-
----
-
-## ✅ 第一步驗收標準
-
-- [x] MCP Server 可以正常啟動
-- [x] LiteParse CLI 可以正常調用
-- [x] Data Cleaner 可以正確處理數據
-- [x] Docker 容器可以一鍵啟動
-- [x] 所有依賴已包含喺容器入面
-- [x] 用戶無需要手動安裝任何嘢
-- [x] 文檔齊全，包括快速開始指南
-- [x] 測試套件完整
+3. **皜祈岫?祕?湔**
+   - ?典祕??SFC 撟游皜祈岫
+   - ?園??冽??
+   - 餈凋誨?芸?
 
 ---
 
-**第一步 ✅ 已完成！** 🎉
+## ??蝚砌?甇仿??嗆?皞?
 
-**用戶只需要運行：**
+- [x] MCP Server ?臭誑甇?虜??
+- [x] PyMuPDF CLI ?臭誑甇?虜隤輻
+- [x] Data Cleaner ?臭誑甇?Ⅱ???豢?
+- [x] Docker 摰孵?臭誑銝?萄???
+- [x] ???鞈游歇??箏捆?典??
+- [x] ?冽?⊿?閬???鋆遙雿
+- [x] ??朣嚗??砍翰??憪???
+- [x] 皜祈岫憟辣摰
+
+---
+
+**蝚砌?甇???撌脣???** ??
+
+**?冽?芷?閬?銵?**
 ```bash
 docker-compose up -d
 ```
 
-**所有依賴自動安裝，零手動配置！** 🚀
+**???鞈渲??鋆??嗆???蝵殷?** ??
+

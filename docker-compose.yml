@@ -9,26 +9,6 @@ x-common-config: &common-config
     - "C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/LightRAG/data/input/__enqueued__:/data/pdfs"
 
 services:
-  # LiteParse MCP Server - Financial PDF parsing
-  liteparse-mcp:
-    build:
-      context: ./liteparse-mcp-server
-      dockerfile: Dockerfile
-    volumes:
-      # 【統一】MCP Server 必須要同 Gateway 睇同一個 Folder
-      - "C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/LightRAG/data/input/__enqueued__:/data/pdfs"
-    networks:
-      - default
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-        reservations:
-          cpus: '0.1'
-          memory: 128M
-
   # Nanobot Gateway - Main bot service
   nanobot-gateway:
     container_name: nanobot-gateway
@@ -42,8 +22,6 @@ services:
       - NANOBOT_CONFIG=/app/config/config.json
       - LOG_LEVEL=DEBUG
       - HTTPX_LOG_LEVEL=DEBUG
-    depends_on:
-      - liteparse-mcp
     deploy:
       resources:
         limits:
@@ -69,11 +47,8 @@ services:
       # 【更新】依家去 http://localhost:3000 就可以 Call 到個 API
       - "3000:8080"
     environment:
-      - MCP_SERVER_URL=http://liteparse-mcp:3000
       - PDF_DATA_DIR=/data/pdfs
       - PYTHONUNBUFFERED=1
-    depends_on:
-      - liteparse-mcp
     restart: unless-stopped
     deploy:
       resources:

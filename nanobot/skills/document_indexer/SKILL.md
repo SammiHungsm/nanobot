@@ -51,7 +51,7 @@ python -c "from pathlib import Path; text = Path('workspace/indexes/<doc_name>/t
 **召喚 Sub-agent 執行精準提取：**
 使用 `spawn` 工具並給予具體指令：
 
-> "我是主 Agent。根據地圖分析，關於 [營收數據] 極大可能在該 PDF 的第 X 頁。請你作為提取員，使用 LiteParse 讀取第 X 頁並以 Markdown 回報表格細節。"
+> "我是主 Agent。根據地圖分析，關於 [營收數據] 極大可能在該 PDF 的第 X 頁。請你作為提取員，使用 PyMuPDF 讀取第 X 頁並以 Markdown 回報表格細節。"
 > 
 
 ## ⚠️ 執行準則

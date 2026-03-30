@@ -3,7 +3,6 @@ import os
 import fitz  # PyMuPDF
 import requests
 import json
-import subprocess
 from datetime import datetime
 
 def load_nanobot_config():
@@ -44,16 +43,6 @@ def call_llm(prompt, require_json=False):
         return res.json()["choices"][0]["message"]["content"]
     except Exception as e: return "{}" if require_json else str(e)
 
-def call_liteparse_page_one(pdf_path):
-    """使用 LiteParse 解析第一頁，確保 Metadata 100% 準確"""
-    try:
-        cmd = ["lit", "parse", pdf_path, "--pages", "1", "--format", "markdown"]
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        return result.stdout
-    except:
-        doc = fitz.open(pdf_path)
-        return doc[0].get_text()
-
 def build_indexes(pdf_path, workspace_dir="/app/workspace"):
     try:
         doc = fitz.open(pdf_path)
@@ -62,7 +51,7 @@ def build_indexes(pdf_path, workspace_dir="/app/workspace"):
         os.makedirs(index_dir, exist_ok=True)
         status_path = os.path.join(index_dir, "status.txt")
 
-        # 1. 100% 準確目錄 (TOC)
+        # 1. Extract TOC from PDF
         update_status(status_path, "正在提取 PDF 內部目錄...")
         toc = doc.get_toc()
         with open(os.path.join(index_dir, "toc.md"), "w", encoding="utf-8") as f:
@@ -70,15 +59,22 @@ def build_indexes(pdf_path, workspace_dir="/app/workspace"):
             for item in toc:
                 f.write(f"{'  '*(item[0]-1)}- {item[1]} (Physical Page: {item[2]})\n")
 
-        # 2. 100% 準確封面 (Metadata)
-        update_status(status_path, "正在視覺解析封面 (LiteParse)...")
-        cover_md = call_liteparse_page_one(pdf_path)
-        prompt = f"提取封面資訊 JSON: {{'company_name': '', 'year': '', 'stock_code': '', 'report_type': ''}}\n內容: {cover_md}"
-        meta_json = call_llm(prompt, True)
+        # 2. Extract cover page metadata using PyMuPDF
+        update_status(status_path, "正在解析封面元數據...")
+        metadata = doc.metadata
         with open(os.path.join(index_dir, "metadata.md"), "w", encoding="utf-8") as f:
-            f.write(f"# Metadata\n\n```json\n{meta_json}\n```\n")
+            f.write(f"# Metadata\n\n```json\n")
+            f.write(f"{{\n")
+            f.write(f'  "title": "{metadata.get("title", "")}",\n')
+            f.write(f'  "author": "{metadata.get("author", "")}",\n')
+            f.write(f'  "subject": "{metadata.get("subject", "")}",\n')
+            f.write(f'  "creator": "{metadata.get("creator", "")}",\n')
+            f.write(f'  "producer": "{metadata.get("producer", "")}",\n')
+            f.write(f'  "creation_date": "{metadata.get("creationDate", "")}"\n')
+            f.write(f"}}\n")
+            f.write(f"```\n")
 
-        # 3. 提取前 5 頁作為「導航背景 (Navigation Context)」
+        # 3. Extract first 5 pages as "Navigation Context"
         update_status(status_path, "正在掃描前 5 頁建立背景導航...")
         context_text = ""
         for i in range(min(5, doc.page_count)):
@@ -91,7 +87,7 @@ def build_indexes(pdf_path, workspace_dir="/app/workspace"):
         print(f"🚀 地圖已存儲：{index_dir}")
 
     except Exception as e:
-        print(f"❌ 錯誤: {e}")
+        print(f"❌ 錯誤：{e}")
 
 if __name__ == "__main__":
     if len(sys.argv) < 2: sys.exit(1)

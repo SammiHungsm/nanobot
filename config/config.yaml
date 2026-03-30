@@ -1,4 +1,4 @@
-# Nanobot Configuration with LiteParse MCP Integration
+# Nanobot Configuration
 # Save this file as: nanobot/config/config.yaml
 
 # Model Configuration
@@ -25,39 +25,6 @@ tools:
     - web_fetch
     - filesystem
     - shell
-    # LiteParse tools (via MCP)
-    - liteparse_parse
-    - liteparse_debug
-
-# MCP Servers Configuration
-mcp:
-  servers:
-    # LiteParse MCP Server for financial report parsing
-    liteparse:
-      # Option 1: Connect to Docker container (recommended for production)
-      type: http
-      url: http://liteparse-mcp:3000
-      
-      # Option 2: Run locally via stdio (for development)
-      # type: stdio
-      # command: node
-      # args:
-      #   - /path/to/liteparse-mcp-server/index.js
-      # cwd: /path/to/liteparse-mcp-server
-      
-      # Tools to expose from this server
-      tools:
-        - parse_financial_table
-        - get_pdf_screenshot
-        - query_financial_data
-      
-      # Timeout settings
-      timeout: 300  # 5 minutes for large PDFs
-      
-      # Retry settings
-      retry:
-        max_attempts: 3
-        delay: 5
 
 # Memory Configuration
 memory:

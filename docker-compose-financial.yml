@@ -58,22 +58,6 @@ services:
           cpus: '0.5'
           memory: 512M
 
-  # LiteParse MCP Server - Financial PDF parsing
-  liteparse-mcp:
-    build:
-      context: ./liteparse-mcp-server
-      dockerfile: Dockerfile
-    volumes:
-      - "C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/LightRAG/data/input/__enqueued__:/data/pdfs"
-    networks:
-      - default
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-
   # Nanobot Gateway - Main bot service
   nanobot-gateway:
     container_name: nanobot-gateway
@@ -94,8 +78,6 @@ services:
         condition: service_healthy
       mongodb-docs:
         condition: service_healthy
-      liteparse-mcp:
-        condition: service_started
     deploy:
       resources:
         limits:
@@ -115,13 +97,11 @@ services:
     ports:
       - "3000:8080"
     environment:
-      - MCP_SERVER_URL=http://liteparse-mcp:3000
       - PDF_DATA_DIR=/data/pdfs
       - DATABASE_URL=postgresql://postgres:postgres_password_change_me@postgres-financial:5432/annual_reports
       - MONGODB_URL=mongodb://mongo:mongo_password_change_me@mongodb-docs:27017/annual_reports
       - PYTHONUNBUFFERED=1
     depends_on:
-      - liteparse-mcp
       - nanobot-gateway
     restart: unless-stopped
     deploy:

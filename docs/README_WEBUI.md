@@ -1,283 +1,283 @@
-# 🚀 Nanobot Web UI - 完整使用指南
+﻿# ?? Nanobot Web UI - 摰雿輻??
 
-> Web UI 已經完整配置好晒！所有依賴已經包含喺 Docker 容器入面，無需用戶手動安裝。✅
-
----
-
-## ✅ 完成咗嘅工作
-
-### 1. **Web UI 前端** ([`webui/ui.html`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/webui/ui.html))
-- ✅ 現代化 Tailwind CSS 設計
-- ✅ 登入介面（模擬認證）
-- ✅ 文件列表側邊欄
-- ✅ 即時對話界面
-- ✅ 文件上傳功能
-- ✅ 響應式設計（手機/桌面）
-
-### 2. **FastAPI 後端** ([`webui/main.py`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/webui/main.py))
-- ✅ RESTful API (`/api/chat`, `/api/documents`)
-- ✅ CORS 配置
-- ✅ 健康檢查端點
-- ✅ 錯誤處理
-
-### 3. **對話邏輯** ([`webui/chat_logic.py`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/webui/chat_logic.py))
-- ✅ MCP Server 連接邏輯
-- ✅ 財務查詢處理
-- ✅ 文件分析功能
-- ✅ Mock 回應（當 MCP 未連接時）
-
-### 4. **Docker 配置**
-- ✅ [`webui/Dockerfile`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/webui/Dockerfile) - Web UI 容器
-- ✅ [`webui/requirements.txt`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/webui/requirements.txt) - Python 依賴
-- ✅ [`docker-compose.yml`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/docker-compose.yml) - 三服務編排
+> Web UI 撌脩?摰?蔭憟賣?嚗???鞈游歇蝬??怠 Docker 摰孵?仿嚗??冽??摰???
 
 ---
 
-## 📦 系統架構
+## ??摰???撌乩?
+
+### 1. **Web UI ?垢** ([`webui/ui.html`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/webui/ui.html))
+- ???曆誨??Tailwind CSS 閮剛?
+- ???餃隞嚗芋?祈?霅?
+- ???辣?”?湧?甈?
+- ???單?撠店?
+- ???辣銝?
+- ???踵?撘身閮???/獢嚗?
+
+### 2. **FastAPI 敺垢** ([`webui/main.py`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/webui/main.py))
+- ??RESTful API (`/api/chat`, `/api/documents`)
+- ??CORS ?蔭
+- ???亙熒瑼Ｘ蝡舫?
+- ???航炊??
+
+### 3. **撠店?摩** ([`webui/chat_logic.py`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/webui/chat_logic.py))
+- ??MCP Server ???摩
+- ??鞎∪??亥岷??
+- ???辣???
+- ??Mock ??嚗 MCP ?芷???
+
+### 4. **Docker ?蔭**
+- ??[`webui/Dockerfile`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/webui/Dockerfile) - Web UI 摰孵
+- ??[`webui/requirements.txt`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/webui/requirements.txt) - Python 靘陷
+- ??[`docker-compose.yml`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/docker-compose.yml) - 銝??楊??
+
+---
+
+## ? 蝟餌絞?嗆?
 
 ```
-┌─────────────────┐
-│   Web Browser   │
-│   (Port 3000)   │
-└────────┬────────┘
-         │ HTTP
-         ↓
-┌─────────────────┐      ┌──────────────────┐
-│  Nanobot Web UI │ ───→ │ LiteParse MCP    │
-│  (FastAPI)      │ HTTP │ Server           │
-│  Port 8080      │      │ Port 3000        │
-└─────────────────┘      └──────────────────┘
+????????????????????
+??  Web Browser   ??
+??  (Port 3000)   ??
+??????????砂??????????
+         ??HTTP
+         ??
+????????????????????     ?????????????????????
+?? Nanobot Web UI ?????????PyMuPDF MCP    ??
+?? (FastAPI)      ??HTTP ??Server           ??
+?? Port 8080      ??     ??Port 3000        ??
+????????????????????     ?????????????????????
 ```
 
 ---
 
-## 🎯 啟動方法（一分鐘）
+## ? ???寞?嚗???嚗?
 
-### 步驟 1：啟動所有服務
+### 甇仿? 1嚗???????
 
 ```bash
 cd C:\Users\sammi_hung\Desktop\SFC_AI\sfc_poc\nanobot
 docker-compose up -d
 ```
 
-### 步驟 2：檢查服務狀態
+### 甇仿? 2嚗炎?交?????
 
 ```bash
 docker-compose ps
 ```
 
-應該見到：
+?府閬嚗?
 ```
 NAME                STATUS              PORTS
-liteparse-mcp       Up                  3000/tcp
+PyMuPDF-mcp       Up                  3000/tcp
 nanobot-gateway     Up                  18790/tcp, 0.0.0.0:8080->8080/tcp
 nanobot-webui       Up                  0.0.0.0:3000->8080/tcp
 ```
 
-### 步驟 3：訪問 Web UI
+### 甇仿? 3嚗赤??Web UI
 
-喺瀏覽器打開：
+?箇汗?冽???
 ```
 http://localhost:3000
 ```
 
 ---
 
-## 🧪 測試功能
+## ?妒 皜祈岫?
 
-### 1. 登入系統
-- 輸入任意用戶名（例如：`admin`）
-- 密碼随意（目前係模擬認證）
-- 點擊 "Sign In"
+### 1. ?餃蝟餌絞
+- 頛詨隞餅??冽??靘?嚗admin`嚗?
+- 撖Ⅳ??嚗??璅⊥隤?嚗?
+- 暺? "Sign In"
 
-### 2. 文件列表
-- 左側邊欄會顯示可用嘅 PDF 文件
-- 點擊文件可以自動 tag 落聊天框
+### 2. ?辣?”
+- 撌血???＊蝷箏?典? PDF ?辣
+- 暺??辣?臭誑?芸? tag ?質?憭拇?
 
-### 3. 對話測試
-試吓問：
-- "Hello" → 會收到歡迎訊息
-- "Help" → 會收到使用指南
-- "List documents" → 會顯示文件列表
-- "[Doc: test.pdf] What is the revenue?" → 會分析文件（Demo 模式）
+### 3. 撠店皜祈岫
+閰血???
+- "Hello" ????唳迭餈???
+- "Help" ????唬蝙?冽???
+- "List documents" ???＊蝷箸?隞嗅?銵?
+- "[Doc: test.pdf] What is the revenue?" ??????隞塚?Demo 璅∪?嚗?
 
-### 4. 上傳文件
-- 點擊回形針圖標
-- 選擇 PDF 文件
-- 等待上傳完成（模擬 2.5 秒）
+### 4. 銝?辣
+- 暺??耦??璅?
+- ?豢? PDF ?辣
+- 蝑?銝摰?嚗芋??2.5 蝘?
 
 ---
 
-## 📁 文件結構
+## ?? ?辣蝯?
 
 ```
 nanobot/
-├── webui/
-│   ├── main.py              # FastAPI 主程式
-│   ├── chat_logic.py        # 對話邏輯
-│   ├── ui.html              # HTML 前端
-│   ├── requirements.txt     # Python 依賴
-│   ├── Dockerfile           # Docker 配置
-│   └── README_WEBUI.md      # 呢個文件
-│
-├── liteparse-mcp-server/
-│   ├── index.js             # MCP Server
-│   ├── liteparse_data_cleaner.py
-│   ├── Dockerfile
-│   └── ...
-│
-├── docker-compose.yml       # 多服務編排
-└── ...
+??? webui/
+??  ??? main.py              # FastAPI 銝餌?撘?
+??  ??? chat_logic.py        # 撠店?摩
+??  ??? ui.html              # HTML ?垢
+??  ??? requirements.txt     # Python 靘陷
+??  ??? Dockerfile           # Docker ?蔭
+??  ??? README_WEBUI.md      # ?Ｗ?隞?
+??
+??? PyMuPDF-mcp-server/
+??  ??? index.js             # MCP Server
+??  ??? PyMuPDF_data_cleaner.py
+??  ??? Dockerfile
+??  ??? ...
+??
+??? docker-compose.yml       # 憭??楊??
+??? ...
 ```
 
 ---
 
-## 🔧 配置選項
+## ? ?蔭?賊?
 
-### 環境變量（可選）
+### ?啣?霈?嚗?賂?
 
-修改 [`docker-compose.yml`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/docker-compose.yml)：
+靽格 [`docker-compose.yml`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/docker-compose.yml)嚗?
 
 ```yaml
 services:
   nanobot-webui:
     environment:
-      - MCP_SERVER_URL=http://liteparse-mcp:3000  # MCP Server 地址
-      - PDF_DATA_DIR=/data/pdfs                   # PDF 文件目錄
+      - MCP_SERVER_URL=http://PyMuPDF-mcp:3000  # MCP Server ?啣?
+      - PDF_DATA_DIR=/data/pdfs                   # PDF ?辣?桅?
 ```
 
-### 端口映射
+### 蝡臬??
 
-預設配置：
-- **Web UI**: `3000` (外部) → `8080` (容器內)
-- **MCP Server**: `3000` (容器內，唔暴露到外部)
-- **Nanobot Gateway**: `8080` (外部) → `8080` (容器內)
+?身?蔭嚗?
+- **Web UI**: `3000` (憭) ??`8080` (摰孵??
+- **MCP Server**: `3000` (摰孵?改???脣憭)
+- **Nanobot Gateway**: `8080` (憭) ??`8080` (摰孵??
 
-如果想改端口：
+憒??單蝡臬嚗?
 ```yaml
 ports:
-  - 8080:8080  # 改成 8080:8080 就用 http://localhost:8080 訪問
+  - 8080:8080  # ?寞? 8080:8080 撠梁 http://localhost:8080 閮芸?
 ```
 
 ---
 
-## 🛠️ 常見問題排解
+## ??儭?撣貉????圾
 
-### Q1: 點解我見到 `docker-compose: command not found`?
+### Q1: 暺圾????`docker-compose: command not found`?
 
-**A:** 新版 Docker 使用 `docker compose` (無橫桿)：
+**A:** ?啁? Docker 雿輻 `docker compose` (?⊥帖獢?嚗?
 
 ```bash
 docker compose up -d
 ```
 
-或者安裝舊版：
+??鋆???
 ```bash
 pip install docker-compose
 ```
 
-### Q2: Web UI 無法連接 MCP Server？
+### Q2: Web UI ?⊥??? MCP Server嚗?
 
-**A:** 檢查 MCP Server 是否運行緊：
+**A:** 瑼Ｘ MCP Server ?臬??蝺?
 
 ```bash
-docker-compose logs liteparse-mcp
+docker-compose logs PyMuPDF-mcp
 ```
 
-如果見到錯誤，重建容器：
+憒?閬?航炊嚗?撱箏捆?剁?
 ```bash
 docker-compose down
 docker-compose up -d --build
 ```
 
-### Q3: 點解文件列表係空的？
+### Q3: 暺圾?辣?”靽征??
 
-**A:** PDF 文件需要放喺正確位置：
+**A:** PDF ?辣?閬?箸迤蝣箔?蝵殷?
 
 ```bash
-# 將 PDF 文件複製去呢個目錄
+# 撠?PDF ?辣銴ˊ?餃???
 C:\Users\sammi_hung\Desktop\SFC_AI\sfc_poc\data\pdfs\
 ```
 
-或者檢查日誌：
+?炎?交隤?
 ```bash
 docker-compose logs nanobot-webui
 ```
 
-### Q4: 點樣停止所有服務？
+### Q4: 暺見?迫?????
 
 **A:** 
 ```bash
 docker-compose down
 ```
 
-### Q5: 點樣重置所有數據？
+### Q5: 暺見?蔭????
 
 **A:** 
 ```bash
-# 停止並刪除所有容器、網絡
+# ?迫銝血?斗??捆?具雯蝯?
 docker-compose down -v
 
-# 重新啟動
+# ???
 docker-compose up -d
 ```
 
 ---
 
-## 📊 服務狀態監控
+## ?? ??????
 
-### 查看日誌
+### ?亦??亥?
 
 ```bash
-# 所有服務日誌
+# ????隤?
 docker-compose logs -f
 
-# 只看 Web UI
+# ?芰? Web UI
 docker-compose logs -f nanobot-webui
 
-# 只看 MCP Server
-docker-compose logs -f liteparse-mcp
+# ?芰? MCP Server
+docker-compose logs -f PyMuPDF-mcp
 ```
 
-### 健康檢查
+### ?亙熒瑼Ｘ
 
 ```bash
-# 檢查 Web UI
+# 瑼Ｘ Web UI
 curl http://localhost:3000/health
 
-# 檢查 MCP Server
-docker-compose exec liteparse-mcp curl -f http://localhost:3000/health
+# 瑼Ｘ MCP Server
+docker-compose exec PyMuPDF-mcp curl -f http://localhost:3000/health
 ```
 
 ---
 
-## 🎨 UI 功能詳解
+## ? UI ?閰唾圾
 
-### 登入介面
-- 簡易用家認證（目前係模擬）
-- 記住用家名響會話中
-- 登出功能
+### ?餃隞
+- 蝪⊥??典振隤?嚗??璅⊥嚗?
+- 閮??典振??店銝?
+- ?餃?
 
-### 文件側邊欄
-- 自動載入可用 PDF
-- 顯示文件狀態（Ready/Uploading）
-- 點擊自動 tag 落聊天框
-- 上傳按鈕（回形針圖標）
+### ?辣?湧?甈?
+- ?芸?頛?舐 PDF
+- 憿舐內?辣???Ready/Uploading嚗?
+- 暺??芸? tag ?質?憭拇?
+- 銝??嚗?敶ａ???嚗?
 
-### 對話界面
-- 實時對話氣泡
-- 打字中動畫
-- Markdown 格式支持
-- 文件標籤視覺化
-- Shift+Enter 換行
+### 撠店?
+- 撖行?撠店瘞?部
+- ??銝剖???
+- Markdown ?澆??舀?
+- ?辣璅惜閬死??
+- Shift+Enter ??
 
 ---
 
-## 🔗 API 端點參考
+## ?? API 蝡舫???
 
 ### POST `/api/chat`
 
-發送訊息：
+?潮??荔?
 ```json
 {
   "message": "What is the revenue?",
@@ -286,7 +286,7 @@ docker-compose exec liteparse-mcp curl -f http://localhost:3000/health
 }
 ```
 
-回應：
+??嚗?
 ```json
 {
   "reply": "Based on the financial report...",
@@ -296,7 +296,7 @@ docker-compose exec liteparse-mcp curl -f http://localhost:3000/health
 
 ### GET `/api/documents`
 
-列出文件：
+??辣嚗?
 ```json
 {
   "documents": [
@@ -314,7 +314,7 @@ docker-compose exec liteparse-mcp curl -f http://localhost:3000/health
 
 ### GET `/health`
 
-健康檢查：
+?亙熒瑼Ｘ嚗?
 ```json
 {
   "status": "online",
@@ -326,46 +326,46 @@ docker-compose exec liteparse-mcp curl -f http://localhost:3000/health
 
 ---
 
-## 🚀 下一步（可選升級）
+## ?? 銝?甇伐??舫??嚗?
 
-### 1. 連接真實 MCP Server
-修改 [`chat_logic.py`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/webui/chat_logic.py)：
+### 1. ???祕 MCP Server
+靽格 [`chat_logic.py`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/webui/chat_logic.py)嚗?
 
 ```python
 async def analyze_document(document_path, query):
     async with httpx.AsyncClient() as client:
         response = await client.post(
-            "http://liteparse-mcp:3000/parse",
+            "http://PyMuPDF-mcp:3000/parse",
             json={"pdf_path": document_path}
         )
         return format_response(response.json())
 ```
 
-### 2. 添加真實文件上傳
-修改 [`main.py`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/webui/main.py)：
+### 2. 瘛餃??祕?辣銝
+靽格 [`main.py`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/webui/main.py)嚗?
 
 ```python
 @app.post("/api/upload")
 async def upload_document(file: UploadFile):
-    # 保存文件去 data/pdfs/
+    # 靽??辣??data/pdfs/
     ...
 ```
 
-### 3. 添加用家認證
-替换模擬登入做真實 JWT 認證。
+### 3. 瘛餃??典振隤?
+?踵璅⊥?餃??撖?JWT 隤???
 
 ---
 
-## 📞 需要幫助？
+## ?? ?閬鼠?抬?
 
-### 相關文檔
-- **MCP Server 指南**: [`QUICKSTART_MCP.md`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/QUICKSTART_MCP.md)
-- **Docker 部署**: [`README_DOCKER.md`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/liteparse-mcp-server/README_DOCKER.md)
-- **完整實施**: [`IMPLEMENTATION_ZH.md`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/IMPLEMENTATION_ZH.md)
+### ?賊???
+- **MCP Server ??**: [`QUICKSTART_MCP.md`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/QUICKSTART_MCP.md)
+- **Docker ?函蔡**: [`README_DOCKER.md`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/PyMuPDF-mcp-server/README_DOCKER.md)
+- **摰撖行**: [`IMPLEMENTATION_ZH.md`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/IMPLEMENTATION_ZH.md)
 
-### 系統狀態
+### 蝟餌絞???
 ```bash
-# 一分鐘檢查
+# 銝??瑼Ｘ
 docker-compose ps
 docker-compose logs --tail=20
 curl http://localhost:3000/health
@@ -373,21 +373,22 @@ curl http://localhost:3000/health
 
 ---
 
-## ✅ 完成清單
+## ??摰?皜
 
-- [x] Web UI 前端（HTML + Tailwind CSS）
-- [x] FastAPI 後端
-- [x] 對話邏輯層
-- [x] Docker 配置
-- [x] docker-compose 編排
-- [x] 依賴管理（requirements.txt）
-- [x] 健康檢查端點
-- [x] 錯誤處理
-- [x] 文件上傳 UI
-- [x] 文件列表 API
-- [x] 響應式設計
-- [x] 使用文檔
+- [x] Web UI ?垢嚗TML + Tailwind CSS嚗?
+- [x] FastAPI 敺垢
+- [x] 撠店?摩撅?
+- [x] Docker ?蔭
+- [x] docker-compose 蝺冽?
+- [x] 靘陷蝞∠?嚗equirements.txt嚗?
+- [x] ?亙熒瑼Ｘ蝡舫?
+- [x] ?航炊??
+- [x] ?辣銝 UI
+- [x] ?辣?” API
+- [x] ?踵?撘身閮?
+- [x] 雿輻??
 
 ---
 
-**🎉 全部完成！而家你可以運行 `docker-compose up -d` 然後喺 `http://localhost:3000` 使用個 Web UI 啦！** 🚀
+**?? ?券摰?嚗振雿隞仿?銵?`docker-compose up -d` ?嗅???`http://localhost:3000` 雿輻??Web UI ?佗?** ??
+
