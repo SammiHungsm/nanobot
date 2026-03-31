@@ -20,7 +20,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY main.py .
 COPY chat_logic.py .
-COPY ui.html .
+
+# Copy static files (HTML, CSS, JS)
+COPY static/ ./static/
 
 # Create data directory for PDFs (mounted at runtime)
 RUN mkdir -p /data/pdfs

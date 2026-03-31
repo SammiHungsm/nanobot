@@ -68,10 +68,9 @@ services:
       context: ./webui
       dockerfile: Dockerfile
     container_name: nanobot-webui
-    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080", "--reload"]
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
     volumes:
       - pdf_upload_data:/data/pdfs  # Named volume for PDF uploads (read-write)
-      - ./webui:/app
     ports:
       - "3000:8080"
     environment:

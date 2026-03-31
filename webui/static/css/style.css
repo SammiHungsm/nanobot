@@ -1,0 +1,246 @@
+/* Nanobot WebUI - Custom Styles */
+
+/* ===== Custom Scrollbar ===== */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #475569;
+    border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #64748b;
+}
+
+/* Chat scrollbar specific */
+.chat-scroll::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+}
+
+.chat-scroll::-webkit-scrollbar-thumb:hover {
+    background: #94a3b8;
+}
+
+/* ===== Typing Indicator Animation ===== */
+.typing-indicator span {
+    animation: blink 1.4s infinite both;
+    height: 6px;
+    width: 6px;
+    background-color: #94a3b8;
+    border-radius: 50%;
+    display: inline-block;
+    margin: 0 1px;
+}
+
+.typing-indicator span:nth-child(2) {
+    animation-delay: 0.2s;
+}
+
+.typing-indicator span:nth-child(3) {
+    animation-delay: 0.4s;
+}
+
+@keyframes blink {
+    0% {
+        opacity: 0.2;
+    }
+
+    20% {
+        opacity: 1;
+    }
+
+    100% {
+        opacity: 0.2;
+    }
+}
+
+/* ===== Tab Styles ===== */
+.tab-active {
+    background-color: white;
+    border-bottom-color: transparent;
+    color: #2563eb;
+}
+
+.tab-inactive {
+    background-color: #f1f5f9;
+    border-bottom-color: #e2e8f0;
+    color: #64748b;
+}
+
+.tab-inactive:hover {
+    background-color: #e2e8f0;
+}
+
+/* ===== PDF Card Styles ===== */
+.pdf-card {
+    transition: all 0.2s ease;
+}
+
+.pdf-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+}
+
+/* ===== JSON Viewer Styles ===== */
+.json-viewer {
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.json-key {
+    color: #c678dd;
+}
+
+.json-string {
+    color: #98c379;
+}
+
+.json-number {
+    color: #d19a66;
+}
+
+.json-boolean {
+    color: #e06c75;
+}
+
+.json-null {
+    color: #56b6c2;
+}
+
+/* ===== Modal Animation ===== */
+@keyframes modal-fade-in {
+    from {
+        opacity: 0;
+        transform: scale(0.95);
+    }
+
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+.modal-animate {
+    animation: modal-fade-in 0.2s ease-out;
+}
+
+/* ===== Fade In Up Animation ===== */
+@keyframes fade-in-up {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.animate-fade-in-up {
+    animation: fade-in-up 0.3s ease-out;
+}
+
+/* ===== Loading Spinner ===== */
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.animate-spin {
+    animation: spin 1s linear infinite;
+}
+
+/* ===== Button Disabled State ===== */
+button:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+/* ===== Focus Visible Styles ===== */
+*:focus-visible {
+    outline: 2px solid #3b82f6;
+    outline-offset: 2px;
+}
+
+/* ===== Textarea Auto-resize ===== */
+textarea {
+    field-sizing: content;
+    max-height: 120px;
+}
+
+/* ===== Document Card Status Colors ===== */
+.status-queued {
+    background-color: rgb(239, 246, 255);
+    border-color: rgb(191, 219, 254);
+}
+
+.status-processing {
+    background-color: rgb(239, 246, 255);
+    border-color: rgb(147, 197, 253);
+}
+
+.status-completed {
+    background-color: rgb(240, 253, 244);
+    border-color: rgb(167, 243, 208);
+}
+
+.status-failed {
+    background-color: rgb(254, 242, 242);
+    border-color: rgb(254, 205, 205);
+}
+
+/* ===== Progress Bar Animation ===== */
+@keyframes progress-pulse {
+    0%, 100% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0.8;
+    }
+}
+
+.progress-bar-animated {
+    animation: progress-pulse 1.5s ease-in-out infinite;
+}
+
+/* ===== Library Grid Card ===== */
+.library-card {
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.library-card:hover {
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+}
+
+/* ===== Utility Classes ===== */
+.truncate {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.text-shadow {
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+/* ===== Responsive Adjustments ===== */
+@media (max-width: 768px) {
+    .chat-scroll {
+        padding: 1rem;
+    }
+
+    #document-list {
+        font-size: 0.875rem;
+    }
+}

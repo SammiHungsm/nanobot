@@ -46,6 +46,9 @@ FROM base AS production
 # Copy Python packages from dependencies
 COPY --from=dependencies /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 
+# Copy nanobot console script from dependencies
+COPY --from=dependencies /usr/local/bin/nanobot /usr/local/bin/nanobot
+
 # Copy application code
 COPY nanobot/ ./nanobot/
 COPY bridge/ ./bridge/
@@ -57,6 +60,8 @@ RUN mkdir -p /app/config
 RUN useradd --create-home --shell /bin/bash nanobot \
     && mkdir -p /app/.data /app/config \
     && chown -R nanobot:nanobot /app
+
+ENV PATH="/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 
 USER nanobot
 
