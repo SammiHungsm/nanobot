@@ -5,9 +5,13 @@ import os
 import json
 import zipfile
 import io
+import hashlib
+from datetime import datetime
 from pathlib import Path
+from loguru import logger
+
 from fastapi import APIRouter, HTTPException, UploadFile, File, BackgroundTasks
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse, JSONResponse
 from app.schemas.document import (
     DocumentListResponse,
     DocumentStatus,
@@ -131,7 +135,6 @@ async def upload_document(
             
             # 🚀 如果檔案已存在且前端沒有要求強制覆蓋，回傳 409 Conflict
             if is_duplicate and not replace:
-                from fastapi.responses import JSONResponse
                 return JSONResponse(
                     status_code=409, 
                     content={
@@ -149,8 +152,6 @@ async def upload_document(
                 logger.info(f"🔄 Replacing existing document: {file.filename} (ID: {existing_doc_id})")
             
             # Save file
-            import hashlib
-            from datetime import datetime
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             safe_filename = f"{timestamp}_{file.filename.replace(' ', '_')}"
             file_path = document_service.upload_dir / safe_filename

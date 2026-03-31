@@ -214,10 +214,25 @@ class OpenDataLoaderProcessor:
                         convert(pdf_path, str(out_path))
                     
                     if out_path.exists():
-                        with open(out_path, 'r', encoding='utf-8') as f:
-                            return json.load(f)
+                        # 【修改部分開始】判斷是檔案還是資料夾
+                        if out_path.is_dir():
+                            # 如果 OpenDataLoader 建立了一個資料夾，尋找裡面的 json 檔案
+                            json_files = list(out_path.glob("*.json"))
+                            if json_files:
+                                # 讀取資料夾內找到的第一個 JSON 檔
+                                logger.info(f"📂 OpenDataLoader 輸出了資料夾，找到 JSON 檔案：{json_files[0].name}")
+                                with open(json_files[0], 'r', encoding='utf-8') as f:
+                                    return json.load(f)
+                            else:
+                                logger.error(f"❌ 轉換完成，但在目錄 {out_path} 中找不到 JSON 檔案")
+                                return {"content": []}
+                        else:
+                            # 如果它正常輸出為一個檔案
+                            with open(out_path, 'r', encoding='utf-8') as f:
+                                return json.load(f)
+                        # 【修改部分結束】
                     else:
-                        logger.error("❌ 轉換完成，但找不到輸出的 JSON 檔案")
+                        logger.error("❌ 轉換完成，但找不到輸出的檔案或目錄")
                         return {"content": []}
                 except Exception as e:
                     logger.error(f"❌ PDF 轉換引擎發生錯誤：{e}")
