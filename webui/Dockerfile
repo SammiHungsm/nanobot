@@ -21,6 +21,13 @@ COPY requirements.txt .
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Copy nanobot package from parent directory and install it
+COPY ../nanobot/ /tmp/nanobot/
+COPY ../pyproject.toml /tmp/nanobot/
+COPY ../README.md /tmp/nanobot/
+COPY ../bridge/ /tmp/nanobot/bridge/
+RUN pip install --no-cache-dir /tmp/nanobot/
+
 # Copy application code (new modular structure)
 COPY app/ ./app/
 

@@ -9,6 +9,7 @@ pydantic==2.5.2
 
 # HTTP Client
 httpx==0.25.2
+asyncpg==0.29.0
 
 # File Uploads
 python-multipart==0.0.6

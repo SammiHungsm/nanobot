@@ -19,7 +19,7 @@ from pathlib import Path
 import os
 
 # Import routers
-from app.api import chat_router, document_router, init_document_service
+from app.api import chat_router, document_router, database_router, init_document_service
 
 # Initialize FastAPI application
 app = FastAPI(
@@ -56,6 +56,7 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 # Include routers
 app.include_router(chat_router)
 app.include_router(document_router)
+app.include_router(database_router)
 
 
 @app.get("/")

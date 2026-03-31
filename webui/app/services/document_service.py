@@ -4,12 +4,13 @@ Document Service - Handles document management and processing queue
 import asyncio
 import hashlib
 import json
+import os
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Optional
 from loguru import logger
 
-from app.services.pdf_service import process_pdf_async
+from nanobot.ingestion.opendataloader_processor import OpenDataLoaderProcessor
 
 
 class DocumentService:
@@ -92,44 +93,51 @@ class DocumentService:
                 doc["progress"] = 5.0
                 
                 try:
-                    # Process with OpenDataLoader
+                    # 🚀 Use real OpenDataLoaderProcessor for PDF processing
                     output_file = self.output_dir / f"{Path(doc['filename']).stem}_processed.json"
                     
                     # Update progress
                     doc["progress"] = 20.0
                     self.add_processing_log(
-                        f"Processing {doc['filename']}: Converting PDF to JSON (20%)", 
+                        f"Processing {doc['filename']}: Extracting with OpenDataLoader", 
                         "info"
                     )
                     
-                    # Run OpenDataLoader conversion
-                    metadata = await process_pdf_async(doc["path"], str(output_file))
+                    # Initialize OpenDataLoaderProcessor
+                    db_url = os.getenv("DATABASE_URL", "postgresql://postgres:postgres_password_change_me@postgres-financial:5432/financial_db")
+                    data_dir = os.getenv("DATA_DIR", "/app/data/raw")
+                    
+                    processor = OpenDataLoaderProcessor(db_url, data_dir)
+                    await processor.connect()
+                    
+                    # Extract company_id from filename or use default
+                    company_id = 1  # TODO: Auto-generate or extract from filename
+                    
+                    # Run real processing (parses PDF, inserts to PostgreSQL, triggers Vanna)
+                    result = await processor.process_pdf(
+                        pdf_path=doc["path"], 
+                        company_id=company_id,
+                        doc_id=doc_id
+                    )
+                    
+                    await processor.close()
+                    
+                    # Check if processing failed
+                    if result.get("status") == "failed":
+                        raise Exception(result.get("error", "Unknown processing error"))
                     
                     # Update progress
                     doc["progress"] = 80.0
                     self.add_processing_log(
-                        f"Processing {doc['filename']}: Extraction complete (80%)", 
+                        f"Processing {doc['filename']}: DB insertion & Vanna sync complete", 
                         "info"
                     )
-                    
-                    # Read results
-                    if output_file.exists():
-                        doc["output_path"] = str(output_file)
-                        doc["result_metadata"] = metadata
-                        doc["page_count"] = metadata.get("metadata", {}).get("page_count", 0)
-                        self.add_processing_log(
-                            f"Processing {doc['filename']}: Output saved ({doc['page_count']} pages)", 
-                            "success"
-                        )
-                    else:
-                        self.add_processing_log(
-                            f"Processing {doc['filename']}: Warning - output file not found", 
-                            "warning"
-                        )
                     
                     # Mark as completed
                     doc["status"] = "completed"
                     doc["progress"] = 100.0
+                    doc["page_count"] = result.get("total_chunks", 0)  # Use chunk count as page count
+                    doc["result_metadata"] = result
                     
                     self.add_processing_log(f"✅ Processing complete: {doc['filename']}", "success")
                     logger.info(f"✅ Document processed: {doc_id}")

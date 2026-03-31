@@ -70,15 +70,19 @@ services:
     container_name: nanobot-webui
     command: ["python", "-m", "app.main"]
     volumes:
-      - pdf_upload_data:/data/pdfs
+      - pdf_upload_data:/app/uploads
       - ./webui/uploads:/app/uploads
       - ./webui/outputs:/app/outputs
+      - ./data/raw:/app/data/raw
+      - ./nanobot:/app/nanobot:ro  # Mount nanobot package as read-only
     ports:
       - "3000:8080"
     environment:
       - PDF_UPLOAD_DIR=/app/uploads
       - PDF_OUTPUT_DIR=/app/outputs
       - DATABASE_URL=postgresql://postgres:postgres_password_change_me@postgres-financial:5432/annual_reports
+      - GATEWAY_URL=http://nanobot-gateway:8081
+      - DATA_DIR=/app/data/raw
       - PYTHONUNBUFFERED=1
       - PYTHONPATH=/app
     depends_on:
