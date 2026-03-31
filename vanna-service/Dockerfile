@@ -1,9 +1,15 @@
 # Vanna AI Service
 # Text-to-SQL with RAG training for financial queries
+# Supports continuous learning (邊做邊學) via REST API
 
 FROM python:3.11-slim
 
 WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install dependencies
 RUN pip install --no-cache-dir \
@@ -11,17 +17,22 @@ RUN pip install --no-cache-dir \
     psycopg2-binary \
     pandas \
     chromadb \
-    loguru
+    loguru \
+    fastapi \
+    uvicorn
 
 # Create data directory for ChromaDB persistence
-RUN mkdir -p /app/data
+RUN mkdir -p /app/data /app/data/raw /app/data/chromadb
 
 # Copy startup script
 COPY start.py /app/start.py
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "from vanna.chromadb import ChromaDB_VectorStore; print('Vanna OK')" || exit 1
+# Expose API port
+EXPOSE 8082
 
-# Run startup script (trains Vanna and keeps service running)
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:8082/health || exit 1
+
+# Run FastAPI server with uvicorn
 CMD ["python", "/app/start.py"]

@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
     git \
+    default-jre-headless \
     && rm -rf /var/lib/apt/lists/*
 
 FROM base AS dependencies
@@ -27,13 +28,13 @@ RUN pip install --no-cache-dir typer anthropic pydantic pydantic-settings \
     lark-oapi socksio python-socketio msgpack slack-sdk slackify-markdown \
     qq-botpy python-socks prompt-toolkit questionary mcp json-repair \
     chardet openai tiktoken psycopg2-binary vanna[postgres] aiohttp \
-    fastapi uvicorn
+    fastapi uvicorn asyncpg
 
 # Install CPU-only PyTorch FIRST (before opendataloader)
+# Removed torchaudio - not needed for PDF processing (saves ~50MB and build time)
 RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu \
     torch==2.5.1 \
-    torchvision==0.20.1 \
-    torchaudio==2.5.1
+    torchvision==0.20.1
 
 # Install opendataloader-pdf with CPU-only dependencies (no CUDA)
 RUN pip install --no-cache-dir opendataloader-pdf[cpu]>=2.2.0

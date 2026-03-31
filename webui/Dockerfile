@@ -9,6 +9,11 @@ WORKDIR /app
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    poppler-utils \
+    tesseract-ocr \
+    libgl1 \
+    libglib2.0-0 \
+    default-jre-headless \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first for better caching

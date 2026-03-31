@@ -214,12 +214,34 @@
                         <p class="text-sm text-slate-500">Manage and preview your documents</p>
                     </div>
                     <div class="flex items-center space-x-3">
+                        <!-- Filter & Sort -->
+                        <select id="library-filter-status" onchange="Library.filterLibrary()" class="px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm">
+                            <option value="all">All Status</option>
+                            <option value="completed">Completed</option>
+                            <option value="processing">Processing</option>
+                            <option value="queued">Queued</option>
+                            <option value="failed">Failed</option>
+                        </select>
+                        <select id="library-sort" onchange="Library.filterLibrary()" class="px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm">
+                            <option value="date_desc">Newest First</option>
+                            <option value="date_asc">Oldest First</option>
+                            <option value="size_desc">Size: Large to Small</option>
+                            <option value="size_asc">Size: Small to Large</option>
+                            <option value="name_asc">Name: A to Z</option>
+                        </select>
                         <div class="relative">
                             <input type="text" id="library-search" placeholder="Search documents..."
                                 class="pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-sm"
-                                oninput="filterLibrary()">
+                                oninput="Library.filterLibrary()">
                             <i class="fas fa-search absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400"></i>
                         </div>
+                        <!-- Batch Actions -->
+                        <button id="batch-delete-btn" onclick="Library.batchDeleteSelected()" class="hidden bg-red-50 text-red-600 px-4 py-2 rounded-lg hover:bg-red-100 transition text-sm font-medium border border-red-200" title="Delete Selected">
+                            <i class="fas fa-trash-alt mr-1.5"></i><span id="batch-delete-count">0</span>
+                        </button>
+                        <button id="batch-download-btn" onclick="Library.batchDownloadSelected()" class="hidden bg-green-50 text-green-600 px-4 py-2 rounded-lg hover:bg-green-100 transition text-sm font-medium border border-green-200" title="Download Selected">
+                            <i class="fas fa-download mr-1.5"></i><span id="batch-download-count">0</span>
+                        </button>
                         <label class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition cursor-pointer text-sm font-medium">
                             <i class="fas fa-upload mr-2"></i>Upload
                             <input type="file" id="library-file-upload" class="hidden" accept=".pdf" multiple>
@@ -230,16 +252,37 @@
                 <!-- Library Grid and Process Log -->
                 <div class="flex-1 flex overflow-hidden">
                     <!-- Left: Library Grid -->
-                    <div class="flex-1 overflow-y-auto p-6">
-                        <div id="library-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                            <!-- JS will populate PDF cards here -->
-                        </div>
+                    <div class="flex-1 flex flex-col overflow-hidden">
+                        <!-- Grid with checkboxes -->
+                        <div class="flex-1 overflow-y-auto p-6">
+                            <div class="mb-3 flex items-center justify-between">
+                                <label class="flex items-center space-x-2 text-sm text-slate-600">
+                                    <input type="checkbox" id="select-all-checkbox" onchange="Library.toggleSelectAll(this)" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
+                                    <span>Select All</span>
+                                </label>
+                                <span id="library-count" class="text-sm text-slate-500">0 documents</span>
+                            </div>
+                            <div id="library-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                                <!-- JS will populate PDF cards here -->
+                            </div>
 
-                        <!-- Empty State -->
-                        <div id="library-empty" class="hidden flex flex-col items-center justify-center h-full text-slate-400">
-                            <i class="fas fa-folder-open text-6xl mb-4"></i>
-                            <p class="text-lg font-medium">No documents found</p>
-                            <p class="text-sm">Upload a PDF to get started</p>
+                            <!-- Empty State -->
+                            <div id="library-empty" class="hidden flex flex-col items-center justify-center h-full text-slate-400">
+                                <i class="fas fa-folder-open text-6xl mb-4"></i>
+                                <p class="text-lg font-medium">No documents found</p>
+                                <p class="text-sm">Upload a PDF to get started</p>
+                            </div>
+
+                            <!-- Pagination -->
+                            <div id="library-pagination" class="hidden mt-4 flex items-center justify-center space-x-2">
+                                <button onclick="Library.prevPage()" class="px-3 py-1.5 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 text-sm disabled:opacity-50">
+                                    <i class="fas fa-chevron-left"></i>
+                                </button>
+                                <span id="pagination-info" class="text-sm text-slate-600">Page 1 of 1</span>
+                                <button onclick="Library.nextPage()" class="px-3 py-1.5 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 text-sm disabled:opacity-50">
+                                    <i class="fas fa-chevron-right"></i>
+                                </button>
+                            </div>
                         </div>
                     </div>
 
@@ -261,7 +304,7 @@
                 <div id="details-panel" class="hidden bg-white border-t border-slate-200 p-4 shadow-lg">
                     <div class="flex justify-between items-start mb-3">
                         <h3 class="font-semibold text-slate-800">Document Details</h3>
-                        <button onclick="closeDetailsPanel()" class="text-slate-400 hover:text-slate-600">
+                        <button onclick="Library.closeDetailsPanel()" class="text-slate-400 hover:text-slate-600">
                             <i class="fas fa-times"></i>
                         </button>
                     </div>
@@ -298,15 +341,24 @@
                             </div>
                         </div>
                     </div>
+                    <!-- Retry Button (only for failed documents) -->
+                    <div id="retry-button-container" class="hidden mt-3">
+                        <button onclick="Library.retryDocument()" class="w-full bg-orange-50 text-orange-600 py-2 rounded-lg hover:bg-orange-100 transition text-sm font-medium border border-orange-200">
+                            <i class="fas fa-redo-alt mr-1.5"></i>Retry Processing
+                        </button>
+                    </div>
                     <div class="mt-4 flex space-x-2">
-                        <button onclick="previewPDF()" class="flex-1 bg-slate-100 text-slate-700 py-2 rounded-lg hover:bg-slate-200 transition text-sm font-medium">
+                        <button onclick="Library.previewPDF()" class="flex-1 bg-slate-100 text-slate-700 py-2 rounded-lg hover:bg-slate-200 transition text-sm font-medium">
                             <i class="fas fa-eye mr-1.5"></i>Preview
                         </button>
-                        <button onclick="downloadPDF()" class="flex-1 bg-slate-100 text-slate-700 py-2 rounded-lg hover:bg-slate-200 transition text-sm font-medium">
+                        <button onclick="Library.downloadPDF()" class="flex-1 bg-slate-100 text-slate-700 py-2 rounded-lg hover:bg-slate-200 transition text-sm font-medium">
                             <i class="fas fa-download mr-1.5"></i>Download
                         </button>
-                        <button onclick="viewProcessedOutput()" class="flex-1 bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 transition text-sm font-medium">
+                        <button onclick="Library.viewProcessedOutput()" class="flex-1 bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 transition text-sm font-medium">
                             <i class="fas fa-file-code mr-1.5"></i>View Output
+                        </button>
+                        <button onclick="Library.deleteSelectedDocument()" class="flex-[0.5] bg-red-50 text-red-600 py-2 rounded-lg hover:bg-red-100 transition text-sm font-medium border border-red-200" title="Delete Document">
+                            <i class="fas fa-trash-alt"></i>
                         </button>
                     </div>
                 </div>
@@ -361,6 +413,28 @@
     <div id="processed-output-preview" class="hidden mt-4 pt-4 border-t border-slate-200">
         <h4 class="font-medium text-slate-700 mb-2 text-sm">Output Preview</h4>
         <pre id="processed-output-content" class="json-viewer text-xs bg-slate-50 p-3 rounded-lg overflow-auto max-h-48 border border-slate-200"></pre>
+    </div>
+
+    <!-- Upload Progress Modal -->
+    <div id="upload-progress-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-md p-6 modal-animate">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="font-semibold text-slate-800"><i class="fas fa-upload mr-2"></i>Uploading...</h3>
+                <button onclick="Library.closeUploadModal()" class="text-slate-400 hover:text-slate-600">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="space-y-3">
+                <div class="flex justify-between text-sm text-slate-600">
+                    <span id="upload-file-name" class="truncate">Preparing...</span>
+                    <span id="upload-percent">0%</span>
+                </div>
+                <div class="w-full h-3 bg-slate-200 rounded-full overflow-hidden">
+                    <div id="upload-progress-bar" class="h-full bg-blue-600 transition-all duration-300" style="width: 0%"></div>
+                </div>
+                <p id="upload-status" class="text-xs text-slate-500">Initializing upload...</p>
+            </div>
+        </div>
     </div>
 
     <!-- JavaScript Files -->

@@ -17,6 +17,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 from loguru import logger
 import asyncpg
+import httpx
 
 
 class OpenDataLoaderProcessor:
@@ -98,6 +99,9 @@ class OpenDataLoaderProcessor:
             # 6. 更新文檔狀態
             await self._update_document_status(doc_id, "completed", stats)
             
+            # 7. 觸發 Vanna 訓練 (邊做邊學)
+            await self._trigger_vanna_training(doc_id)
+            
             return {
                 "status": "completed",
                 "doc_id": doc_id,
@@ -165,68 +169,84 @@ class OpenDataLoaderProcessor:
     
     async def _parse_with_opendataloader(self, pdf_path: str, doc_id: str) -> List[Dict[str, Any]]:
         """
-        使用 OpenDataLoader 解析 PDF
-        
-        TODO: 集成實際的 OpenDataLoader
-        現時返回 Mock 數據用于測試
+        使用真實的 OpenDataLoader 解析 PDF，並將結果轉換為 Artifacts
         """
-        logger.info("📖 正在使用 OpenDataLoader 解析 PDF...")
+        logger.info("📖 正在使用 OpenDataLoader 真實解析 PDF...")
         
-        # ========== TODO: 集成真實的 OpenDataLoader ==========
-        # from opendataloader import OpenDataLoader
-        # parser = OpenDataLoader()
-        # result = await parser.parse(pdf_path)
-        # artifacts = result.to_artifacts()
-        # ===================================================
+        # 1. 定義一個同步的包裝函數來執行 CPU 密集的轉換工作
+        def run_conversion():
+            import tempfile
+            from opendataloader_pdf import convert
+            import traceback
+            
+            with tempfile.TemporaryDirectory() as temp_dir:
+                out_path = Path(temp_dir) / f"{doc_id}.json"
+                try:
+                    # 使用位置參數呼叫，避免 WebUI 曾經遇過的 keyword 報錯
+                    try:
+                        convert(pdf_path, output_path=str(out_path), output_format="json", pages="all")
+                    except TypeError:
+                        convert(pdf_path, str(out_path))
+                    
+                    if out_path.exists():
+                        with open(out_path, 'r', encoding='utf-8') as f:
+                            return json.load(f)
+                    else:
+                        logger.error("❌ 轉換完成，但找不到輸出的 JSON 檔案")
+                        return {"content": []}
+                except Exception as e:
+                    logger.error(f"❌ PDF 轉換引擎發生錯誤：{e}")
+                    traceback.print_exc()
+                    return {"content": []}
         
-        # Mock 數據 (用于測試)
+        # 2. 由於 PDF 處理會阻塞 (Blocking)，使用 to_thread 將其放入背景執行緒
+        result_json = await asyncio.to_thread(run_conversion)
+        
+        # 3. 將解析出來的 JSON 轉換為 Artifacts 格式
         artifacts = []
+        content_blocks = result_json.get("content", [])
         
-        # 模擬提取了 10 頁內容
-        for page_num in range(1, 11):
-            # 模擬文本塊
-            artifacts.append({
-                "type": "text_chunk",
-                "page_num": page_num,
-                "content": f"Mock text content from page {page_num}",
-                "metadata": {
-                    "bbox": [50, 100, 500, 200],
-                    "section": "Financial Highlights"
-                }
-            })
-            
-            # 模擬表格
-            artifacts.append({
-                "type": "table",
-                "page_num": page_num,
-                "content_json": {
-                    "headers": ["Metric", "2023", "2022", "2021"],
-                    "rows": [
-                        ["Revenue", "10000", "9000", "8000"],
-                        ["Profit", "2000", "1800", "1600"]
-                    ]
-                },
-                "metadata": {
-                    "table_id": f"table_{page_num}_001",
-                    "rows": 3,
-                    "cols": 4
-                }
-            })
-            
-            # 模擬圖片
-            artifacts.append({
-                "type": "image",
-                "page_num": page_num,
-                "image_data": b"mock_image_binary_data",  # 實際應為圖片二進制
-                "metadata": {
-                    "caption": f"Figure {page_num}: Revenue Growth",
-                    "format": "png",
-                    "width": 800,
-                    "height": 600
-                }
-            })
+        if not content_blocks:
+            logger.warning(f"⚠️ 提取不到任何內容，請確認 {pdf_path} 是否為純圖片或空白。")
         
-        logger.info(f"✅ Mock 解析完成：共 {len(artifacts)} 個 artifacts")
+        for i, block in enumerate(content_blocks):
+            if isinstance(block, dict):
+                block_type = block.get("type", "text")
+                # 嘗試抓取頁碼，如果沒有則預設為 1
+                page_num = block.get("metadata", {}).get("page", 1) if "metadata" in block else block.get("page", 1)
+                
+                if block_type == "table":
+                    artifacts.append({
+                        "type": "table",
+                        "page_num": page_num,
+                        "content_json": block,
+                        "metadata": {"source": "opendataloader", "original_index": i}
+                    })
+                elif block_type == "image":
+                    # 圖片暫時只存 metadata，不寫入二進制資料以免記憶體撐爆
+                    artifacts.append({
+                        "type": "image",
+                        "page_num": page_num,
+                        "image_data": b"", 
+                        "metadata": block.get("metadata", {})
+                    })
+                else:
+                    artifacts.append({
+                        "type": "text_chunk",
+                        "page_num": page_num,
+                        "content": block.get("text", str(block)),
+                        "metadata": {"source": "opendataloader", "original_index": i}
+                    })
+            else:
+                # Fallback：給未知結構的資料
+                artifacts.append({
+                    "type": "text_chunk",
+                    "page_num": 1,
+                    "content": str(block),
+                    "metadata": {"source": "opendataloader_raw"}
+                })
+        
+        logger.info(f"✅ 真實解析完成：共提取了 {len(artifacts)} 個 artifacts (區塊/表格)")
         return artifacts
     
     async def _save_artifacts(self, artifacts: List[Dict[str, Any]], company_id: int, doc_id: str) -> Dict[str, int]:
@@ -424,6 +444,38 @@ class OpenDataLoaderProcessor:
                 error,
                 doc_id
             )
+    
+    async def _trigger_vanna_training(self, doc_id: str):
+        """
+        觸發 Vanna 訓練 (邊做邊學)
+        
+        當新文件處理完成後，自動通知 Vanna Service 進行訓練
+        """
+        vanna_url = os.getenv("VANNA_SERVICE_URL", "http://vanna-service:8082")
+        
+        try:
+            logger.info(f"🧠 正在觸發 Vanna 訓練 (doc_id: {doc_id})...")
+            
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                # 發送訓練請求到 Vanna Service
+                response = await client.post(
+                    f"{vanna_url}/api/train",
+                    json={
+                        "train_type": "sql",
+                        "doc_id": doc_id
+                    }
+                )
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    logger.info(f"✅ Vanna 訓練已觸發：{result.get('message', 'Success')}")
+                else:
+                    logger.warning(f"⚠️ Vanna 訓練請求失敗 (HTTP {response.status_code}): {response.text}")
+        
+        except httpx.RequestError as e:
+            logger.warning(f"⚠️ 無法連接 Vanna Service: {e}. 跳過訓練步驟。")
+        except Exception as e:
+            logger.warning(f"⚠️ Vanna 訓練觸發失敗：{e}")
 
 
 async def main():

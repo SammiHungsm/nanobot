@@ -141,14 +141,11 @@ async def chat_endpoint(request: ChatRequest):
 
 @app.get("/api/documents", response_model=DocumentListResponse)
 async def list_documents():
-    """
-    List available PDF documents in the upload directory.
-    """
+    """List available PDF documents and rebuild lost tracking info."""
     try:
         documents = []
         seen_paths = set()
         
-        # Scan upload directory
         if PDF_UPLOAD_DIR.exists():
             for pdf_file in PDF_UPLOAD_DIR.glob("*.pdf"):
                 abs_path = str(pdf_file.absolute())
@@ -157,25 +154,52 @@ async def list_documents():
                 seen_paths.add(abs_path)
                 
                 stat = pdf_file.stat()
-                # Try to find tracking info
                 doc_info = None
+                
+                # Check if it's in our in-memory DB
                 for doc in documents_db.values():
                     if doc.get("path") == abs_path:
                         doc_info = doc
                         break
                 
+                # If server restarted, doc_info is missing. Reconstruct it!
+                if not doc_info:
+                    doc_id = pdf_file.stem
+                    # Try to extract the original name from the timestamped name
+                    parts = pdf_file.name.split('_', 2)
+                    orig_name = parts[2] if len(parts) >= 3 and parts[0].isdigit() else pdf_file.name
+                    
+                    doc_info = {
+                        "id": doc_id,
+                        "filename": orig_name,
+                        "path": abs_path,
+                        "size": stat.st_size,
+                        "uploader": "System",
+                        "status": "completed",
+                        "progress": 100.0,
+                        "error_message": None,
+                        "created_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                    }
+                    
+                    # Link existing processed output
+                    out_file = PDF_OUTPUT_DIR / f"{Path(orig_name).stem}_processed.json"
+                    if out_file.exists():
+                        doc_info["output_path"] = str(out_file)
+                
+                documents_db[doc_id] = doc_info
+                
                 documents.append({
-                    "id": doc_info["id"] if doc_info else pdf_file.stem,
-                    "name": pdf_file.name,
-                    "path": abs_path,
-                    "size": f"{stat.st_size / 1024 / 1024:.2f} MB",
-                    "date": stat.st_mtime,
-                    "status": doc_info["status"] if doc_info else "Ready",
-                    "uploader": doc_info.get("uploader", "System") if doc_info else "System",
-                    "progress": doc_info.get("progress", 100.0) if doc_info else 100.0
+                    "id": doc_info["id"],
+                    "name": doc_info["filename"],
+                    "path": doc_info["path"],
+                    "size": f"{doc_info['size'] / 1024 / 1024:.2f} MB",
+                    "date": doc_info.get("created_at", stat.st_mtime),
+                    "status": doc_info["status"],
+                    "uploader": doc_info.get("uploader", "System"),
+                    "progress": doc_info.get("progress", 100.0)
                 })
         
-        # Also include tracked documents (even if file doesn't exist yet)
+        # Also include tracked documents not yet written to disk
         for doc in documents_db.values():
             if doc["path"] not in seen_paths:
                 documents.append({
@@ -189,9 +213,7 @@ async def list_documents():
                     "progress": doc.get("progress", 0.0)
                 })
         
-        # Sort by date (newest first)
         documents.sort(key=lambda x: x.get('date', '') if isinstance(x.get('date'), str) else x.get('date', 0), reverse=True)
-        
         return DocumentListResponse(documents=documents, success=True)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -276,47 +298,61 @@ async def stop_queue():
     return {"message": "Queue will stop after current document"}
 
 @app.post("/api/upload")
-async def upload_document(background_tasks: BackgroundTasks, files: list[UploadFile] = File(...), username: str = "anonymous"):
-    """
-    Handle PDF document upload with progress tracking and OpenDataLoader integration.
-    Supports multiple file uploads in a single request.
-    """
+async def upload_document(background_tasks: BackgroundTasks, files: list[UploadFile] = File(...), username: str = "anonymous", replace: bool = False):
+    """Handle PDF document upload with replace logic."""
     try:
         uploaded_files = []
+        MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB limit
+        
         add_processing_log(f"Starting upload of {len(files)} file(s) by {username}", "info")
         
         for file in files:
-            # Validate file type
             if not file.filename.lower().endswith('.pdf'):
-                add_processing_log(f"Rejected non-PDF file: {file.filename}", "warning")
-                uploaded_files.append({
-                    "name": file.filename,
-                    "error": "Only PDF files are supported",
-                    "is_duplicate": False
-                })
+                uploaded_files.append({"name": file.filename, "error": "Only PDF files are supported", "is_duplicate": False})
                 continue
             
-            # Check for duplicate by filename
+            # Check file size (read first chunk to validate)
+            file_size = 0
+            file_chunks = []
+            
+            while content := await file.read(8192):
+                file_chunks.append(content)
+                file_size += len(content)
+                if file_size > MAX_FILE_SIZE:
+                    add_processing_log(f"Rejected oversized file: {file.filename} (>50MB)", "warning")
+                    uploaded_files.append({
+                        "name": file.filename, 
+                        "error": "File size exceeds 50MB limit", 
+                        "is_duplicate": False
+                    })
+                    continue
+            
+            # Reset file position for re-reading
+            await file.seek(0)
+            
+            # Check for duplicates
             is_duplicate = False
-            existing_doc = None
-            for doc_id, doc in documents_db.items():
-                if doc["filename"] == file.filename and doc["status"] in ["completed", "queued", "processing"]:
+            existing_doc_id = None
+            for doc_id, doc in list(documents_db.items()):
+                if doc["filename"] == file.filename:
                     is_duplicate = True
-                    existing_doc = doc
-                    add_processing_log(f"Detected duplicate: {file.filename} (ID: {doc_id})", "info")
+                    existing_doc_id = doc_id
                     break
             
             if is_duplicate:
-                uploaded_files.append({
-                    "id": existing_doc["id"],
-                    "name": file.filename,
-                    "path": existing_doc["path"],
-                    "size": f"{existing_doc['size'] / 1024 / 1024:.2f} MB",
-                    "status": existing_doc["status"],
-                    "progress": existing_doc.get("progress", 0.0),
-                    "is_duplicate": True
-                })
-                continue
+                if replace:
+                    old_doc = documents_db[existing_doc_id]
+                    try:
+                        if Path(old_doc["path"]).exists(): Path(old_doc["path"]).unlink()
+                        if old_doc.get("output_path") and Path(old_doc["output_path"]).exists(): Path(old_doc["output_path"]).unlink()
+                    except Exception: pass
+                    del documents_db[existing_doc_id]
+                    add_processing_log(f"Replaced existing file: {file.filename}", "warning")
+                else:
+                    uploaded_files.append({
+                        "name": file.filename, "is_duplicate": True, "status": documents_db[existing_doc_id]["status"]
+                    })
+                    continue
             
             add_processing_log(f"Uploading: {file.filename}", "info")
             
@@ -325,11 +361,10 @@ async def upload_document(background_tasks: BackgroundTasks, files: list[UploadF
             safe_filename = f"{timestamp}_{file.filename.replace(' ', '_')}"
             file_path = PDF_UPLOAD_DIR / safe_filename
             
-            # Calculate file hash and size
+            # Calculate file hash and save
             file_hash = hashlib.sha256()
             file_size = 0
             
-            # Save file and calculate hash simultaneously
             async with aiofiles.open(file_path, 'wb') as out_file:
                 while content := await file.read(8192):
                     await out_file.write(content)
@@ -480,22 +515,181 @@ def run_opendataloader(input_path: str, output_path: str):
     """
     Run OpenDataLoader PDF conversion.
     """
+    import json
+    import traceback
+    from pathlib import Path
+    
     try:
         from opendataloader_pdf import convert
-        convert(
-            pdf_path=input_path,
-            output_path=output_path,
-            output_format="json",
-            pages="all"
-        )
+
+        # 1. 嘗試使用位置參數 (Positional argument) 解決 unexpected keyword argument 的問題
+        try:
+            convert(
+                input_path, 
+                output_path=output_path, 
+                output_format="json", 
+                pages="all"
+            )
+        except TypeError as e:
+            print(f"⚠️ [WARNING] 參數不匹配，嘗試最精簡呼叫模式：{e}")
+            # 2. 如果上面的參數套件還是不吃，嘗試最精簡的寫法
+            convert(input_path, output_path)
+
     except ImportError:
-        # Fallback: create a mock result if opendataloader not installed
+        # 只有在「完全沒有安裝該套件」時，才建立測試用的 Mock 資料
+        print("⚠️ [WARNING] opendataloader_pdf is not installed. Using fallback mock data.")
         mock_result = {
             "metadata": {"page_count": 0, "filename": Path(input_path).name},
             "content": []
         }
-        with open(output_path, 'w') as f:
-            json.dump(mock_result, f)
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(mock_result, f, ensure_ascii=False)
+        
+    except Exception as e:
+        # 3. 攔截所有其他異常，並在 Docker 終端機印出完整的 Traceback 日誌
+        print("\n" + "="*60)
+        print(f"❌ [FATAL ERROR] PDF 處理發生未知的例外狀況：{type(e).__name__}")
+        print("="*60)
+        traceback.print_exc() # 印出完整的紅字錯誤追蹤
+        print("="*60 + "\n")
+        
+        # 重新拋出例外，這樣 process_queue 才能捕捉到，並在 WebUI 顯示 Failed
+        raise Exception(f"PDF Conversion Error: {str(e)}")
+
+@app.delete("/api/documents/{doc_id}")
+async def delete_document(doc_id: str):
+    """
+    Delete a document and its associated files.
+    """
+    if doc_id not in documents_db:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    doc = documents_db[doc_id]
+    file_path = Path(doc["path"])
+    output_path = doc.get("output_path")
+    
+    try:
+        # Delete original PDF file
+        if file_path.exists():
+            file_path.unlink()
+        
+        # Delete processed JSON output file
+        if output_path and Path(output_path).exists():
+            Path(output_path).unlink()
+        
+        # Remove from in-memory database
+        del documents_db[doc_id]
+        
+        add_processing_log(f"Deleted document: {doc['filename']}", "warning")
+        return {"success": True, "message": f"Deleted {doc['filename']}"}
+    
+    except Exception as e:
+        add_processing_log(f"Failed to delete {doc['filename']}: {str(e)}", "error")
+        raise HTTPException(status_code=500, detail=f"Failed to delete file: {str(e)}")
+
+
+@app.post("/api/documents/{doc_id}/retry")
+async def retry_document(doc_id: str, background_tasks: BackgroundTasks):
+    """
+    Retry processing a failed document.
+    """
+    if doc_id not in documents_db:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    doc = documents_db[doc_id]
+    
+    if doc["status"] != "failed" and doc["status"] != "Failed":
+        raise HTTPException(status_code=400, detail="Document is not in failed status")
+    
+    # Reset status and re-queue
+    doc["status"] = "queued"
+    doc["progress"] = 0.0
+    doc["error_message"] = None
+    
+    # Re-add to processing queue
+    await processing_queue.put(doc_id)
+    
+    # Start queue if not running
+    global queue_running
+    if not queue_running:
+        background_tasks.add_task(process_queue)
+        queue_running = True
+    
+    add_processing_log(f"Retrying: {doc['filename']}", "warning")
+    return {"success": True, "message": f"Retrying {doc['filename']}"}
+
+
+@app.post("/api/documents/batch-delete")
+async def batch_delete_documents(doc_ids: list[str]):
+    """
+    Delete multiple documents at once.
+    """
+    deleted = []
+    failed = []
+    
+    for doc_id in doc_ids:
+        try:
+            if doc_id not in documents_db:
+                failed.append({"id": doc_id, "reason": "Not found"})
+                continue
+            
+            doc = documents_db[doc_id]
+            file_path = Path(doc["path"])
+            output_path = doc.get("output_path")
+            
+            # Delete files
+            if file_path.exists():
+                file_path.unlink()
+            if output_path and Path(output_path).exists():
+                Path(output_path).unlink()
+            
+            del documents_db[doc_id]
+            deleted.append(doc_id)
+            add_processing_log(f"Deleted: {doc['filename']}", "warning")
+            
+        except Exception as e:
+            failed.append({"id": doc_id, "reason": str(e)})
+            add_processing_log(f"Failed to delete {doc_id}: {str(e)}", "error")
+    
+    return {
+        "success": len(deleted) > 0,
+        "deleted_count": len(deleted),
+        "deleted": deleted,
+        "failed_count": len(failed),
+        "failed": failed
+    }
+
+
+@app.get("/api/documents/batch-download")
+async def batch_download_documents(doc_ids: str):
+    """
+    Download multiple documents as a zip file.
+    """
+    import zipfile
+    from io import BytesIO
+    
+    doc_id_list = doc_ids.split(",")
+    zip_buffer = BytesIO()
+    
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        for doc_id in doc_id_list:
+            if doc_id not in documents_db:
+                continue
+            
+            doc = documents_db[doc_id]
+            file_path = Path(doc["path"])
+            
+            if file_path.exists():
+                zip_file.write(file_path, doc["filename"])
+    
+    zip_buffer.seek(0)
+    
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": "attachment; filename=documents.zip"}
+    )
+
 
 @app.get("/health")
 async def health_check():
@@ -534,12 +728,11 @@ async def preview_pdf(doc_id: str):
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="PDF file not found")
     
-    from fastapi.responses import FileResponse
+    # Do NOT pass filename parameter here, it forces attachment behavior.
     return FileResponse(
         str(file_path),
         media_type="application/pdf",
-        filename=doc["filename"],
-        headers={"Content-Disposition": "inline"}
+        headers={"Content-Disposition": f'inline; filename="{doc["filename"]}"'}
     )
 
 

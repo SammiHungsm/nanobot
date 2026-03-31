@@ -62,6 +62,45 @@ const API = {
         return await response.json();
     },
     
+    async deleteDocument(docId) {
+        const response = await fetch(`${this.BASE_URL}/api/documents/${docId}`, {
+            method: 'DELETE'
+        });
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.detail || 'Delete failed');
+        }
+        return await response.json();
+    },
+    
+    async retryDocument(docId) {
+        const response = await fetch(`${this.BASE_URL}/api/documents/${docId}/retry`, {
+            method: 'POST'
+        });
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.detail || 'Retry failed');
+        }
+        return await response.json();
+    },
+    
+    async batchDeleteDocuments(docIds) {
+        const response = await fetch(`${this.BASE_URL}/api/documents/batch-delete`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(docIds)
+        });
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.detail || 'Batch delete failed');
+        }
+        return await response.json();
+    },
+    
+    getBatchDownloadUrl(docIds) {
+        return `${this.BASE_URL}/api/documents/batch-download?doc_ids=${encodeURIComponent(docIds.join(','))}`;
+    },
+
     async getQueueStatus() {
         const response = await fetch(`${this.BASE_URL}/api/queue/status`);
         if (!response.ok) {
