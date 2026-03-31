@@ -1,6 +1,7 @@
 """
 Document API Router - Handles all document-related endpoints
 """
+import os
 import json
 import zipfile
 import io
@@ -82,7 +83,8 @@ async def get_document_status(doc_id: str):
 async def upload_document(
     background_tasks: BackgroundTasks,
     files: list[UploadFile] = File(...),
-    username: str = "anonymous"
+    username: str = "anonymous",
+    replace: bool = False  # 👈 接收前端傳來的 replace 參數
 ):
     """Upload one or more PDF documents"""
     if document_service is None:
@@ -120,18 +122,31 @@ async def upload_document(
             
             # Check for duplicates
             is_duplicate = False
-            for doc in document_service.documents_db.values():
+            existing_doc_id = None
+            for doc_id, doc in document_service.documents_db.items():
                 if doc["filename"] == file.filename:
                     is_duplicate = True
+                    existing_doc_id = doc_id
                     break
             
-            if is_duplicate:
-                uploaded_files.append({
-                    "name": file.filename,
-                    "is_duplicate": True,
-                    "status": "already_exists"
-                })
-                continue
+            # 🚀 如果檔案已存在且前端沒有要求強制覆蓋，回傳 409 Conflict
+            if is_duplicate and not replace:
+                from fastapi.responses import JSONResponse
+                return JSONResponse(
+                    status_code=409, 
+                    content={
+                        "error": "File already exists", 
+                        "code": "FILE_EXISTS",
+                        "filename": file.filename,
+                        "existing_doc_id": existing_doc_id
+                    }
+                )
+            
+            # 如果 replace=True 或是檔案不存在，繼續處理
+            if is_duplicate and replace:
+                # 刪除舊的文檔記錄
+                document_service.delete_document(existing_doc_id)
+                logger.info(f"🔄 Replacing existing document: {file.filename} (ID: {existing_doc_id})")
             
             # Save file
             import hashlib

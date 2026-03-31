@@ -97,6 +97,14 @@ class OpenDataLoaderProcessor:
             artifacts = await self._parse_with_opendataloader(pdf_path, doc_id)
             logger.info(f"📊 解析完成：{len(artifacts)} 個 artifacts")
             
+            # 🚀 把解析出來的 Raw Data (artifacts) 存成 output.json 給 WebUI 讀取
+            doc_dir = self.data_dir / doc_id
+            doc_dir.mkdir(parents=True, exist_ok=True)
+            output_json_path = doc_dir / "output.json"
+            with open(output_json_path, "w", encoding="utf-8") as f:
+                json.dump(artifacts, f, ensure_ascii=False, indent=2)
+            logger.info(f"💾 已保存 artifacts 到：{output_json_path}")
+            
             # 5. 保存 Raw Artifacts 並更新數據庫
             if progress_callback:
                 progress_callback(60.0, f"解析完成，準備寫入資料庫 (共 {len(artifacts)} 筆)...")

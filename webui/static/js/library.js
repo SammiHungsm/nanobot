@@ -186,37 +186,20 @@ const Library = {
             return;
         }
         
-        // Check for duplicates
-        const duplicates = files.filter(f => this.documents.some(d => d.name === f.name));
-        let replaceDocs = false;
-        let finalFiles = files;
-        
-        if (duplicates.length > 0) {
-            const names = duplicates.map(f => f.name).join(', ');
-            const userChoice = confirm(`File(s) already exist: \n\n${names}\n\nClick "OK" to REPLACE them, or "Cancel" to SKIP duplicates.`);
-            
-            if (userChoice) {
-                replaceDocs = true;
-            } else {
-                finalFiles = files.filter(f => !this.documents.some(d => d.name === f.name));
-                if (finalFiles.length === 0) {
-                    this.log('Upload cancelled - all files were duplicates.', 'warning');
-                    return;
-                }
-            }
-        }
+        // 🚀 移除前端重複檢查，改為讓後端返回 409 時再詢問用戶
+        // 這樣可以確保後端是 Single Source of Truth
         
         // Show upload progress modal
-        this.showUploadProgress(finalFiles[0].name, 0, 'Starting upload...');
+        this.showUploadProgress(files[0].name, 0, 'Starting upload...');
         
         try {
             const formData = new FormData();
-            for (let i = 0; i < finalFiles.length; i++) {
-                formData.append('files', finalFiles[i]);
+            for (let i = 0; i < files.length; i++) {
+                formData.append('files', files[i]);
             }
             
-            // Use XMLHttpRequest for progress tracking
-            await this.uploadWithProgress(formData, replaceDocs);
+            // Use XMLHttpRequest for progress tracking with retry logic
+            await this.uploadWithProgress(formData, files);
             
         } catch (error) {
             this.closeUploadModal();
@@ -227,13 +210,14 @@ const Library = {
     
     /**
      * Upload with progress tracking using XMLHttpRequest
+     * 🚀 支援 409 錯誤處理：當檔案已存在時詢問用戶是否覆蓋
      */
-    uploadWithProgress(formData, replaceDocs) {
+    uploadWithProgress(formData, files, replace = false) {
         return new Promise((resolve, reject) => {
             const xhr = new XMLHttpRequest();
             this.uploadXHR = xhr;
             
-            xhr.open('POST', `/api/upload?replace=${replaceDocs}`, true);
+            xhr.open('POST', `/api/upload?replace=${replace}`, true);
             
             // Track upload progress
             xhr.upload.addEventListener('progress', (e) => {
@@ -254,10 +238,39 @@ const Library = {
                         UI.appendMessage('bot', `✅ Uploaded successfully! Processing has started.`);
                     }
                     resolve(result);
+                
+                // 🚀 處理 409 Conflict (檔案已存在)
+                } else if (xhr.status === 409) {
+                    try {
+                        const errorData = JSON.parse(xhr.responseText);
+                        const fileName = files[0].name;
+                        
+                        // 彈出確認對話框
+                        const userWantsToReplace = confirm(
+                            `Document "${fileName}" already exists in the system.\n\n` +
+                            `Do you want to REPLACE it and rerun the OpenDataLoader analysis?`
+                        );
+                        
+                        if (userWantsToReplace) {
+                            // 用戶選擇覆蓋，重新上傳並帶入 replace=true
+                            this.log(`User chose to replace: ${fileName}`, 'info');
+                            this.showUploadProgress(fileName, 0, 'Replacing...');
+                            return this.uploadWithProgress(formData, files, true)
+                                .then(resolve)
+                                .catch(reject);
+                        } else {
+                            // 用戶選擇取消
+                            this.log(`Upload cancelled by user for: ${fileName}`, 'warning');
+                            resolve({ cancelled: true });
+                        }
+                    } catch (e) {
+                        reject(new Error('File exists but failed to parse error response'));
+                    }
+                
                 } else {
                     try {
                         const errorData = JSON.parse(xhr.responseText);
-                        reject(new Error(errorData.detail || 'Upload failed'));
+                        reject(new Error(errorData.detail || errorData.error || 'Upload failed'));
                     } catch (e) {
                         reject(new Error('Upload failed'));
                     }
