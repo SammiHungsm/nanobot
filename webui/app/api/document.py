@@ -2,9 +2,11 @@
 Document API Router - Handles all document-related endpoints
 """
 import json
+import zipfile
+import io
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, UploadFile, File, BackgroundTasks
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from app.schemas.document import (
     DocumentListResponse,
     DocumentStatus,
@@ -313,4 +315,53 @@ async def download_processed_output(doc_id: str):
         content=json.dumps(status_content, indent=2, ensure_ascii=False),
         media_type="application/json",
         headers={"Content-Disposition": f"attachment; filename={output_filename}"}
+    )
+
+
+@router.get("/pdf/{doc_id}/output/download-all")
+async def download_all_raw_output(doc_id: str):
+    """
+    Download all raw output (JSON tables + images) as a ZIP file.
+    This endpoint packages all artifacts from the data directory.
+    """
+    if document_service is None:
+        raise HTTPException(status_code=500, detail="Document service not initialized")
+    
+    if doc_id not in document_service.documents_db:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    doc = document_service.documents_db[doc_id]
+    
+    if doc["status"] != "completed":
+        raise HTTPException(status_code=400, detail="Document processing not complete")
+    
+    # Get the data directory from document service
+    data_dir = document_service.output_dir / doc_id
+    
+    if not data_dir.exists():
+        raise HTTPException(status_code=404, detail="No raw output found for this document")
+    
+    # Collect all files in the document directory
+    files_to_include = []
+    for file_path in data_dir.rglob("*"):
+        if file_path.is_file():
+            files_to_include.append(file_path)
+    
+    if not files_to_include:
+        raise HTTPException(status_code=404, detail="No files found in raw output directory")
+    
+    # Create ZIP file in memory
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        for file_path in files_to_include:
+            # Calculate relative path for the ZIP structure
+            arcname = file_path.relative_to(data_dir)
+            zip_file.write(file_path, arcname=str(arcname))
+    
+    zip_buffer.seek(0)
+    
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename={doc['filename']}_raw_output.zip"}
     )

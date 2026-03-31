@@ -381,12 +381,15 @@ class OpenDataLoaderProcessor:
         image_format = metadata.get("format", "png")
         image_path = doc_dir / f"image_{idx:04d}.{image_format}"
         
-        # TODO: 當 image_data 為真實二進制時解鎖
-        # with open(image_path, 'wb') as f:
-        #     f.write(image_data)
-        
-        # Mock: 創建空文件用于測試
-        image_path.touch()
+        # 寫入真實的圖片二進制資料
+        if image_data:
+            with open(image_path, 'wb') as f:
+                f.write(image_data)
+            logger.debug(f"💾 圖片已保存：{image_path.name} ({len(image_data)} bytes)")
+        else:
+            logger.warning(f"⚠️ 圖片數據為空，跳過保存：{image_path.name}")
+            # 創建空文件用於標記
+            image_path.touch()
         
         # 2. 記錄到 raw_artifacts 表
         artifact_id = f"{doc_id}_image_{idx:04d}"

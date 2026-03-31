@@ -68,15 +68,19 @@ services:
       context: ./webui
       dockerfile: Dockerfile
     container_name: nanobot-webui
-    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+    command: ["python", "-m", "app.main"]
     volumes:
-      - pdf_upload_data:/data/pdfs  # Named volume for PDF uploads (read-write)
+      - pdf_upload_data:/data/pdfs
+      - ./webui/uploads:/app/uploads
+      - ./webui/outputs:/app/outputs
     ports:
       - "3000:8080"
     environment:
-      - PDF_UPLOAD_DIR=/data/pdfs
+      - PDF_UPLOAD_DIR=/app/uploads
+      - PDF_OUTPUT_DIR=/app/outputs
       - DATABASE_URL=postgresql://postgres:postgres_password_change_me@postgres-financial:5432/annual_reports
       - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app
     depends_on:
       postgres-financial:
         condition: service_healthy

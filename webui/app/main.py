@@ -84,6 +84,9 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
+    from fastapi.responses import FileResponse
+    
+    index_path = STATIC_DIR / "index.html"
     
     print("=" * 60)
     print("🚀 Starting Nanobot Web UI Server v2.0.0 (Refactored)")

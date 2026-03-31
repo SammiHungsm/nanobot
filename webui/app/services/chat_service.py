@@ -15,7 +15,8 @@ NANOBOT_API_URL = os.getenv("NANOBOT_API_URL", "http://nanobot-gateway:8081")
 async def process_chat_message(
     user_message: str, 
     username: str = "anonymous", 
-    document_path: Optional[str] = None
+    document_path: Optional[str] = None,
+    session_id: Optional[str] = None
 ) -> str:
     """
     Process chat message - tries WebAPI first, falls back to local processing.
@@ -24,6 +25,7 @@ async def process_chat_message(
         user_message: User's message text
         username: Current username
         document_path: Optional document path if tagged
+        session_id: Optional session ID for conversation continuity
         
     Returns:
         Bot response text
@@ -36,7 +38,7 @@ async def process_chat_message(
                 json={
                     "message": user_message,
                     "username": username,
-                    "chat_id": "webui-session",
+                    "chat_id": session_id or "webui-session",
                     "user_id": username,
                 }
             )
@@ -56,7 +58,8 @@ async def process_chat_message(
 async def _fallback_processing(
     user_message: str, 
     username: str, 
-    document_path: Optional[str] = None
+    document_path: Optional[str] = None,
+    session_id: Optional[str] = None
 ) -> str:
     """
     Fallback processing when WebAPI is not available.

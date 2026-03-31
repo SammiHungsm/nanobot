@@ -8,6 +8,7 @@ const UI = {
     documents: [],
     selectedDocument: null,
     currentTab: 'chat',
+    chatSessionId: null, // 存儲聊天 Session ID
     
     // DOM elements
     elements: {
@@ -369,15 +370,28 @@ const UI = {
         const message = this.elements.chatInput.value.trim();
         if (!message) return;
         
+        // 生成 Session ID（如果還沒有的話）
+        if (!this.chatSessionId) {
+            this.chatSessionId = 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        }
+        
         // Display user message
         this.appendMessage('user', message);
         this.elements.chatInput.value = '';
         this.elements.chatInput.style.height = 'auto';
-        this.elements.sendBtn.disabled = true;
+        this.sendBtn.disabled = true;
         this.appendLoadingIndicator();
         
+        // 解析文件路徑
+        let docPath = null;
+        const docMatch = message.match(/\[Doc:\s([^\]]+)\]/);
+        if (docMatch) {
+            docPath = docMatch[1];
+        }
+        
         try {
-            const response = await API.chatStream(message, Auth.getUser());
+            // 必須加上 sessionId 以及解析出來的 docPath
+            const response = await API.chatStream(message, Auth.getUser(), docPath, this.chatSessionId);
             
             this.removeLoadingIndicator();
             

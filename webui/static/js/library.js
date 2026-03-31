@@ -412,77 +412,132 @@ const Library = {
     renderGrid(docsToRender = null) {
         if (!this.elements.grid) return;
         
-        this.elements.grid.innerHTML = '';
-        
         const docs = docsToRender || this.documents;
         
         if (docs.length === 0) {
+            this.elements.grid.innerHTML = '';
             this.elements.emptyState.classList.remove('hidden');
             this.elements.emptyState.classList.add('flex');
         } else {
             this.elements.emptyState.classList.add('hidden');
             this.elements.emptyState.classList.remove('flex');
             
-            docs.forEach(doc => {
-                const card = document.createElement('div');
-                const isProcessing = ['queued', 'processing'].includes(doc.status);
-                const isFailed = doc.status === 'Failed' || doc.status === 'failed';
-                const isCompleted = doc.status === 'completed' || doc.status === 'Ready';
-                const isSelected = this.selectedDocs.has(doc.id);
+            // 優化：如果網格中已有相同數量的卡片，只更新狀態而不重繪整個 DOM
+            const existingCards = this.elements.grid.querySelectorAll('.pdf-card');
+            const shouldFullRender = existingCards.length !== docs.length;
+            
+            if (shouldFullRender) {
+                // 完全重繪（當文件數量改變時）
+                this.elements.grid.innerHTML = '';
                 
-                card.className = `pdf-card bg-white rounded-xl border ${isFailed ? 'border-red-200' : 'border-slate-200'} p-4 cursor-pointer ${isCompleted ? 'hover:border-blue-300' : ''} ${isSelected ? 'ring-2 ring-blue-500' : ''}`;
-                card.ondblclick = () => this.previewPDF(doc);
-                card.onclick = (e) => {
-                    if (!e.target.closest('.checkbox-container')) {
-                        this.selectDocument(doc);
+                docs.forEach(doc => {
+                    const card = this._createDocumentCard(doc);
+                    this.elements.grid.appendChild(card);
+                });
+            } else {
+                // 增量更新（只更新狀態和進度條）
+                docs.forEach((doc, index) => {
+                    const card = existingCards[index];
+                    if (card) {
+                        this._updateDocumentCard(card, doc);
                     }
-                };
-                
-                let statusBadge = '';
-                if (isProcessing) {
-                    statusBadge = `<span class="text-blue-600 text-xs font-medium flex items-center"><i class="fas fa-circle-notch fa-spin mr-1.5"></i> ${this.capitalizeFirst(doc.status)}</span>`;
-                } else if (isFailed) {
-                    statusBadge = `<span class="text-red-600 text-xs font-medium flex items-center"><i class="fas fa-exclamation-circle mr-1.5"></i> Failed</span>`;
-                } else {
-                    statusBadge = `<span class="text-green-600 text-xs font-medium flex items-center"><i class="fas fa-check-circle mr-1.5"></i> Ready</span>`;
-                }
-                
-                card.innerHTML = `
-                    <div class="checkbox-container absolute top-3 left-3">
-                        <input type="checkbox" ${isSelected ? 'checked' : ''} 
-                               onchange="Library.toggleDocSelection('${doc.id}', this.checked)"
-                               onclick="event.stopPropagation()"
-                               class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
-                    </div>
-                    <div class="flex items-start justify-between mb-3">
-                        <div class="bg-red-100 text-red-600 p-3 rounded-lg ml-8">
-                            <i class="fas fa-file-pdf text-xl"></i>
-                        </div>
-                        ${statusBadge}
-                    </div>
-                    <h3 class="font-medium text-slate-800 truncate mb-1" title="${doc.name}">${doc.name}</h3>
-                    <div class="text-xs text-slate-500 space-y-1">
-                        <p><i class="fas fa-hdd mr-1.5"></i>${doc.size}</p>
-                        <p><i class="fas fa-calendar mr-1.5"></i>${doc.date}</p>
-                        <p><i class="fas fa-user mr-1.5"></i>${doc.uploader}</p>
-                    </div>
-                    ${isProcessing ? `
-                    <div class="mt-3">
-                        <div class="flex justify-between text-[10px] text-slate-500 mb-1">
-                            <span>Processing</span>
-                            <span>${Math.round(doc.progress)}%</span>
-                        </div>
-                        <div class="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden">
-                            <div class="h-full bg-blue-500 transition-all duration-300" style="width: ${doc.progress}%"></div>
-                        </div>
-                    </div>
-                    ` : ''}
-                `;
-                this.elements.grid.appendChild(card);
-            });
+                });
+            }
         }
         
         this.updateBatchButtons();
+    },
+    
+    /**
+     * Create a document card element
+     */
+    _createDocumentCard(doc) {
+        const card = document.createElement('div');
+        const isProcessing = ['queued', 'processing'].includes(doc.status);
+        const isFailed = doc.status === 'Failed' || doc.status === 'failed';
+        const isCompleted = doc.status === 'completed' || doc.status === 'Ready';
+        const isSelected = this.selectedDocs.has(doc.id);
+        
+        card.className = `pdf-card bg-white rounded-xl border ${isFailed ? 'border-red-200' : 'border-slate-200'} p-4 cursor-pointer ${isCompleted ? 'hover:border-blue-300' : ''} ${isSelected ? 'ring-2 ring-blue-500' : ''}`;
+        card.dataset.docId = doc.id;
+        card.ondblclick = () => this.previewPDF(doc);
+        card.onclick = (e) => {
+            if (!e.target.closest('.checkbox-container')) {
+                this.selectDocument(doc);
+            }
+        };
+        
+        let statusBadge = '';
+        if (isProcessing) {
+            statusBadge = `<span class="text-blue-600 text-xs font-medium flex items-center"><i class="fas fa-circle-notch fa-spin mr-1.5"></i> ${this.capitalizeFirst(doc.status)}</span>`;
+        } else if (isFailed) {
+            statusBadge = `<span class="text-red-600 text-xs font-medium flex items-center"><i class="fas fa-exclamation-circle mr-1.5"></i> Failed</span>`;
+        } else {
+            statusBadge = `<span class="text-green-600 text-xs font-medium flex items-center"><i class="fas fa-check-circle mr-1.5"></i> Ready</span>`;
+        }
+        
+        card.innerHTML = `
+            <div class="checkbox-container absolute top-3 left-3">
+                <input type="checkbox" ${isSelected ? 'checked' : ''} 
+                       data-doc-id="${doc.id}"
+                       onchange="Library.toggleDocSelection('${doc.id}', this.checked)"
+                       onclick="event.stopPropagation()"
+                       class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
+            </div>
+            <div class="flex items-start justify-between mb-3">
+                <div class="bg-red-100 text-red-600 p-3 rounded-lg ml-8">
+                    <i class="fas fa-file-pdf text-xl"></i>
+                </div>
+                ${statusBadge}
+            </div>
+            <h3 class="font-medium text-slate-800 truncate mb-1" title="${doc.name}">${doc.name}</h3>
+            <div class="text-xs text-slate-500 space-y-1">
+                <p><i class="fas fa-hdd mr-1.5"></i>${doc.size}</p>
+                <p><i class="fas fa-calendar mr-1.5"></i>${doc.date}</p>
+                <p><i class="fas fa-user mr-1.5"></i>${doc.uploader}</p>
+            </div>
+            ${isProcessing ? `
+            <div class="mt-3">
+                <div class="flex justify-between text-[10px] text-slate-500 mb-1">
+                    <span>Processing</span>
+                    <span class="progress-percent">${Math.round(doc.progress)}%</span>
+                </div>
+                <div class="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                    <div class="h-full bg-blue-500 transition-all duration-300 progress-bar" style="width: ${doc.progress}%"></div>
+                </div>
+            </div>
+            ` : ''}
+        `;
+        
+        return card;
+    },
+    
+    /**
+     * Update an existing document card (for polling)
+     */
+    _updateDocumentCard(card, doc) {
+        const isProcessing = ['queued', 'processing'].includes(doc.status);
+        const isFailed = doc.status === 'Failed' || doc.status === 'failed';
+        const isCompleted = doc.status === 'completed' || doc.status === 'Ready';
+        
+        // 只更新進度條和狀態（如果文件正在處理中）
+        if (isProcessing) {
+            const progressBar = card.querySelector('.progress-bar');
+            const progressPercent = card.querySelector('.progress-percent');
+            
+            if (progressBar && progressBar.style.width !== `${doc.progress}%`) {
+                progressBar.style.width = `${doc.progress}%`;
+            }
+            if (progressPercent) {
+                progressPercent.textContent = `${Math.round(doc.progress)}%`;
+            }
+        }
+        
+        // 更新 checkbox 狀態
+        const checkbox = card.querySelector('input[type="checkbox"]');
+        if (checkbox) {
+            checkbox.checked = this.selectedDocs.has(doc.id);
+        }
     },
     
     /**
@@ -863,6 +918,8 @@ const Library = {
      */
     closeJsonModal() {
         document.getElementById('json-output-modal').classList.add('hidden');
+        // 隱藏詳細面板中的預覽區塊
+        document.getElementById('processed-output-preview').classList.add('hidden');
         this.currentJsonOutput = null;
     },
     
@@ -875,11 +932,12 @@ const Library = {
     },
     
     /**
-     * Download processed output
+     * Download processed output (ZIP with all raw data)
      */
     downloadProcessedOutput() {
         if (!this.selectedDocument) return;
-        window.location.href = API.getProcessedOutputDownloadUrl(this.selectedDocument.id);
+        this.log(`Downloading all raw output (ZIP)...`);
+        window.location.href = API.getAllRawOutputDownloadUrl(this.selectedDocument.id);
     },
     
     /**

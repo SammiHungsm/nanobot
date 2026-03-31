@@ -23,3 +23,4 @@ class ChatStreamRequest(BaseModel):
     message: str
     username: str = "anonymous"
     document_path: Optional[str] = None
+    session_id: Optional[str] = None

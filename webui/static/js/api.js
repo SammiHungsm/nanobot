@@ -8,14 +8,15 @@ const API = {
     BASE_URL: window.location.origin,
     
     // Chat endpoints
-    async chatStream(message, username, documentPath = null) {
+    async chatStream(message, username, documentPath = null, sessionId = null) {
         const response = await fetch(`${this.BASE_URL}/api/chat/stream`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 message: message,
                 username: username,
-                document_path: documentPath
+                document_path: documentPath,
+                session_id: sessionId
             })
         });
         
@@ -128,6 +129,10 @@ const API = {
     
     getProcessedOutputDownloadUrl(docId) {
         return `${this.BASE_URL}/api/pdf/${docId}/output/download`;
+    },
+    
+    getAllRawOutputDownloadUrl(docId) {
+        return `${this.BASE_URL}/api/pdf/${docId}/output/download-all`;
     },
     
     // Processing logs
