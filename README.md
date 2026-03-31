@@ -1648,41 +1648,88 @@ print(resp.choices[0].message.content)
 ## 🐳 Docker
 
 > [!TIP]
-> The `-v ~/.nanobot:/root/.nanobot` flag mounts your local config directory into the container, so your config and workspace persist across container restarts.
+> - **CPU Version**: Default, fast download, no CUDA dependencies
+> - **GPU Version**: Full CUDA 12.1 support for ML acceleration
+> - The `-v ~/.nanobot:/root/.nanobot` flag mounts your local config directory into the container
+
+### Quick Start
+
+**CPU-Only (Default)**:
+```bash
+docker compose up -d
+```
+
+**GPU-Enabled**:
+```bash
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+```
 
 ### Docker Compose
 
 ```bash
-docker compose run --rm nanobot-cli onboard   # first-time setup
-vim ~/.nanobot/config.json                     # add API keys
-docker compose up -d nanobot-gateway           # start gateway
-```
+# First-time setup
+docker compose run --rm nanobot-cli onboard
 
-```bash
-docker compose run --rm nanobot-cli agent -m "Hello!"   # run CLI
-docker compose logs -f nanobot-gateway                   # view logs
-docker compose down                                      # stop
-```
-
-### Docker
-
-```bash
-# Build the image
-docker build -t nanobot .
-
-# Initialize config (first time only)
-docker run -v ~/.nanobot:/root/.nanobot --rm nanobot onboard
-
-# Edit config on host to add API keys
+# Edit config to add API keys
 vim ~/.nanobot/config.json
 
-# Run gateway (connects to enabled channels, e.g. Telegram/Discord/Mochat)
-docker run -v ~/.nanobot:/root/.nanobot -p 18790:18790 nanobot gateway
+# Start gateway
+docker compose up -d nanobot-gateway
 
-# Or run a single command
-docker run -v ~/.nanobot:/root/.nanobot --rm nanobot agent -m "Hello!"
-docker run -v ~/.nanobot:/root/.nanobot --rm nanobot status
+# View logs
+docker compose logs -f nanobot-gateway
+
+# Run CLI commands
+docker compose run --rm nanobot-cli agent -m "Hello!"
+docker compose run --rm nanobot-cli status
+
+# Stop all services
+docker compose down
 ```
+
+### Docker (Manual)
+
+**Build CPU Image (Default)**:
+```bash
+docker build -t nanobot-cpu -f Dockerfile .
+```
+
+**Build GPU Image**:
+```bash
+docker build -t nanobot-gpu -f Dockerfile.gpu .
+```
+
+**Run**:
+```bash
+# Initialize config (first time only)
+docker run -v ~/.nanobot:/root/.nanobot --rm nanobot-cpu onboard
+
+# Edit config
+vim ~/.nanobot/config.json
+
+# Run gateway
+docker run -v ~/.nanobot:/root/.nanobot -p 18790:18790 nanobot-cpu gateway
+
+# Or run CLI commands
+docker run -v ~/.nanobot:/root/.nanobot --rm nanobot-cpu agent -m "Hello!"
+docker run -v ~/.nanobot:/root/.nanobot --rm nanobot-cpu status
+```
+
+**For GPU**: Replace `nanobot-cpu` with `nanobot-gpu` and add `--gpus all` flag.
+
+### File Structure
+
+```
+nanobot/
+├── Dockerfile              # CPU-only optimized (default)
+├── Dockerfile.gpu          # GPU-enabled with CUDA 12.1
+├── docker-compose.yml      # Default CPU configuration
+└── docker-compose.gpu.yml  # GPU override (merge with docker-compose.yml)
+```
+
+> [!NOTE]
+> For detailed Docker documentation, see [`DOCKER_SETUP_GUIDE.md`](./DOCKER_SETUP_GUIDE.md)
+
 
 ## 🐧 Linux Service
 

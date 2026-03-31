@@ -1,5 +1,6 @@
 # Nanobot Web UI - FastAPI Frontend
 # Lightweight container for serving the financial chat interface
+# CPU-optimized (no GPU dependencies needed for web UI)
 
 FROM python:3.11-slim
 
@@ -13,7 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy requirements first for better caching
 COPY requirements.txt .
 
-# Install Python dependencies
+# Install Python dependencies (CPU-only, no heavy ML)
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
@@ -33,10 +34,12 @@ USER nanobot
 # Expose port
 EXPOSE 8080
 
-# Set environment variables
+# Set environment variables (CPU mode by default)
 ENV PYTHONUNBUFFERED=1
 ENV MCP_SERVER_URL=http://liteparse-mcp:3000
 ENV PDF_DATA_DIR=/data/pdfs
+ENV USE_CUDA=false
+ENV TORCH_DEVICE=cpu
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \

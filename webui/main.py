@@ -401,12 +401,102 @@ async def chat_stream_endpoint(request: ChatRequest):
     """
     Streaming endpoint for the web frontend to receive typewriter effect.
     """
-    # 注意：我哋唔再 return JSON，而係 return 一個 Generator (生成器)
     from chat_logic import process_chat_message_stream
     
     return StreamingResponse(
         process_chat_message_stream(request.message, request.username, request.document_path),
         media_type="text/event-stream"
+    )
+
+
+@app.get("/api/pdf/{doc_id}/preview")
+async def preview_pdf(doc_id: str):
+    """
+    Serve PDF file for preview in browser.
+    """
+    if doc_id not in documents_db:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    doc = documents_db[doc_id]
+    file_path = Path(doc["path"])
+    
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="PDF file not found")
+    
+    return FileResponse(
+        str(file_path),
+        media_type="application/pdf",
+        filename=doc["filename"]
+    )
+
+
+@app.get("/api/pdf/{doc_id}/download")
+async def download_pdf(doc_id: str):
+    """
+    Download original PDF file.
+    """
+    if doc_id not in documents_db:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    doc = documents_db[doc_id]
+    file_path = Path(doc["path"])
+    
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="PDF file not found")
+    
+    return FileResponse(
+        str(file_path),
+        filename=doc["filename"],
+        media_type="application/pdf"
+    )
+
+
+@app.get("/api/pdf/{doc_id}/output")
+async def get_processed_output(doc_id: str):
+    """
+    Get processed JSON output from OpenDataLoader.
+    """
+    if doc_id not in documents_db:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    doc = documents_db[doc_id]
+    
+    if doc["status"] != "completed":
+        raise HTTPException(status_code=400, detail="Document processing not complete")
+    
+    output_path = doc.get("output_path")
+    if not output_path or not Path(output_path).exists():
+        raise HTTPException(status_code=404, detail="Processed output not found")
+    
+    with open(output_path, 'r', encoding='utf-8') as f:
+        result = json.load(f)
+    
+    return result
+
+
+@app.get("/api/pdf/{doc_id}/output/download")
+async def download_processed_output(doc_id: str):
+    """
+    Download processed JSON output file.
+    """
+    if doc_id not in documents_db:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    doc = documents_db[doc_id]
+    
+    if doc["status"] != "completed":
+        raise HTTPException(status_code=400, detail="Document processing not complete")
+    
+    output_path = doc.get("output_path")
+    if not output_path or not Path(output_path).exists():
+        raise HTTPException(status_code=404, detail="Processed output not found")
+    
+    output_filename = Path(doc["filename"]).stem + "_processed.json"
+    
+    return FileResponse(
+        str(output_path),
+        filename=output_filename,
+        media_type="application/json"
     )
 
 if __name__ == "__main__":

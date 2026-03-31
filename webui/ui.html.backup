@@ -1,0 +1,802 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nanobot Financial Chat Dashboard</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome for icons -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        /* Custom scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #475569;
+            border-radius: 3px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #64748b;
+        }
+
+        /* Chat scrollbar specific */
+        .chat-scroll::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+        }
+
+        .chat-scroll::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+
+        .typing-indicator span {
+            animation: blink 1.4s infinite both;
+            height: 6px;
+            width: 6px;
+            background-color: #94a3b8;
+            border-radius: 50%;
+            display: inline-block;
+            margin: 0 1px;
+        }
+
+        .typing-indicator span:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        .typing-indicator span:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+
+        @keyframes blink {
+            0% {
+                opacity: 0.2;
+            }
+
+            20% {
+                opacity: 1;
+            }
+
+            100% {
+                opacity: 0.2;
+            }
+        }
+
+        /* Tab styles */
+        .tab-active {
+            background-color: white;
+            border-bottom-color: transparent;
+            color: #2563eb;
+        }
+
+        .tab-inactive {
+            background-color: #f1f5f9;
+            border-bottom-color: #e2e8f0;
+            color: #64748b;
+        }
+
+        .tab-inactive:hover {
+            background-color: #e2e8f0;
+        }
+
+        /* PDF card hover effects */
+        .pdf-card {
+            transition: all 0.2s ease;
+        }
+
+        .pdf-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+        }
+
+        /* JSON viewer styles */
+        .json-viewer {
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+
+        .json-key {
+            color: #c678dd;
+        }
+
+        .json-string {
+            color: #98c379;
+        }
+
+        .json-number {
+            color: #d19a66;
+        }
+
+        .json-boolean {
+            color: #e06c75;
+        }
+
+        /* Modal animation */
+        @keyframes modal-fade-in {
+            from {
+                opacity: 0;
+                transform: scale(0.95);
+            }
+
+            to {
+                opacity: 1;
+                transform: scale(1);
+            }
+        }
+
+        .modal-animate {
+            animation: modal-fade-in 0.2s ease-out;
+        }
+    </style>
+</head>
+
+<body class="bg-slate-50 h-screen flex font-sans text-slate-800 overflow-hidden">
+
+    <!-- Login Overlay -->
+    <div id="login-overlay"
+        class="fixed inset-0 bg-slate-900/95 z-50 flex items-center justify-center backdrop-blur-sm transition-opacity duration-300">
+        <div class="bg-white p-8 rounded-2xl shadow-2xl w-full max-w-md mx-4 transform transition-transform">
+            <div class="text-center mb-8">
+                <div
+                    class="bg-blue-600 w-14 h-14 rounded-xl text-white flex items-center justify-center mx-auto mb-4 shadow-lg">
+                    <i class="fas fa-robot text-2xl"></i>
+                </div>
+                <h2 class="text-2xl font-bold text-slate-800">Nanobot Workspace</h2>
+                <p class="text-slate-500 text-sm mt-2">Sign in to access financial reports</p>
+            </div>
+            <form id="login-form" class="space-y-5">
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-1">Username</label>
+                    <div class="relative">
+                        <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <i class="fas fa-user text-slate-400"></i>
+                        </div>
+                        <input type="text" id="login-username" required
+                            class="w-full pl-10 pr-4 py-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                            placeholder="Enter your username">
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-1">Password</label>
+                    <div class="relative">
+                        <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <i class="fas fa-lock text-slate-400"></i>
+                        </div>
+                        <input type="password" id="login-password" required
+                            class="w-full pl-10 pr-4 py-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                            placeholder="••••••••">
+                    </div>
+                </div>
+                <button type="submit"
+                    class="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 transition shadow-md font-medium flex justify-center items-center">
+                    <span>Sign In</span>
+                    <i class="fas fa-arrow-right ml-2 text-sm"></i>
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Main Container -->
+    <div class="flex-1 flex flex-col h-full w-full">
+        <!-- Tab Navigation -->
+        <div class="bg-slate-100 border-b border-slate-200 px-4 pt-2">
+            <div class="flex space-x-1">
+                <button id="tab-chat" onclick="switchTab('chat')"
+                    class="tab-active px-6 py-3 rounded-t-lg font-medium text-sm transition-colors border border-b-0">
+                    <i class="fas fa-comments mr-2"></i>Chat
+                </button>
+                <button id="tab-library" onclick="switchTab('library')"
+                    class="tab-inactive px-6 py-3 rounded-t-lg font-medium text-sm transition-colors border border-b-0">
+                    <i class="fas fa-folder-open mr-2"></i>PDF Library
+                </button>
+            </div>
+        </div>
+
+        <!-- Tab Content Container -->
+        <div class="flex-1 flex overflow-hidden">
+            <!-- Chat Tab Content -->
+            <div id="content-chat" class="flex-1 flex flex-col h-full">
+        <!-- Sidebar Header -->
+        <div class="p-5 border-b border-slate-700/50 flex items-center space-x-3">
+            <div class="bg-blue-600 p-2 rounded-lg text-white">
+                <i class="fas fa-robot text-lg"></i>
+            </div>
+            <div>
+                <h1 class="text-base font-semibold text-white tracking-wide">Nanobot</h1>
+                <p class="text-xs text-slate-400 font-medium">Financial Workspace</p>
+            </div>
+        </div>
+
+        <!-- Document List Section -->
+        <div class="p-4 flex-1 overflow-y-auto">
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="text-xs font-bold text-slate-500 uppercase tracking-wider">Available Documents</h2>
+                <button class="text-slate-400 hover:text-white transition-colors" title="Refresh List"
+                    onclick="renderDocumentList()">
+                    <i class="fas fa-sync-alt text-xs"></i>
+                </button>
+            </div>
+
+            <!-- Dynamic Document List Container -->
+            <ul id="document-list" class="space-y-3">
+                <!-- JS will populate documents here -->
+            </ul>
+        </div>
+
+        <!-- Sidebar Footer -->
+        <div class="p-4 border-t border-slate-700/50 text-xs text-slate-500 bg-slate-900/50">
+            <p><i class="fas fa-info-circle mr-1"></i> Click a document to tag it in your chat.</p>
+        </div>
+    </aside>
+
+    <!-- Right Main Area: Chat Interface -->
+    <main class="flex-1 flex flex-col h-full relative">
+        <!-- Top Header -->
+        <header
+            class="bg-white border-b border-slate-200 p-4 shadow-sm flex justify-between items-center shrink-0 z-10">
+            <div class="flex items-center md:hidden space-x-3">
+                <div class="bg-blue-600 p-2 rounded-lg text-white">
+                    <i class="fas fa-robot text-sm"></i>
+                </div>
+                <h1 class="text-lg font-semibold text-slate-800 tracking-wide">Nanobot</h1>
+            </div>
+            <div class="hidden md:block">
+                <h2 class="text-lg font-semibold text-slate-800">Financial Analysis Chat</h2>
+            </div>
+
+            <!-- Header Right Side: Status and User Profile -->
+            <div class="flex items-center space-x-4">
+                <div
+                    class="hidden md:flex items-center space-x-2 bg-green-50 px-3 py-1.5 rounded-full border border-green-200">
+                    <span class="relative flex h-2 w-2">
+                        <span
+                            class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                        <span class="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                    </span>
+                    <span class="text-xs font-medium text-green-700">MCP Online</span>
+                </div>
+
+                <!-- User Profile & Logout -->
+                <div class="flex items-center space-x-3 border-l border-slate-200 pl-4">
+                    <div class="flex items-center space-x-2">
+                        <div
+                            class="bg-blue-100 text-blue-700 h-8 w-8 rounded-full flex items-center justify-center font-bold text-sm">
+                            <i class="fas fa-user-alt text-xs"></i>
+                        </div>
+                        <span id="display-username"
+                            class="text-sm font-medium text-slate-700 hidden sm:block">Guest</span>
+                    </div>
+                    <button id="logout-btn" type="button"
+                        class="text-slate-400 hover:text-red-500 hover:bg-red-50 p-2 rounded-lg transition-colors"
+                        title="Log Out">
+                        <i class="fas fa-sign-out-alt"></i>
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Chat History -->
+        <div class="flex-1 overflow-y-auto p-4 md:p-6 chat-scroll" id="chat-container">
+            <!-- System Greeting -->
+            <div class="flex justify-start mb-6">
+                <div
+                    class="bg-white border border-slate-200 rounded-2xl rounded-tl-sm shadow-sm p-4 max-w-[85%] md:max-w-[75%]">
+                    <p class="text-sm md:text-base leading-relaxed">
+                        Hello! I am your AI Financial Assistant.<br>
+                        Select a document from the left panel to tag it, upload a new report using the paperclip icon,
+                        or ask me to analyze financial tables directly.
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bottom Input Area -->
+        <footer class="bg-white border-t border-slate-200 p-4 shrink-0">
+            <div class="max-w-4xl mx-auto">
+                <form id="chat-form" class="flex flex-col relative">
+                    <!-- Hidden File Input -->
+                    <input type="file" id="file-upload" class="hidden" accept=".pdf,.csv,.txt">
+
+                    <!-- Text Input Container -->
+                    <div
+                        class="flex items-end bg-slate-100 rounded-xl border border-slate-200 focus-within:border-blue-500 focus-within:bg-white focus-within:ring-2 focus-within:ring-blue-100 transition-all overflow-hidden relative pb-1">
+
+                        <!-- Attachment Button -->
+                        <button type="button" id="attach-btn"
+                            class="p-3.5 text-slate-400 hover:text-blue-600 transition-colors flex-shrink-0 rounded-l-xl z-10"
+                            title="Upload Document">
+                            <i class="fas fa-paperclip text-lg"></i>
+                        </button>
+
+                        <textarea id="chat-input" rows="1"
+                            class="w-full bg-transparent pr-16 py-3.5 outline-none resize-none text-sm md:text-base self-center"
+                            placeholder="Ask a question... e.g., 'Extract revenue from @report.pdf'"
+                            oninput="this.style.height = ''; this.style.height = Math.min(this.scrollHeight, 120) + 'px'"></textarea>
+
+                        <!-- Send Button (Inside Input) -->
+                        <button type="submit" id="send-btn"
+                            class="absolute right-2 bottom-2 bg-blue-600 text-white h-9 w-9 rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed z-10">
+                            <i class="fas fa-paper-plane text-sm"></i>
+                        </button>
+                    </div>
+                </form>
+                <div class="text-center mt-2 flex justify-between items-center px-1">
+                    <p class="text-[11px] text-slate-400">Powered by LiteParse MCP Server</p>
+                    <p class="text-[11px] text-slate-400">Shift + Enter to add a new line</p>
+                </div>
+            </div>
+        </footer>
+    </main>
+
+    <!-- Frontend Logic -->
+    <script>
+        // --- Mock Data for Document List (Updated with uploader and status) ---
+        const mockDocuments = [
+            { id: 1, name: 'SFC_annual_report_2023.pdf', path: '/data/pdfs/SFC_annual_report_2023.pdf', size: '2.4 MB', date: 'Oct 15, 09:30 AM', uploader: 'System', status: 'Ready' },
+            { id: 2, name: 'Q3_Financial_Statement.pdf', path: '/data/pdfs/Q3_Financial_Statement.pdf', size: '1.1 MB', date: 'Oct 10, 14:15 PM', uploader: 'System', status: 'Ready' },
+            { id: 3, name: 'Market_Analysis_HK.pdf', path: '/data/pdfs/Market_Analysis_HK.pdf', size: '3.5 MB', date: 'Sep 28, 11:00 AM', uploader: 'System', status: 'Ready' }
+        ];
+
+        // --- DOM Elements ---
+        const docListContainer = document.getElementById('document-list');
+        const chatForm = document.getElementById('chat-form');
+        const chatInput = document.getElementById('chat-input');
+        const chatContainer = document.getElementById('chat-container');
+        const sendBtn = document.getElementById('send-btn');
+        const attachBtn = document.getElementById('attach-btn');
+        const fileUploadInput = document.getElementById('file-upload');
+
+        // --- Auth DOM Elements ---
+        const loginOverlay = document.getElementById('login-overlay');
+        const loginForm = document.getElementById('login-form');
+        const loginUsername = document.getElementById('login-username');
+        const loginPassword = document.getElementById('login-password');
+        const logoutBtn = document.getElementById('logout-btn');
+        const displayUsername = document.getElementById('display-username');
+
+        // --- App State ---
+        let currentUser = null;
+        let selectedDocument = null;
+
+        // --- API Configuration ---
+        const API_BASE_URL = window.location.origin; // Use same origin as the page
+        
+        // Polling interval for status updates (ms)
+        const STATUS_POLL_INTERVAL = 2000;
+        
+        // Status polling for processing documents
+        let statusPollingInterval = null;
+        
+        function startStatusPolling() {
+            if (statusPollingInterval) return;
+            
+            statusPollingInterval = setInterval(async () => {
+                try {
+                    const response = await fetch(`${API_BASE_URL}/api/queue/status`);
+                    if (!response.ok) return;
+                    
+                    const queueStatus = await response.json();
+                    
+                    // Check if any documents are processing
+                    const isProcessing = queueStatus.processing_count > 0 || queueStatus.queued_count > 0;
+                    
+                    if (isProcessing) {
+                        // Refresh document list to show updated progress
+                        loadDocumentList();
+                    } else {
+                        // Stop polling if nothing is processing
+                        stopStatusPolling();
+                    }
+                } catch (error) {
+                    console.error('Status polling failed:', error);
+                }
+            }, STATUS_POLL_INTERVAL);
+        }
+        
+        function stopStatusPolling() {
+            if (statusPollingInterval) {
+                clearInterval(statusPollingInterval);
+                statusPollingInterval = null;
+            }
+        }
+
+        // --- Auth Logic ---
+        loginForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const username = loginUsername.value.trim();
+            if (username) {
+                currentUser = username;
+                displayUsername.textContent = currentUser;
+
+                // Hide overlay with animation
+                loginOverlay.classList.add('opacity-0');
+                setTimeout(() => {
+                    loginOverlay.classList.add('hidden');
+                    loginOverlay.classList.remove('opacity-0');
+                }, 300);
+
+                // Load real document list from API
+                loadDocumentList();
+            }
+        });
+
+        logoutBtn.addEventListener('click', () => {
+            currentUser = null;
+            loginUsername.value = '';
+            loginPassword.value = '';
+
+            // Show overlay
+            loginOverlay.classList.remove('hidden');
+
+            // Clear chat history on logout
+            const messages = chatContainer.querySelectorAll('.animate-fade-in-up');
+            messages.forEach(msg => msg.remove());
+        });
+
+        // --- File Upload Logic ---
+        attachBtn.addEventListener('click', () => {
+            fileUploadInput.click();
+        });
+
+        fileUploadInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            // Generate current formatted time
+            const now = new Date();
+            const timeStr = now.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+            const fileSize = (file.size / 1024 / 1024).toFixed(2) + ' MB';
+
+            // Create new document entry with "Queued" status
+            const newDoc = {
+                id: `temp_${Date.now()}`,
+                name: file.name,
+                path: `/data/pdfs/${file.name}`,
+                size: fileSize === '0.00 MB' ? '< 0.01 MB' : fileSize,
+                date: timeStr,
+                uploader: currentUser || 'You',
+                status: 'queued',
+                progress: 0
+            };
+
+            // Add to the top of the list and render immediately
+            mockDocuments.unshift(newDoc);
+            renderDocumentList();
+            startStatusPolling(); // Start polling for status updates
+
+            // Notify in chat visually
+            appendMessage('bot', `📤 Started uploading **${file.name}**... Please wait.`);
+
+            try {
+                // Create FormData for file upload
+                const formData = new FormData();
+                formData.append('file', file);
+                formData.append('username', currentUser || 'anonymous');
+
+                // Upload file to API
+                const response = await fetch(`${API_BASE_URL}/api/upload`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || 'Upload failed');
+                }
+
+                const result = await response.json();
+                
+                // Update document with real data
+                const docIndex = mockDocuments.findIndex(d => d.id === newDoc.id);
+                if (docIndex !== -1) {
+                    mockDocuments[docIndex] = {
+                        id: result.file.id,
+                        name: result.file.name,
+                        path: result.file.path,
+                        size: result.file.size,
+                        date: timeStr,
+                        uploader: currentUser || 'You',
+                        status: result.file.status,
+                        progress: result.file.progress || 0
+                    };
+                }
+                
+                // Re-render with updated status
+                renderDocumentList();
+                
+                // Success message
+                appendMessage('bot', `✅ Upload complete! **${file.name}** is queued for processing.\n\n📊 File size: ${result.file.size}\n\nProcessing will start automatically.`);
+                
+            } catch (error) {
+                // Update status to failed
+                const docIndex = mockDocuments.findIndex(d => d.id === newDoc.id);
+                if (docIndex !== -1) {
+                    mockDocuments[docIndex].status = 'Failed';
+                }
+                renderDocumentList();
+                
+                // Error message
+                appendMessage('bot', `❌ Upload failed: ${error.message}\n\nPlease try again or check if the file is a valid PDF.`);
+            }
+
+            // Clear file input
+            fileUploadInput.value = '';
+        });
+
+        // --- Render Document List ---
+        async function loadDocumentList() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/documents`);
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.success && data.documents) {
+                        // Convert API response to mockDocuments format
+                        mockDocuments.length = 0; // Clear existing
+                        mockDocuments.push(...data.documents.map(doc => ({
+                            ...doc,
+                            uploader: doc.uploader || 'System',
+                            date: new Date(doc.date * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) || doc.date,
+                            status: doc.status || 'Ready',
+                            progress: doc.progress || 100
+                        })));
+                        renderDocumentList();
+                        
+                        // Check if we should start polling
+                        const isProcessing = mockDocuments.some(d => ['queued', 'processing'].includes(d.status));
+                        if (isProcessing) {
+                            startStatusPolling();
+                        }
+                    }
+                }
+            } catch (error) {
+                console.error('Failed to load documents:', error);
+                // Keep mock data if API fails
+            }
+        }
+
+        function renderDocumentList() {
+            docListContainer.innerHTML = '';
+            mockDocuments.forEach(doc => {
+                const li = document.createElement('li');
+                // Adjust styling based on status
+                const isProcessing = ['queued', 'processing'].includes(doc.status);
+                const isFailed = doc.status === 'Failed' || doc.status === 'failed';
+                const isCompleted = doc.status === 'completed' || doc.status === 'Ready';
+                
+                li.className = `group flex items-start p-3 rounded-xl transition-colors border border-transparent 
+                    ${isProcessing ? 'bg-slate-800/50' : ''}
+                    ${isFailed ? 'bg-red-900/20 opacity-80' : ''}
+                    ${isCompleted ? 'hover:bg-slate-800 cursor-pointer hover:border-slate-700/50' : ''}`;
+
+                if (isCompleted) {
+                    li.onclick = () => tagDocument(doc.path);
+                }
+
+                // Progress bar for processing documents
+                let progressHtml = '';
+                if (isProcessing) {
+                    const progress = doc.progress || 0;
+                    progressHtml = `
+                        <div class="mt-2">
+                            <div class="flex justify-between text-[9px] text-slate-400 mb-1">
+                                <span>${doc.status === 'processing' ? 'Processing...' : 'Queued'}</span>
+                                <span>${Math.round(progress)}%</span>
+                            </div>
+                            <div class="w-full h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                                <div class="h-full bg-blue-500 transition-all duration-300" style="width: ${progress}%"></div>
+                            </div>
+                        </div>
+                    `;
+                }
+                
+                // Status UI Element
+                let statusHtml = '';
+                if (isProcessing) {
+                    statusHtml = `<span class="text-blue-400 font-medium flex items-center text-[10px] mt-1.5"><i class="fas fa-${doc.status === 'processing' ? 'cog fa-spin' : 'clock'} mr-1.5"></i> ${doc.status.charAt(0).toUpperCase() + doc.status.slice(1)}</span>`;
+                } else if (isFailed) {
+                    statusHtml = `<span class="text-red-400 font-medium flex items-center text-[10px] mt-1.5"><i class="fas fa-exclamation-circle mr-1.5"></i> Failed</span>`;
+                } else {
+                    statusHtml = `<span class="text-emerald-500 flex items-center text-[10px] mt-1.5"><i class="fas fa-check-circle mr-1.5"></i> Ready</span>`;
+                }
+
+                // Uploader Badge logic
+                const uploaderBadge = (doc.uploader === currentUser || doc.uploader === 'You')
+                    ? `<span class="text-blue-300 font-medium">${doc.uploader}</span>`
+                    : `<span class="text-slate-500">${doc.uploader}</span>`;
+
+                li.innerHTML = `
+                    <div class="mr-3 p-2.5 bg-slate-800 group-hover:bg-blue-600/20 group-hover:text-blue-400 rounded-lg text-slate-400 transition-colors mt-0.5">
+                        <i class="fas ${isProcessing ? 'fa-cog text-blue-400' : isFailed ? 'fa-file-pdf text-red-400' : 'fa-file-pdf'}"></i>
+                    </div>
+                    <div class="flex-1 min-w-0">
+                        <h3 class="text-sm font-medium text-slate-200 truncate group-hover:text-white transition-colors" title="${doc.name}">${doc.name}</h3>
+                        <p class="text-[10px] text-slate-400 mt-1 flex justify-between pr-2">
+                            <span>By: ${uploaderBadge}</span>
+                            <span class="text-slate-500">${doc.size}</span>
+                        </p>
+                        <p class="text-[10px] text-slate-500 mt-0.5">${doc.date}</p>
+                        ${statusHtml}
+                        ${progressHtml}
+                    </div>
+                    ${isCompleted ? `
+                    <div class="opacity-0 group-hover:opacity-100 transition-opacity text-slate-400 hover:text-white self-center">
+                        <i class="fas fa-plus-circle text-sm"></i>
+                    </div>
+                    ` : ''}
+                `;
+                docListContainer.appendChild(li);
+            });
+        }
+
+        // --- Tag Document Logic ---
+        function tagDocument(filepath) {
+            const currentVal = chatInput.value;
+            const tagText = `[Doc: ${filepath}] `;
+
+            if (currentVal.length === 0 || currentVal.endsWith(' ')) {
+                chatInput.value += tagText;
+            } else {
+                chatInput.value += ' ' + tagText;
+            }
+
+            chatInput.focus();
+            chatInput.style.height = 'auto';
+            chatInput.style.height = Math.min(chatInput.scrollHeight, 120) + 'px';
+        }
+
+        // --- Chat Interaction Logic ---
+        chatInput.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                chatForm.dispatchEvent(new Event('submit'));
+            }
+        });
+
+        function appendMessage(sender, text) {
+            const isUser = sender === 'user';
+            const msgDiv = document.createElement('div');
+            msgDiv.className = `flex ${isUser ? 'justify-end' : 'justify-start'} mb-6 animate-fade-in-up`;
+
+            const bubbleDiv = document.createElement('div');
+            bubbleDiv.className = `p-4 max-w-[85%] md:max-w-[75%] shadow-sm ${isUser
+                    ? 'bg-blue-600 text-white rounded-2xl rounded-tr-sm'
+                    : 'bg-white border border-slate-200 text-slate-800 rounded-2xl rounded-tl-sm'
+                }`;
+
+            // Format [Doc: ...] tags visually
+            let formattedText = text.replace(/\[Doc:\s([^\]]+)\]/g, '<span class="inline-block bg-blue-500/20 text-blue-100 px-2 py-0.5 rounded text-xs font-mono mb-1 mr-1 border border-blue-500/30"><i class="fas fa-paperclip mr-1"></i>$1</span>');
+
+            // Basic Markdown-to-HTML
+            formattedText = formattedText.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+            formattedText = formattedText.replace(/\n/g, '<br>');
+
+            bubbleDiv.innerHTML = `<p class="text-sm md:text-base leading-relaxed">${formattedText}</p>`;
+            msgDiv.appendChild(bubbleDiv);
+            chatContainer.appendChild(msgDiv);
+            scrollToBottom();
+        }
+
+        function appendLoadingIndicator() {
+            const msgDiv = document.createElement('div');
+            msgDiv.id = 'loading-indicator';
+            msgDiv.className = `flex justify-start mb-6`;
+            msgDiv.innerHTML = `
+                <div class="bg-white border border-slate-200 rounded-2xl rounded-tl-sm shadow-sm p-4 py-5 flex items-center typing-indicator">
+                    <span></span><span></span><span></span>
+                </div>
+            `;
+            chatContainer.appendChild(msgDiv);
+            scrollToBottom();
+        }
+
+        function removeLoadingIndicator() {
+            const indicator = document.getElementById('loading-indicator');
+            if (indicator) indicator.remove();
+        }
+
+        function scrollToBottom() {
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+       chatForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const message = chatInput.value.trim();
+            if (!message) return;
+
+            // 1. 顯示 User 嘅問題
+            appendMessage('user', message);
+            chatInput.value = '';
+            chatInput.style.height = 'auto';
+            sendBtn.disabled = true;
+            appendLoadingIndicator(); // 顯示三個點點點 Loading
+
+            try {
+                // 2. 呼叫串流 API
+                const response = await fetch(`${API_BASE_URL}/api/chat/stream`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        message: message,
+                        username: currentUser || 'anonymous'
+                    })
+                });
+
+                // 收到 API 回應，立刻移除三個點點點 Loading
+                removeLoadingIndicator();
+
+                if (!response.ok) {
+                    const errorMsg = await response.text();
+                    throw new Error(errorMsg);
+                }
+
+                // 3. 🌟 核心修正：動態建立一個空嘅 Bot 對話框 (取代 appendStreamBubble)
+                const botMsgId = 'msg-' + Date.now();
+                const botMsg = document.createElement('div');
+                botMsg.className = `flex justify-start mb-6`;
+                botMsg.innerHTML = `
+                    <div class="p-4 max-w-[85%] md:max-w-[75%] bg-white border border-slate-200 text-slate-800 rounded-2xl rounded-tl-sm shadow-sm">
+                        <p id="${botMsgId}" class="text-sm md:text-base leading-relaxed"><span class="typing-indicator"><span></span><span></span><span></span></span></p>
+                    </div>
+                `;
+                chatContainer.appendChild(botMsg);
+                scrollToBottom();
+
+                const bubbleText = document.getElementById(botMsgId);
+                let accumulatedText = "";
+
+                // 4. 🌟 處理 Server-Sent Events (SSE) 數據流
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value, { stream: true });
+                    const lines = chunk.split('\n');
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const dataStr = line.slice(6).trim();
+                            
+                            // 忽略空白或結束信號
+                            if (!dataStr || dataStr === '[DONE]') continue;
+
+                            try {
+                                // 將 Gateway 傳過來嘅 JSON 解碼
+                                const data = JSON.parse(dataStr);
+                                if (data.error) {
+                                    accumulatedText += `<br><span class="text-red-500">❌ ${data.error}</span>`;
+                                } else if (data.content) {
+                                    accumulatedText += data.content; // 逐粒字加上去
+                                }
+                                // 實時更新畫面並套用 Markdown 格式
+                                bubbleText.innerHTML = formatMarkdown(accumulatedText);
+                                scrollToBottom();
+                            } catch (err) {
+                                console.error("Error parsing stream JSON:", err, dataStr);
+                            }
+                        }
+                    }
+                }
+            } catch (error) {
+                removeLoadingIndicator();
+                appendMessage('bot', `❌ **連線錯誤**\n\n伺服器發生異常或無法連線。\n\n錯誤詳情: ${error.message}`);
+            }
+            sendBtn.disabled = false;
+        });
+        
+        // Initialize UI
+        renderDocumentList();
+    </script>
+</body>
+
+</html>

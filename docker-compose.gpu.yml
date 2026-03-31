@@ -1,9 +1,13 @@
 # Docker Compose GPU Override
-# GPU 用家使用：docker-compose -f docker-compose.yml -f docker-compose.gpu.yml up
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.gpu.yml up
+# This overrides the default CPU services with GPU-enabled versions
 
 services:
-  # Nanobot Gateway - GPU Version
+  # Nanobot Gateway - GPU Version (override)
   nanobot-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
     deploy:
       resources:
         reservations:
@@ -29,7 +33,7 @@ services:
   gpu-parser:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.gpu
     container_name: gpu-parser
     profiles:
       - gpu
