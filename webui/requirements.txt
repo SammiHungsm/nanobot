@@ -1,8 +1,22 @@
+# Nanobot WebUI - Python Dependencies (v2.0 Refactored)
+
+# Web Framework
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
+
+# Validation
 pydantic==2.5.2
+
+# HTTP Client
 httpx==0.25.2
+
+# File Uploads
 python-multipart==0.0.6
 aiofiles==23.2.1
+
+# PDF Processing
 opendataloader-pdf>=0.2.0
 PyMuPDF>=1.23.0
+
+# Logging
+loguru>=0.7.0

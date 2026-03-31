@@ -1,6 +1,5 @@
-# Nanobot Web UI - FastAPI Frontend
-# Lightweight container for serving the financial chat interface
-# CPU-optimized (no GPU dependencies needed for web UI)
+# Nanobot Web UI - FastAPI Frontend (Refactored v2.0)
+# Modular architecture with separated API routes, services, and schemas
 
 FROM python:3.11-slim
 
@@ -19,18 +18,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy requirements first for better caching
 COPY requirements.txt .
 
-# Install Python dependencies (CPU-only, no heavy ML)
+# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY main.py .
-COPY chat_logic.py .
+# Copy application code (new modular structure)
+COPY app/ ./app/
 
 # Copy static files (HTML, CSS, JS)
 COPY static/ ./static/
 
-# Create data directory for PDFs (mounted at runtime)
-RUN mkdir -p /data/pdfs
+# Create data directories for PDFs
+RUN mkdir -p /data/pdfs /app/uploads /app/outputs
 
 # Create non-root user for security
 RUN useradd --create-home --shell /bin/bash nanobot \
@@ -41,10 +39,13 @@ USER nanobot
 # Expose port
 EXPOSE 8080
 
-# Set environment variables (CPU mode by default)
+# Set environment variables
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
 ENV MCP_SERVER_URL=http://liteparse-mcp:3000
 ENV PDF_DATA_DIR=/data/pdfs
+ENV PDF_UPLOAD_DIR=/app/uploads
+ENV PDF_OUTPUT_DIR=/app/outputs
 ENV USE_CUDA=false
 ENV TORCH_DEVICE=cpu
 
@@ -53,4 +54,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
 # Run the application
-CMD ["python", "main.py"]
+CMD ["python", "-m", "app.main"]
