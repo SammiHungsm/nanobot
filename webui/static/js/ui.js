@@ -379,7 +379,7 @@ const UI = {
         this.appendMessage('user', message);
         this.elements.chatInput.value = '';
         this.elements.chatInput.style.height = 'auto';
-        this.sendBtn.disabled = true;
+        this.elements.sendBtn.disabled = true;
         this.appendLoadingIndicator();
         
         // 解析文件路徑

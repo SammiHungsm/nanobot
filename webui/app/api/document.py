@@ -249,18 +249,35 @@ async def get_processed_output(doc_id: str):
     
     doc = document_service.documents_db[doc_id]
     
-    if doc["status"] != "completed":
-        raise HTTPException(status_code=400, detail="Document processing not complete")
+    # 🛠️ 嘗試讀取真實的 OpenDataLoader 原始輸出 JSON
+    # 路徑必須與 opendataloader_processor.py 中保存的路徑一致
+    DATA_DIR = os.getenv("DATA_DIR", "/app/data/raw")
     
-    output_path = doc.get("output_path")
+    # 可能的 JSON 檔案路徑（取決於 processor 怎麼存）
+    json_paths = [
+        os.path.join(DATA_DIR, doc_id, "output.json"),
+        os.path.join(DATA_DIR, f"{doc_id}.json"),
+        doc.get("output_path")  #  fallback 到資料庫記錄的路徑
+    ]
     
-    # Check if output file exists
-    if output_path and Path(output_path).exists():
-        with open(output_path, 'r', encoding='utf-8') as f:
-            result = json.load(f)
-        return result
+    for json_path in json_paths:
+        if json_path and Path(json_path).exists():
+            try:
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    raw_data = json.load(f)
+                
+                # 直接回傳真實的 OpenDataLoader 原始數據
+                return {
+                    "metadata": {
+                        "status": "Loaded from Disk",
+                        "message": f"Successfully loaded raw OpenDataLoader output for {doc_id}."
+                    },
+                    "content": raw_data
+                }
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Error reading JSON output: {str(e)}")
     
-    # Fallback: Data has been ingested into PostgreSQL
+    # Fallback: 如果找不到 JSON 檔案，回傳資料庫狀態
     return {
         "metadata": {
             "status": "In PostgreSQL Database",

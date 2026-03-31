@@ -113,11 +113,18 @@ class DocumentService:
                     # Extract company_id from filename or use default
                     company_id = 1  # TODO: Auto-generate or extract from filename
                     
+                    # 💡 建立一個更新進度的 Callback 函式
+                    def update_progress(percent: float, message: str):
+                        doc["progress"] = percent
+                        doc["status_message"] = message
+                        self.add_processing_log(f"[{doc['filename']}] {message}", "info")
+                    
                     # Run real processing (parses PDF, inserts to PostgreSQL, triggers Vanna)
                     result = await processor.process_pdf(
                         pdf_path=doc["path"], 
                         company_id=company_id,
-                        doc_id=doc_id
+                        doc_id=doc_id,
+                        progress_callback=update_progress  # 👈 新增這行
                     )
                     
                     await processor.close()

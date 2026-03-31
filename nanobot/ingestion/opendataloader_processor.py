@@ -58,7 +58,7 @@ class OpenDataLoaderProcessor:
             await self.db_conn.close()
             logger.info("📴 數據庫連接已關閉")
     
-    async def process_pdf(self, pdf_path: str, company_id: int, doc_id: str) -> Dict[str, Any]:
+    async def process_pdf(self, pdf_path: str, company_id: int, doc_id: str, progress_callback=None) -> Dict[str, Any]:
         """
         處理單一 PDF 文檔
         
@@ -66,6 +66,7 @@ class OpenDataLoaderProcessor:
             pdf_path: PDF 檔案路徑
             company_id: 公司 ID
             doc_id: 文檔唯一標識
+            progress_callback: 進度回調函數 (percent: float, message: str)
             
         Returns:
             處理結果統計
@@ -75,6 +76,8 @@ class OpenDataLoaderProcessor:
         
         try:
             # 1. 計算文件 Hash (用於去重)
+            if progress_callback:
+                progress_callback(10.0, "計算 Hash 與檢查重複...")
             file_hash = self._compute_file_hash(pdf_path)
             logger.info(f"   📝 File Hash: {file_hash[:16]}...")
             
@@ -88,19 +91,30 @@ class OpenDataLoaderProcessor:
             await self._create_document_record(pdf_path, company_id, doc_id, file_hash)
             logger.info("✅ 文檔記錄已創建")
             
-            # 4. 使用 OpenDataLoader 解析 PDF
+            # 4. 使用 OpenDataLoader 解析 PDF (這是最花時間的一步)
+            if progress_callback:
+                progress_callback(20.0, "OpenDataLoader 解析 PDF 中 (可能需要幾分鐘)...")
             artifacts = await self._parse_with_opendataloader(pdf_path, doc_id)
             logger.info(f"📊 解析完成：{len(artifacts)} 個 artifacts")
             
             # 5. 保存 Raw Artifacts 並更新數據庫
-            stats = await self._save_artifacts(artifacts, company_id, doc_id)
+            if progress_callback:
+                progress_callback(60.0, f"解析完成，準備寫入資料庫 (共 {len(artifacts)} 筆)...")
+            stats = await self._save_artifacts(artifacts, company_id, doc_id, progress_callback)
             logger.info(f"💾 保存完成：{stats}")
             
             # 6. 更新文檔狀態
+            if progress_callback:
+                progress_callback(86.0, "更新狀態與清理暫存...")
             await self._update_document_status(doc_id, "completed", stats)
             
             # 7. 觸發 Vanna 訓練 (邊做邊學)
-            await self._trigger_vanna_training(doc_id)
+            if progress_callback:
+                progress_callback(90.0, "準備觸發 Vanna 向量模型訓練...")
+            await self._trigger_vanna_training(doc_id, progress_callback)
+            
+            if progress_callback:
+                progress_callback(100.0, "✅ 處理完成")
             
             return {
                 "status": "completed",
@@ -170,6 +184,9 @@ class OpenDataLoaderProcessor:
     async def _parse_with_opendataloader(self, pdf_path: str, doc_id: str) -> List[Dict[str, Any]]:
         """
         使用真實的 OpenDataLoader 解析 PDF，並將結果轉換為 Artifacts
+        
+        Returns:
+            List[Dict[str, Any]]: Artifacts 列表
         """
         logger.info("📖 正在使用 OpenDataLoader 真實解析 PDF...")
         
@@ -201,6 +218,13 @@ class OpenDataLoaderProcessor:
         
         # 2. 由於 PDF 處理會阻塞 (Blocking)，使用 to_thread 將其放入背景執行緒
         result_json = await asyncio.to_thread(run_conversion)
+        
+        # 💡 保存完整的 OpenDataLoader 原始 JSON 到 data_dir，供前端預覽使用
+        output_json_path = self.data_dir / doc_id / "output.json"
+        output_json_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_json_path, 'w', encoding='utf-8') as f:
+            json.dump(result_json, f, ensure_ascii=False, indent=2)
+        logger.info(f"💾 已保存 OpenDataLoader 原始輸出：{output_json_path}")
         
         # 3. 將解析出來的 JSON 轉換為 Artifacts 格式
         artifacts = []
@@ -249,7 +273,7 @@ class OpenDataLoaderProcessor:
         logger.info(f"✅ 真實解析完成：共提取了 {len(artifacts)} 個 artifacts (區塊/表格)")
         return artifacts
     
-    async def _save_artifacts(self, artifacts: List[Dict[str, Any]], company_id: int, doc_id: str) -> Dict[str, int]:
+    async def _save_artifacts(self, artifacts: List[Dict[str, Any]], company_id: int, doc_id: str, progress_callback=None) -> Dict[str, int]:
         """
         保存 Artifacts 到 Docker Volume 並更新數據庫
         
@@ -266,6 +290,8 @@ class OpenDataLoaderProcessor:
         # 創建文檔專屬目錄
         doc_dir = self.data_dir / doc_id
         doc_dir.mkdir(exist_ok=True)
+        
+        total_items = len(artifacts)
         
         for idx, artifact in enumerate(artifacts):
             artifact_type = artifact.get("type")
@@ -295,6 +321,17 @@ class OpenDataLoaderProcessor:
             except Exception as e:
                 logger.error(f"❌ 保存 artifact 失敗 (idx={idx}): {e}")
                 continue
+            
+            # 🚀 計算真實進度並回報 (分配在 60.0% ~ 85.0% 之間)
+            if progress_callback and total_items > 0:
+                # 為了避免前端和 Log 被海量訊息淹沒，每處理 10 筆或是最後一筆時才發送一次更新
+                if (idx + 1) % 10 == 0 or (idx + 1) == total_items:
+                    # 計算公式：起始進度 (60) + (目前筆數 / 總筆數) * 分配的區間大小 (25)
+                    current_percent = 60.0 + ((idx + 1) / total_items) * 25.0
+                    progress_callback(
+                        current_percent,
+                        f"寫入資料庫中... ({idx + 1}/{total_items} 筆)"
+                    )
         
         return stats
     
@@ -448,7 +485,7 @@ class OpenDataLoaderProcessor:
                 doc_id
             )
     
-    async def _trigger_vanna_training(self, doc_id: str):
+    async def _trigger_vanna_training(self, doc_id: str, progress_callback=None):
         """
         觸發 Vanna 訓練 (邊做邊學)
         
@@ -457,9 +494,12 @@ class OpenDataLoaderProcessor:
         vanna_url = os.getenv("VANNA_SERVICE_URL", "http://vanna-service:8082")
         
         try:
+            if progress_callback:
+                progress_callback(90.0, "正在連線 Vanna 引擎準備訓練...")
+            
             logger.info(f"🧠 正在觸發 Vanna 訓練 (doc_id: {doc_id})...")
             
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=60.0) as client:
                 # 發送訓練請求到 Vanna Service
                 response = await client.post(
                     f"{vanna_url}/api/train",
@@ -472,13 +512,22 @@ class OpenDataLoaderProcessor:
                 if response.status_code == 200:
                     result = response.json()
                     logger.info(f"✅ Vanna 訓練已觸發：{result.get('message', 'Success')}")
+                    # 訓練成功回傳時更新進度
+                    if progress_callback:
+                        progress_callback(98.0, "Vanna 訓練完成，正在收尾...")
                 else:
                     logger.warning(f"⚠️ Vanna 訓練請求失敗 (HTTP {response.status_code}): {response.text}")
+                    if progress_callback:
+                        progress_callback(90.0, "Vanna 訓練請求失敗，跳過此步驟")
         
         except httpx.RequestError as e:
             logger.warning(f"⚠️ 無法連接 Vanna Service: {e}. 跳過訓練步驟。")
+            if progress_callback:
+                progress_callback(90.0, "Vanna 連線超時或失敗")
         except Exception as e:
             logger.warning(f"⚠️ Vanna 訓練觸發失敗：{e}")
+            if progress_callback:
+                progress_callback(90.0, "Vanna 連線超時或失敗")
 
 
 async def main():
