@@ -77,6 +77,7 @@ nanobot-webui:
     - GATEWAY_URL=http://nanobot-gateway:8081  # 新增
     - DATA_DIR=/app/data/raw                   # 新增
   volumes:
+    - ./nanobot:/app/nanobot:ro                # 新增：掛載 nanobot 包
     - ./data/raw:/app/data/raw                 # 新增
 ```
 
@@ -94,6 +95,23 @@ asyncpg==0.29.0  # PostgreSQL 異步驅動
 
 ---
 
+### 6. WebUI Dockerfile 更新
+
+**修改的文件：**
+- [`webui/Dockerfile`](file:///C:/Users/sammi_hung/Desktop/SFC_AI/sfc_poc/nanobot/webui/Dockerfile)
+
+**新增內容：**
+```dockerfile
+# Copy nanobot package from parent directory and install it
+COPY ../nanobot/ /tmp/nanobot/
+COPY ../pyproject.toml /tmp/nanobot/
+COPY ../README.md /tmp/nanobot/
+COPY ../bridge/ /tmp/nanobot/bridge/
+RUN pip install --no-cache-dir /tmp/nanobot/
+```
+
+---
+
 ## 🚀 部署步驟
 
 ### 1. 重新構建 Docker 映像
@@ -101,7 +119,7 @@ asyncpg==0.29.0  # PostgreSQL 異步驅動
 ```bash
 cd C:\Users\sammi_hung\Desktop\SFC_AI\sfc_poc\nanobot
 
-# 重新構建 WebUI (包含新依賴)
+# 重新構建 WebUI (包含 nanobot 包)
 docker-compose build nanobot-webui
 
 # 或者重新構建所有服務
@@ -180,6 +198,20 @@ docker exec nanobot-webui python -c "import asyncpg; print('OK')"
 docker exec postgres-financial psql -U postgres -d annual_reports -c "\dt"
 ```
 
+### ModuleNotFoundError: No module named 'nanobot'
+
+這表示 nanobot 包沒有正確安裝到容器中。
+
+**解決方案：**
+
+1. 確認 `webui/Dockerfile` 有安裝 nanobot 包的步驟
+2. 確認 `docker-compose.yml` 有掛載 nanobot 目錄
+3. 重新構建鏡像：
+   ```bash
+   docker-compose build --no-cache nanobot-webui
+   docker-compose up -d nanobot-webui
+   ```
+
 ---
 
 ## 📊 架構圖
@@ -229,9 +261,10 @@ docker exec postgres-financial psql -U postgres -d annual_reports -c "\dt"
 - [x] 新增 Database Tab UI (`index.html`)
 - [x] 更新 `app.js` 支持三分頁切換
 - [x] 更新 `main.py` 註冊 Database Router
-- [x] 更新 `docker-compose.yml` 添加環境變數
+- [x] 更新 `docker-compose.yml` 添加環境變數和 nanobot volume 掛載
 - [x] 更新 `requirements.txt` 添加 `asyncpg`
 - [x] 更新 `api/__init__.py` 導出新 router
+- [x] 更新 `webui/Dockerfile` 安裝 nanobot 包
 
 ---
 
@@ -239,10 +272,11 @@ docker exec postgres-financial psql -U postgres -d annual_reports -c "\dt"
 
 1. **數據庫連接字符串**：確保 `DATABASE_URL` 正確指向 `postgres-financial:5432`
 2. **Gateway 服務名稱**：Docker Compose 中使用 `nanobot-gateway` 而非 `localhost`
-3. **Volume 掛載**：確保 `./data/raw` 目錄存在且有寫入權限
-4. **依賴安裝**：重新構建鏡像以安裝 `asyncpg`
+3. **Volume 掛載**：確保 `./nanobot` 和 `./data/raw` 目錄存在且有正確權限
+4. **依賴安裝**：重新構建鏡像以安裝 `asyncpg` 和 `nanobot` 包
+5. **PYTHONPATH**：確保設置為 `/app` 以便找到 nanobot 包
 
 ---
 
 **修復完成日期：** 2026-03-31  
-**修復版本：** v2.1.0
+**修復版本：** v2.1.1

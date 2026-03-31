@@ -65,8 +65,8 @@ services:
   # Web UI - Financial Chat Interface
   nanobot-webui:
     build:
-      context: ./webui
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: webui/Dockerfile
     container_name: nanobot-webui
     command: ["python", "-m", "app.main"]
     volumes:

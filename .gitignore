@@ -8,7 +8,7 @@ dist/
 build/
 *.egg-info/
 *.egg
-*.pycs
+*.pyc
 *.pyo
 *.pyd
 *.pyw
@@ -37,3 +37,34 @@ config\config.json
 
 # GitHub Copilot Instructions
 .github/copilot-instructions.md
+
+# ===========================================
+# Docker Data Volumes - DO NOT COMMIT
+# ===========================================
+# Generated PDF data
+data/
+webui/uploads/
+webui/outputs/
+webui/data/
+
+# PostgreSQL data
+postgres_data/
+
+# Vanna training data
+vanna_data/
+vanna-service/data/
+
+# Raw extracted data
+data/raw/
+
+# Processing outputs
+**/outputs/
+**/uploads/
+
+# ===========================================
+# Development artifacts
+# ===========================================
+*.log
+logs/
+*.tmp
+*.temp
