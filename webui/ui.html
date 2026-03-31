@@ -284,6 +284,45 @@
 
         // --- API Configuration ---
         const API_BASE_URL = window.location.origin; // Use same origin as the page
+        
+        // Polling interval for status updates (ms)
+        const STATUS_POLL_INTERVAL = 2000;
+        
+        // Status polling for processing documents
+        let statusPollingInterval = null;
+        
+        function startStatusPolling() {
+            if (statusPollingInterval) return;
+            
+            statusPollingInterval = setInterval(async () => {
+                try {
+                    const response = await fetch(`${API_BASE_URL}/api/queue/status`);
+                    if (!response.ok) return;
+                    
+                    const queueStatus = await response.json();
+                    
+                    // Check if any documents are processing
+                    const isProcessing = queueStatus.processing_count > 0 || queueStatus.queued_count > 0;
+                    
+                    if (isProcessing) {
+                        // Refresh document list to show updated progress
+                        loadDocumentList();
+                    } else {
+                        // Stop polling if nothing is processing
+                        stopStatusPolling();
+                    }
+                } catch (error) {
+                    console.error('Status polling failed:', error);
+                }
+            }, STATUS_POLL_INTERVAL);
+        }
+        
+        function stopStatusPolling() {
+            if (statusPollingInterval) {
+                clearInterval(statusPollingInterval);
+                statusPollingInterval = null;
+            }
+        }
 
         // --- Auth Logic ---
         loginForm.addEventListener('submit', (e) => {
@@ -332,20 +371,22 @@
             const timeStr = now.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
             const fileSize = (file.size / 1024 / 1024).toFixed(2) + ' MB';
 
-            // Create new document entry with "Uploading..." status
+            // Create new document entry with "Queued" status
             const newDoc = {
-                id: Date.now(),
+                id: `temp_${Date.now()}`,
                 name: file.name,
                 path: `/data/pdfs/${file.name}`,
                 size: fileSize === '0.00 MB' ? '< 0.01 MB' : fileSize,
                 date: timeStr,
                 uploader: currentUser || 'You',
-                status: 'Uploading...'
+                status: 'queued',
+                progress: 0
             };
 
             // Add to the top of the list and render immediately
             mockDocuments.unshift(newDoc);
             renderDocumentList();
+            startStatusPolling(); // Start polling for status updates
 
             // Notify in chat visually
             appendMessage('bot', `📤 Started uploading **${file.name}**... Please wait.`);
@@ -369,20 +410,33 @@
 
                 const result = await response.json();
                 
-                // Update document status to "Ready"
-                newDoc.status = 'Ready';
-                newDoc.id = result.file.id;
-                newDoc.path = result.file.path;
+                // Update document with real data
+                const docIndex = mockDocuments.findIndex(d => d.id === newDoc.id);
+                if (docIndex !== -1) {
+                    mockDocuments[docIndex] = {
+                        id: result.file.id,
+                        name: result.file.name,
+                        path: result.file.path,
+                        size: result.file.size,
+                        date: timeStr,
+                        uploader: currentUser || 'You',
+                        status: result.file.status,
+                        progress: result.file.progress || 0
+                    };
+                }
                 
                 // Re-render with updated status
                 renderDocumentList();
                 
                 // Success message
-                appendMessage('bot', `✅ Upload complete! **${file.name}** is ready for analysis.\n\n📊 File size: ${result.file.size}`);
+                appendMessage('bot', `✅ Upload complete! **${file.name}** is queued for processing.\n\n📊 File size: ${result.file.size}\n\nProcessing will start automatically.`);
                 
             } catch (error) {
                 // Update status to failed
-                newDoc.status = 'Failed';
+                const docIndex = mockDocuments.findIndex(d => d.id === newDoc.id);
+                if (docIndex !== -1) {
+                    mockDocuments[docIndex].status = 'Failed';
+                }
                 renderDocumentList();
                 
                 // Error message
@@ -406,9 +460,16 @@
                             ...doc,
                             uploader: doc.uploader || 'System',
                             date: new Date(doc.date * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) || doc.date,
-                            status: doc.status || 'Ready'
+                            status: doc.status || 'Ready',
+                            progress: doc.progress || 100
                         })));
                         renderDocumentList();
+                        
+                        // Check if we should start polling
+                        const isProcessing = mockDocuments.some(d => ['queued', 'processing'].includes(d.status));
+                        if (isProcessing) {
+                            startStatusPolling();
+                        }
                     }
                 }
             } catch (error) {
@@ -422,22 +483,40 @@
             mockDocuments.forEach(doc => {
                 const li = document.createElement('li');
                 // Adjust styling based on status
-                const isUploading = doc.status === 'Uploading...';
-                const isFailed = doc.status === 'Failed';
+                const isProcessing = ['queued', 'processing'].includes(doc.status);
+                const isFailed = doc.status === 'Failed' || doc.status === 'failed';
+                const isCompleted = doc.status === 'completed' || doc.status === 'Ready';
                 
                 li.className = `group flex items-start p-3 rounded-xl transition-colors border border-transparent 
-                    ${isUploading ? 'bg-slate-800/50 opacity-80' : ''}
+                    ${isProcessing ? 'bg-slate-800/50' : ''}
                     ${isFailed ? 'bg-red-900/20 opacity-80' : ''}
-                    ${!isUploading && !isFailed ? 'hover:bg-slate-800 cursor-pointer hover:border-slate-700/50' : ''}`;
+                    ${isCompleted ? 'hover:bg-slate-800 cursor-pointer hover:border-slate-700/50' : ''}`;
 
-                if (!isUploading && !isFailed) {
+                if (isCompleted) {
                     li.onclick = () => tagDocument(doc.path);
                 }
 
+                // Progress bar for processing documents
+                let progressHtml = '';
+                if (isProcessing) {
+                    const progress = doc.progress || 0;
+                    progressHtml = `
+                        <div class="mt-2">
+                            <div class="flex justify-between text-[9px] text-slate-400 mb-1">
+                                <span>${doc.status === 'processing' ? 'Processing...' : 'Queued'}</span>
+                                <span>${Math.round(progress)}%</span>
+                            </div>
+                            <div class="w-full h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                                <div class="h-full bg-blue-500 transition-all duration-300" style="width: ${progress}%"></div>
+                            </div>
+                        </div>
+                    `;
+                }
+                
                 // Status UI Element
                 let statusHtml = '';
-                if (isUploading) {
-                    statusHtml = `<span class="text-blue-400 font-medium flex items-center text-[10px] mt-1.5"><i class="fas fa-spinner fa-spin mr-1.5"></i> Uploading...</span>`;
+                if (isProcessing) {
+                    statusHtml = `<span class="text-blue-400 font-medium flex items-center text-[10px] mt-1.5"><i class="fas fa-${doc.status === 'processing' ? 'cog fa-spin' : 'clock'} mr-1.5"></i> ${doc.status.charAt(0).toUpperCase() + doc.status.slice(1)}</span>`;
                 } else if (isFailed) {
                     statusHtml = `<span class="text-red-400 font-medium flex items-center text-[10px] mt-1.5"><i class="fas fa-exclamation-circle mr-1.5"></i> Failed</span>`;
                 } else {
@@ -451,7 +530,7 @@
 
                 li.innerHTML = `
                     <div class="mr-3 p-2.5 bg-slate-800 group-hover:bg-blue-600/20 group-hover:text-blue-400 rounded-lg text-slate-400 transition-colors mt-0.5">
-                        <i class="fas ${isUploading ? 'fa-cloud-upload-alt text-blue-400' : isFailed ? 'fa-file-pdf text-red-400' : 'fa-file-pdf'}"></i>
+                        <i class="fas ${isProcessing ? 'fa-cog text-blue-400' : isFailed ? 'fa-file-pdf text-red-400' : 'fa-file-pdf'}"></i>
                     </div>
                     <div class="flex-1 min-w-0">
                         <h3 class="text-sm font-medium text-slate-200 truncate group-hover:text-white transition-colors" title="${doc.name}">${doc.name}</h3>
@@ -461,8 +540,9 @@
                         </p>
                         <p class="text-[10px] text-slate-500 mt-0.5">${doc.date}</p>
                         ${statusHtml}
+                        ${progressHtml}
                     </div>
-                    ${!isUploading && !isFailed ? `
+                    ${isCompleted ? `
                     <div class="opacity-0 group-hover:opacity-100 transition-opacity text-slate-400 hover:text-white self-center">
                         <i class="fas fa-plus-circle text-sm"></i>
                     </div>
