@@ -78,7 +78,8 @@ services:
       - DATABASE_URL=postgresql://postgres:postgres_password_change_me@postgres-financial:5432/annual_reports
       - PYTHONUNBUFFERED=1
     depends_on:
-      - postgres-financial
+      postgres-financial:
+        condition: service_healthy
     restart: unless-stopped
     deploy:
       resources:
