@@ -44,11 +44,15 @@ class DocumentService:
         filename: str,
         file_path: str,
         uploader: str = "System",
-        file_size: int = 0
+        file_size: int = 0,
+        replace: bool = False  # 👈 新增 replace 參數
     ) -> str:
         """
         Add a document to the database and queue for processing.
         
+        Args:
+            replace: 是否強制重新處理 (覆蓋已存在的文檔)
+            
         Returns:
             document_id: Unique identifier for the document
         """
@@ -67,6 +71,7 @@ class DocumentService:
             "progress": 0.0,
             "error_message": None,
             "created_at": datetime.now().isoformat(),
+            "replace": replace,  # 👈 存儲 replace 標記
         }
         
         # Add to processing queue
@@ -124,7 +129,8 @@ class DocumentService:
                         pdf_path=doc["path"], 
                         company_id=company_id,
                         doc_id=doc_id,
-                        progress_callback=update_progress  # 👈 新增這行
+                        progress_callback=update_progress,
+                        replace=doc.get("replace", False)  # 👈 傳遞 replace 參數
                     )
                     
                     await processor.close()

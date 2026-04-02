@@ -170,7 +170,8 @@ async def upload_document(
                 filename=file.filename,
                 file_path=str(file_path),
                 uploader=username,
-                file_size=actual_size
+                file_size=actual_size,
+                replace=replace  # 👈 傳遞 replace 參數
             )
             
             uploaded_files.append({

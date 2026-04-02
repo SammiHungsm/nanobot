@@ -48,7 +48,7 @@ logger.remove()
 logger.add(
     sys.stdout,
     format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
-    level="INFO"
+    level=os.getenv("LOG_LEVEL", "INFO")
 )
 
 # Global Vanna instance
@@ -93,6 +93,55 @@ def get_db_connection():
     )
 
 
+def load_openai_api_key() -> Optional[str]:
+    """Load OpenAI API key from config file or environment variable"""
+    # Try to load from config file first (following nanobot pattern)
+    config_paths = [
+        Path("/app/config/config.json"),           # Docker mounted config
+        Path("/root/.nanobot/config.json"),        # User nanobot config
+        Path(os.path.expanduser("~/.nanobot/config.json")),  # Fallback home dir
+    ]
+    
+    logger.info(f"🔍 Searching for config file in {len(config_paths)} locations...")
+    
+    for config_path in config_paths:
+        logger.debug(f"  Checking: {config_path}")
+        if config_path.exists():
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                
+                logger.info(f"✅ Found config file at {config_path}")
+                
+                # Check for OpenAI key in providers.openai.api_key
+                if 'providers' in config and 'openai' in config['providers']:
+                    api_key = config['providers']['openai'].get('api_key')
+                    if api_key and api_key != "YOUR_OPENAI_API_KEY_HERE":
+                        logger.info(f"✅ Loaded OpenAI API key from {config_path}")
+                        return api_key
+                    elif api_key == "YOUR_OPENAI_API_KEY_HERE":
+                        logger.warning(f"⚠️ Config has placeholder key at {config_path}, please replace with real API key")
+                
+                # Check for OpenAI key in providers.custom.api_key (fallback)
+                if 'providers' in config and 'custom' in config['providers']:
+                    api_key = config['providers']['custom'].get('api_key')
+                    if api_key:
+                        logger.info(f"✅ Loaded API key from providers.custom in {config_path}")
+                        return api_key
+                        
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to load config from {config_path}: {e}")
+        else:
+            logger.debug(f"  ❌ Not found: {config_path}")
+    
+    # Fallback to environment variable
+    api_key = os.getenv("OPENAI_API_KEY")
+    if api_key:
+        logger.info("✅ Loaded OPENAI_API_KEY from environment variable")
+    
+    return api_key
+
+
 def initialize_vanna() -> bool:
     """Initialize Vanna AI with ChromaDB and OpenAI"""
     global vn
@@ -102,10 +151,14 @@ def initialize_vanna() -> bool:
         return False
     
     try:
-        # Get configuration from environment
-        openai_api_key = os.getenv("OPENAI_API_KEY")
+        # Get configuration from config file or environment
+        openai_api_key = load_openai_api_key()
         if not openai_api_key:
             logger.error("❌ OPENAI_API_KEY not set. Vanna requires OpenAI API key.")
+            logger.error("   Please set it in:")
+            logger.error("   - /app/config/config.json (providers.openai.api_key)")
+            logger.error("   - ~/.nanobot/config.json (providers.openai.api_key)")
+            logger.error("   - Or environment variable OPENAI_API_KEY")
             return False
         
         config = {
@@ -187,31 +240,36 @@ def train_vanna_on_schema():
         for table in tables:
             table_name = table['table_name']
             
-            # Get DDL for each table using pg_get_tabledef
+            # Get table structure from information_schema (compatible with all PostgreSQL versions)
             try:
-                cursor.execute(f"SELECT pg_get_tabledef('{table_name}') as ddl")
-                ddl_result = cursor.fetchone()
+                cursor.execute("""
+                    SELECT column_name, data_type, is_nullable, character_maximum_length
+                    FROM information_schema.columns
+                    WHERE table_name = %s
+                    ORDER BY ordinal_position
+                """, (table_name,))
                 
-                if ddl_result and ddl_result['ddl']:
-                    ddl = str(ddl_result['ddl'])
+                columns = cursor.fetchall()
+                
+                if columns:
+                    # Build CREATE TABLE statement
+                    col_defs = []
+                    for c in columns:
+                        col_type = c['data_type']
+                        if col_type == 'character varying' and c['character_maximum_length']:
+                            col_type = f"varchar({c['character_maximum_length']})"
+                        elif col_type == 'character' and c['character_maximum_length']:
+                            col_type = f"char({c['character_maximum_length']})"
+                        
+                        nullable = "NULL" if c['is_nullable'] == 'YES' else "NOT NULL"
+                        col_defs.append(f"    {c['column_name']} {col_type} {nullable}")
+                    
+                    ddl = f"CREATE TABLE {table_name} (\n" + ",\n".join(col_defs) + "\n);"
                     vn.train(ddl=ddl)
                     trained_count += 1
                     logger.info(f"   ✅ Trained: {table_name}")
                 else:
-                    # Fallback: Get table structure from information_schema
-                    cursor.execute("""
-                        SELECT column_name, data_type, is_nullable
-                        FROM information_schema.columns
-                        WHERE table_name = %s
-                        ORDER BY ordinal_position
-                    """, (table_name,))
-                    
-                    columns = cursor.fetchall()
-                    col_defs = [f"{c['column_name']} {c['data_type']}" for c in columns]
-                    ddl = f"CREATE TABLE {table_name} (\n  " + ",\n  ".join(col_defs) + "\n)"
-                    vn.train(ddl=ddl)
-                    trained_count += 1
-                    logger.info(f"   ✅ Trained (fallback): {table_name}")
+                    logger.warning(f"   ⚠️ No columns found for {table_name}")
                     
             except Exception as e:
                 logger.warning(f"   ⚠️ Failed to train {table_name}: {e}")

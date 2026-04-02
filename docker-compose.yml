@@ -53,6 +53,11 @@ services:
       - LOG_LEVEL=DEBUG
       - HTTPX_LOG_LEVEL=DEBUG
       - DATABASE_URL=postgresql://postgres:postgres_password_change_me@postgres-financial:5432/annual_reports
+    volumes:
+      - ./config:/app/config
+      - ~/.nanobot:/root/.nanobot
+      - ./data/uploads:/app/uploads  # Share uploads with webui
+      - ./data/raw:/app/data/raw      # Share processed data with webui
     depends_on:
       postgres-financial:
         condition: service_healthy
@@ -70,9 +75,9 @@ services:
     container_name: nanobot-webui
     command: ["python", "-m", "app.main"]
     volumes:
-      - pdf_upload_data:/app/uploads
-      - ./webui/uploads:/app/uploads
-      - ./webui/outputs:/app/outputs
+      # Use bind mounts for persistence (survives container restarts)
+      - ./data/uploads:/app/uploads
+      - ./data/outputs:/app/outputs
       - ./data/raw:/app/data/raw
       - ./nanobot:/app/nanobot:ro  # Mount nanobot package as read-only
     ports:
@@ -85,6 +90,8 @@ services:
       - DATA_DIR=/app/data/raw
       - PYTHONUNBUFFERED=1
       - PYTHONPATH=/app
+      - JAVA_OPTS=-Xmx2g -Xms512m  # Java heap for OpenDataLoader (2GB max, 512MB min)
+      - _JAVA_OPTIONS=-Xmx2g -Xms512m
     depends_on:
       postgres-financial:
         condition: service_healthy
@@ -92,8 +99,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '0.5'
-          memory: 512M
+          cpus: '2'
+          memory: 4G  # Increased from 512M to 4GB for PDF processing with images
   
   # Vanna AI Service - Text-to-SQL with persistence
   vanna-service:
@@ -103,9 +110,12 @@ services:
     container_name: vanna-service
     volumes:
       - vanna_data:/app/data
+      - ./config:/app/config
+      - ~/.nanobot:/root/.nanobot
     environment:
       - DATABASE_URL=postgresql://postgres:postgres_password_change_me@postgres-financial:5432/annual_reports
       - VANNA_MODEL=financial-sql
+      - LOG_LEVEL=DEBUG
     depends_on:
       - postgres-financial
     restart: unless-stopped

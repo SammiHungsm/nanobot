@@ -12,11 +12,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install dependencies
+# 1. 鎖定 vanna 0.7.x 版本（使用經典的 chromadb 架構）
+# 2. 限制 numpy<2.0.0 避免 ChromaDB 崩潰
+# 3. vanna[chromadb,postgres] 已經包含 chromadb 和 psycopg2，但需要額外安裝 openai
+# 4. vanna[openai] 包含 openai 依賴
 RUN pip install --no-cache-dir \
-    vanna[chromadb,postgres] \
-    psycopg2-binary \
+    "vanna[chromadb,postgres,openai]>=0.7.0,<1.0.0" \
+    "numpy<2.0.0" \
     pandas \
-    chromadb \
     loguru \
     fastapi \
     uvicorn

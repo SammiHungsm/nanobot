@@ -58,7 +58,7 @@ class OpenDataLoaderProcessor:
             await self.db_conn.close()
             logger.info("📴 數據庫連接已關閉")
     
-    async def process_pdf(self, pdf_path: str, company_id: int, doc_id: str, progress_callback=None) -> Dict[str, Any]:
+    async def process_pdf(self, pdf_path: str, company_id: int, doc_id: str, progress_callback=None, replace: bool = False) -> Dict[str, Any]:
         """
         處理單一 PDF 文檔
         
@@ -67,12 +67,13 @@ class OpenDataLoaderProcessor:
             company_id: 公司 ID
             doc_id: 文檔唯一標識
             progress_callback: 進度回調函數 (percent: float, message: str)
+            replace: 是否強制重新處理 (跳過去重檢查，刪除舊數據)
             
         Returns:
             處理結果統計
         """
         logger.info(f"🚀 開始處理 PDF: {pdf_path}")
-        logger.info(f"   Company ID: {company_id}, Doc ID: {doc_id}")
+        logger.info(f"   Company ID: {company_id}, Doc ID: {doc_id}, Replace: {replace}")
         
         try:
             # 1. 計算文件 Hash (用於去重)
@@ -81,20 +82,22 @@ class OpenDataLoaderProcessor:
             file_hash = self._compute_file_hash(pdf_path)
             logger.info(f"   📝 File Hash: {file_hash[:16]}...")
             
-            # 2. 檢查是否已處理
-            exists = await self._check_document_exists(doc_id, file_hash)
-            if exists:
-                logger.warning(f"⚠️ 文檔已存在，跳過處理: {doc_id}")
-                return {"status": "skipped", "reason": "duplicate"}
+            # 2. 檢查是否已處理 (如果 replace=True，則跳過檢查並清理舊數據)
+            if replace:
+                logger.info(f"🔄 Replace mode: 清理舊數據並重新處理...")
+                await self._delete_existing_document(doc_id)
+            else:
+                exists = await self._check_document_exists(doc_id, file_hash)
+                if exists:
+                    logger.warning(f"⚠️ 文檔已存在，跳過處理: {doc_id}")
+                    return {"status": "skipped", "reason": "duplicate"}
             
             # 3. 創建文檔記錄
             await self._create_document_record(pdf_path, company_id, doc_id, file_hash)
             logger.info("✅ 文檔記錄已創建")
             
             # 4. 使用 OpenDataLoader 解析 PDF (這是最花時間的一步)
-            if progress_callback:
-                progress_callback(20.0, "OpenDataLoader 解析 PDF 中 (可能需要幾分鐘)...")
-            artifacts = await self._parse_with_opendataloader(pdf_path, doc_id)
+            artifacts = await self._parse_with_opendataloader(pdf_path, doc_id, progress_callback)
             logger.info(f"📊 解析完成：{len(artifacts)} 個 artifacts")
             
             # 🚀 把解析出來的 Raw Data (artifacts) 存成 output.json 給 WebUI 讀取
@@ -164,6 +167,40 @@ class OpenDataLoaderProcessor:
         )
         return exists
     
+    async def _delete_existing_document(self, doc_id: str):
+        """刪除現有文檔及其所有相關數據"""
+        logger.info(f"🗑️ 正在刪除文檔 {doc_id} 的所有數據...")
+        
+        # 1. 刪除 document_chunks
+        chunks_deleted = await self.db_conn.execute(
+            "DELETE FROM document_chunks WHERE doc_id = $1",
+            doc_id
+        )
+        logger.info(f"   📝 已刪除 document_chunks")
+        
+        # 2. 刪除 raw_artifacts
+        artifacts_deleted = await self.db_conn.execute(
+            "DELETE FROM raw_artifacts WHERE doc_id = $1",
+            doc_id
+        )
+        logger.info(f"   📦 已刪除 raw_artifacts")
+        
+        # 3. 刪除 documents 主表記錄
+        doc_deleted = await self.db_conn.execute(
+            "DELETE FROM documents WHERE doc_id = $1",
+            doc_id
+        )
+        logger.info(f"   📄 已刪除 documents")
+        
+        # 4. 刪除物理文件 (data_dir/{doc_id}/)
+        doc_dir = self.data_dir / doc_id
+        if doc_dir.exists():
+            import shutil
+            shutil.rmtree(doc_dir)
+            logger.info(f"   📁 已刪除物理文件: {doc_dir}")
+        
+        logger.info(f"✅ 文檔 {doc_id} 已完全刪除")
+    
     async def _create_document_record(self, pdf_path: str, company_id: int, doc_id: str, file_hash: str):
         """創建文檔記錄"""
         pdf_path_obj = Path(pdf_path)
@@ -189,7 +226,7 @@ class OpenDataLoaderProcessor:
             "pending"
         )
     
-    async def _parse_with_opendataloader(self, pdf_path: str, doc_id: str) -> List[Dict[str, Any]]:
+    async def _parse_with_opendataloader(self, pdf_path: str, doc_id: str, progress_callback=None) -> List[Dict[str, Any]]:
         """
         使用真實的 OpenDataLoader 解析 PDF，並將結果轉換為 Artifacts
         
@@ -214,7 +251,7 @@ class OpenDataLoaderProcessor:
                         convert(pdf_path, str(out_path))
                     
                     if out_path.exists():
-                        # 【修改部分開始】判斷是檔案還是資料夾
+                        # 判斷是檔案還是資料夾
                         if out_path.is_dir():
                             # 如果 OpenDataLoader 建立了一個資料夾，尋找裡面的 json 檔案
                             json_files = list(out_path.glob("*.json"))
@@ -225,21 +262,24 @@ class OpenDataLoaderProcessor:
                                     return json.load(f)
                             else:
                                 logger.error(f"❌ 轉換完成，但在目錄 {out_path} 中找不到 JSON 檔案")
-                                return {"content": []}
+                                return []
                         else:
                             # 如果它正常輸出為一個檔案
                             with open(out_path, 'r', encoding='utf-8') as f:
                                 return json.load(f)
-                        # 【修改部分結束】
                     else:
                         logger.error("❌ 轉換完成，但找不到輸出的檔案或目錄")
-                        return {"content": []}
+                        return []
                 except Exception as e:
                     logger.error(f"❌ PDF 轉換引擎發生錯誤：{e}")
                     traceback.print_exc()
-                    return {"content": []}
+                    return []
         
         # 2. 由於 PDF 處理會阻塞 (Blocking)，使用 to_thread 將其放入背景執行緒
+        # 報告進度：開始解析
+        if progress_callback:
+            progress_callback(20.0, "OpenDataLoader 解析 PDF 中 (可能需要幾分鐘)...")
+        
         result_json = await asyncio.to_thread(run_conversion)
         
         # 💡 保存完整的 OpenDataLoader 原始 JSON 到 data_dir，供前端預覽使用
@@ -249,41 +289,148 @@ class OpenDataLoaderProcessor:
             json.dump(result_json, f, ensure_ascii=False, indent=2)
         logger.info(f"💾 已保存 OpenDataLoader 原始輸出：{output_json_path}")
         
+        # 報告進度：解析完成，正在轉換
+        if progress_callback:
+            progress_callback(50.0, "解析完成，正在轉換資料格式...")
+        
         # 3. 將解析出來的 JSON 轉換為 Artifacts 格式
         artifacts = []
-        content_blocks = result_json.get("content", [])
+        
+        # 處理 OpenDataLoader 的不同輸出格式：
+        # - 可能是 list: [{...}, {...}]
+        # - 可能是 dict: {"kids": [{...}, {...}], "file name": "...", ...}
+        # - 可能是 dict: {"content": [{...}, {...}]}
+        if isinstance(result_json, list):
+            # 直接是列表格式
+            content_blocks = result_json
+            logger.info(f"📄 OpenDataLoader 返回列表格式，共 {len(content_blocks)} 個元素")
+        elif isinstance(result_json, dict):
+            # 字典格式，記錄所有可用的 keys
+            available_keys = list(result_json.keys())
+            logger.info(f"📄 OpenDataLoader 返回字典格式，可用 keys: {available_keys}")
+            
+            # OpenDataLoader 實際輸出格式: {"kids": [...], "file name": "...", "number of pages": ...}
+            # 優先檢查 "kids" (OpenDataLoader 標準輸出)
+            if "kids" in result_json:
+                content_blocks = result_json["kids"]
+                logger.info(f"   ✅ 使用 'kids' 欄位，共 {len(content_blocks)} 個元素")
+            elif "content" in result_json:
+                content_blocks = result_json["content"]
+                logger.info(f"   ✅ 使用 'content' 欄位，共 {len(content_blocks)} 個元素")
+            elif "pages" in result_json:
+                content_blocks = result_json["pages"]
+                logger.info(f"   ✅ 使用 'pages' 欄位，共 {len(content_blocks)} 個元素")
+            elif "elements" in result_json:
+                content_blocks = result_json["elements"]
+                logger.info(f"   ✅ 使用 'elements' 欄位，共 {len(content_blocks)} 個元素")
+            else:
+                logger.warning(f"   ⚠️ 未找到已知的內容欄位，嘗試從字典中提取所有值")
+                content_blocks = []
+        else:
+            logger.error(f"❌ OpenDataLoader 返回未知格式: {type(result_json)}")
+            content_blocks = []
         
         if not content_blocks:
             logger.warning(f"⚠️ 提取不到任何內容，請確認 {pdf_path} 是否為純圖片或空白。")
+            logger.warning(f"   提示：如果是掃描的 PDF，請確認 OCR 功能已啟用。")
+        else:
+            # 統計各類型的數量
+            type_counts = {}
+            for block in content_blocks:
+                if isinstance(block, dict):
+                    block_type = block.get("type", "unknown")
+                    type_counts[block_type] = type_counts.get(block_type, 0) + 1
+            logger.info(f"📊 內容類型統計: {type_counts}")
         
         for i, block in enumerate(content_blocks):
             if isinstance(block, dict):
                 block_type = block.get("type", "text")
-                # 嘗試抓取頁碼，如果沒有則預設為 1
-                page_num = block.get("metadata", {}).get("page", 1) if "metadata" in block else block.get("page", 1)
+                # OpenDataLoader 使用 "page number" (有空格)，也可能有 "page" 或 "page_num"
+                page_num = block.get("page number", block.get("page", block.get("page_num", 1)))
                 
                 if block_type == "table":
                     artifacts.append({
                         "type": "table",
                         "page_num": page_num,
                         "content_json": block,
-                        "metadata": {"source": "opendataloader", "original_index": i}
+                        "metadata": {
+                            "source": "opendataloader", 
+                            "original_index": i,
+                            "bounding_box": block.get("bounding box"),
+                            "id": block.get("id")
+                        }
                     })
                 elif block_type == "image":
-                    # 圖片暫時只存 metadata，不寫入二進制資料以免記憶體撐爆
+                    # OpenDataLoader 圖片格式 - 不存儲二進制數據，只存元數據
                     artifacts.append({
                         "type": "image",
                         "page_num": page_num,
-                        "image_data": b"", 
-                        "metadata": block.get("metadata", {})
+                        "metadata": {
+                            "source": "opendataloader",
+                            "image_source": block.get("source"),
+                            "bounding_box": block.get("bounding box"),
+                            "id": block.get("id")
+                        }
                     })
+                elif block_type in ["paragraph", "heading", "header", "footer"]:
+                    # 文字類型 - OpenDataLoader 使用 "content" 欄位存儲文字
+                    text_content = block.get("content", "")
+                    if text_content:
+                        artifacts.append({
+                            "type": "text_chunk",
+                            "page_num": page_num,
+                            "content": text_content,
+                            "metadata": {
+                                "source": "opendataloader", 
+                                "original_index": i,
+                                "block_type": block_type,
+                                "level": block.get("level") or block.get("heading level"),
+                                "font": block.get("font"),
+                                "font_size": block.get("font size"),
+                                "bounding_box": block.get("bounding box"),
+                                "id": block.get("id")
+                            }
+                        })
+                elif block_type == "list":
+                    # 列表類型 - 提取 list items 中的文字
+                    list_items = block.get("list items", [])
+                    list_text_parts = []
+                    for item in list_items:
+                        if isinstance(item, dict):
+                            item_text = item.get("content", item.get("text", ""))
+                            if item_text:
+                                list_text_parts.append(item_text)
+                    
+                    if list_text_parts:
+                        artifacts.append({
+                            "type": "text_chunk",
+                            "page_num": page_num,
+                            "content": " | ".join(list_text_parts),  # 用分隔符連接列表項
+                            "metadata": {
+                                "source": "opendataloader", 
+                                "original_index": i,
+                                "block_type": "list",
+                                "number_of_items": block.get("number of list items", len(list_items)),
+                                "bounding_box": block.get("bounding box"),
+                                "id": block.get("id")
+                            }
+                        })
                 else:
-                    artifacts.append({
-                        "type": "text_chunk",
-                        "page_num": page_num,
-                        "content": block.get("text", str(block)),
-                        "metadata": {"source": "opendataloader", "original_index": i}
-                    })
+                    # 其他類型 - 嘗試提取 content 或 text
+                    text_content = block.get("content", block.get("text", ""))
+                    if text_content:
+                        artifacts.append({
+                            "type": "text_chunk",
+                            "page_num": page_num,
+                            "content": str(text_content),
+                            "metadata": {
+                                "source": "opendataloader", 
+                                "original_index": i,
+                                "block_type": block_type,
+                                "bounding_box": block.get("bounding box"),
+                                "id": block.get("id")
+                            }
+                        })
             else:
                 # Fallback：給未知結構的資料
                 artifacts.append({
