@@ -109,14 +109,11 @@ class DocumentService:
                     )
                     
                     # Initialize OpenDataLoaderProcessor
-                    db_url = os.getenv("DATABASE_URL", "postgresql://postgres:postgres_password_change_me@postgres-financial:5432/financial_db")
+                    db_url = os.getenv("DATABASE_URL", "postgresql://postgres:postgres_password_change_me@postgres-financial:5432/annual_reports")
                     data_dir = os.getenv("DATA_DIR", "/app/data/raw")
                     
                     processor = OpenDataLoaderProcessor(db_url, data_dir)
                     await processor.connect()
-                    
-                    # Extract company_id from filename or use default
-                    company_id = 1  # TODO: Auto-generate or extract from filename
                     
                     # 💡 建立一個更新進度的 Callback 函式
                     def update_progress(percent: float, message: str):
@@ -125,9 +122,10 @@ class DocumentService:
                         self.add_processing_log(f"[{doc['filename']}] {message}", "info")
                     
                     # Run real processing (parses PDF, inserts to PostgreSQL, triggers Vanna)
+                    # company_id 會由 LLM 自動從文檔中提取
                     result = await processor.process_pdf(
                         pdf_path=doc["path"], 
-                        company_id=company_id,
+                        company_id=None,  # 由 LLM 自動提取
                         doc_id=doc_id,
                         progress_callback=update_progress,
                         replace=doc.get("replace", False)  # 👈 傳遞 replace 參數

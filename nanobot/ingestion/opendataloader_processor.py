@@ -6,14 +6,16 @@ OpenDataLoader Integration Module
 2. 提取所有 Raw Data (文字、表格、圖片)
 3. 保存檔案到 Docker Volume
 4. 將路徑和元數據寫入 PostgreSQL
+5. 使用 LLM 自動識別公司並提取關鍵信息
 """
 
 import os
 import json
 import hashlib
 import asyncio
+import re
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 from loguru import logger
 import asyncpg
@@ -58,13 +60,13 @@ class OpenDataLoaderProcessor:
             await self.db_conn.close()
             logger.info("📴 數據庫連接已關閉")
     
-    async def process_pdf(self, pdf_path: str, company_id: int, doc_id: str, progress_callback=None, replace: bool = False) -> Dict[str, Any]:
+    async def process_pdf(self, pdf_path: str, company_id: Optional[int] = None, doc_id: str = None, progress_callback=None, replace: bool = False) -> Dict[str, Any]:
         """
         處理單一 PDF 文檔
         
         Args:
             pdf_path: PDF 檔案路徑
-            company_id: 公司 ID
+            company_id: 公司 ID (可選，如未提供將從文檔中自動提取)
             doc_id: 文檔唯一標識
             progress_callback: 進度回調函數 (percent: float, message: str)
             replace: 是否強制重新處理 (跳過去重檢查，刪除舊數據)
@@ -73,12 +75,12 @@ class OpenDataLoaderProcessor:
             處理結果統計
         """
         logger.info(f"🚀 開始處理 PDF: {pdf_path}")
-        logger.info(f"   Company ID: {company_id}, Doc ID: {doc_id}, Replace: {replace}")
+        logger.info(f"   Company ID: {company_id or '待提取'}, Doc ID: {doc_id}, Replace: {replace}")
         
         try:
             # 1. 計算文件 Hash (用於去重)
             if progress_callback:
-                progress_callback(10.0, "計算 Hash 與檢查重複...")
+                progress_callback(5.0, "計算 Hash 與檢查重複...")
             file_hash = self._compute_file_hash(pdf_path)
             logger.info(f"   📝 File Hash: {file_hash[:16]}...")
             
@@ -92,11 +94,13 @@ class OpenDataLoaderProcessor:
                     logger.warning(f"⚠️ 文檔已存在，跳過處理: {doc_id}")
                     return {"status": "skipped", "reason": "duplicate"}
             
-            # 3. 創建文檔記錄
+            # 3. 創建文檔記錄 (company_id 可為 NULL)
             await self._create_document_record(pdf_path, company_id, doc_id, file_hash)
             logger.info("✅ 文檔記錄已創建")
             
             # 4. 使用 OpenDataLoader 解析 PDF (這是最花時間的一步)
+            if progress_callback:
+                progress_callback(10.0, "OpenDataLoader 解析 PDF 中...")
             artifacts = await self._parse_with_opendataloader(pdf_path, doc_id, progress_callback)
             logger.info(f"📊 解析完成：{len(artifacts)} 個 artifacts")
             
@@ -108,18 +112,34 @@ class OpenDataLoaderProcessor:
                 json.dump(artifacts, f, ensure_ascii=False, indent=2)
             logger.info(f"💾 已保存 artifacts 到：{output_json_path}")
             
-            # 5. 保存 Raw Artifacts 並更新數據庫
+            # 5. 🧠 如果沒有提供 company_id，使用 LLM 從文檔中提取公司信息
+            if company_id is None:
+                if progress_callback:
+                    progress_callback(55.0, "🧠 使用 LLM 提取公司信息...")
+                company_info = await self._extract_company_info_with_llm(artifacts, output_json_path)
+                if company_info:
+                    company_id = await self._find_or_create_company(company_info)
+                    if company_id:
+                        # 更新文檔的 company_id
+                        await self._update_document_company(doc_id, company_id)
+                        logger.info(f"✅ 已關聯公司: ID={company_id}, Name={company_info.get('name_en', 'N/A')}")
+                    else:
+                        logger.warning(f"⚠️ 無法創建公司記錄，將使用 NULL company_id")
+                else:
+                    logger.warning(f"⚠️ 無法從文檔中提取公司信息，將使用 NULL company_id")
+            
+            # 6. 保存 Raw Artifacts 並更新數據庫
             if progress_callback:
                 progress_callback(60.0, f"解析完成，準備寫入資料庫 (共 {len(artifacts)} 筆)...")
             stats = await self._save_artifacts(artifacts, company_id, doc_id, progress_callback)
             logger.info(f"💾 保存完成：{stats}")
             
-            # 6. 更新文檔狀態
+            # 7. 更新文檔狀態
             if progress_callback:
                 progress_callback(86.0, "更新狀態與清理暫存...")
             await self._update_document_status(doc_id, "completed", stats)
             
-            # 7. 觸發 Vanna 訓練 (邊做邊學)
+            # 8. 觸發 Vanna 訓練 (邊做邊學)
             if progress_callback:
                 progress_callback(90.0, "準備觸發 Vanna 向量模型訓練...")
             await self._trigger_vanna_training(doc_id, progress_callback)
@@ -130,6 +150,7 @@ class OpenDataLoaderProcessor:
             return {
                 "status": "completed",
                 "doc_id": doc_id,
+                "company_id": company_id,
                 **stats
             }
             
@@ -201,8 +222,8 @@ class OpenDataLoaderProcessor:
         
         logger.info(f"✅ 文檔 {doc_id} 已完全刪除")
     
-    async def _create_document_record(self, pdf_path: str, company_id: int, doc_id: str, file_hash: str):
-        """創建文檔記錄"""
+    async def _create_document_record(self, pdf_path: str, company_id: Optional[int], doc_id: str, file_hash: str):
+        """創建文檔記錄 (company_id 可為 NULL)"""
         pdf_path_obj = Path(pdf_path)
         
         await self.db_conn.execute(
@@ -217,7 +238,7 @@ class OpenDataLoaderProcessor:
                 updated_at = NOW()
             """,
             doc_id,
-            company_id,
+            company_id,  # 可為 NULL
             pdf_path_obj.stem,  # 使用文件名作為標題
             "annual_report",
             str(pdf_path_obj.absolute()),
@@ -698,6 +719,144 @@ class OpenDataLoaderProcessor:
             logger.warning(f"⚠️ Vanna 訓練觸發失敗：{e}")
             if progress_callback:
                 progress_callback(90.0, "Vanna 連線超時或失敗")
+
+    async def _extract_company_info_with_llm(self, artifacts: List[Dict], output_json_path: Path) -> Optional[Dict[str, Any]]:
+        """
+        使用 LLM 從文檔內容中提取公司信息
+        
+        Returns:
+            Dict with keys: stock_code, name_en, name_zh, industry, sector (all optional)
+        """
+        try:
+            # 1. 收集前幾頁的文字內容（通常公司信息在開頭）
+            text_content = []
+            for artifact in artifacts[:50]:  # 只取前 50 個 artifacts
+                if artifact.get("type") == "text_chunk":
+                    content = artifact.get("content", "")
+                    if content and len(content) > 20:
+                        text_content.append(content)
+            
+            if not text_content:
+                logger.warning("⚠️ 沒有足夠的文字內容進行公司信息提取")
+                return None
+            
+            combined_text = "\n\n".join(text_content[:10])  # 只取前 10 段
+            # 限制長度避免 token 過多
+            if len(combined_text) > 5000:
+                combined_text = combined_text[:5000]
+            
+            # 2. 調用 LLM API 提取公司信息
+            llm_api_url = os.getenv("LLM_API_URL", "http://vanna-service:8082/api/extract")
+            
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    llm_api_url,
+                    json={
+                        "text": combined_text,
+                        "extract_type": "company_info"
+                    }
+                )
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    company_info = result.get("company_info", {})
+                    logger.info(f"🧠 LLM 提取的公司信息: {company_info}")
+                    return company_info
+                else:
+                    logger.warning(f"⚠️ LLM API 返回錯誤: {response.status_code}")
+                    # Fallback: 嘗試從文本中用正則提取股票代碼
+                    return self._extract_stock_code_fallback(combined_text)
+        
+        except httpx.RequestError as e:
+            logger.warning(f"⚠️ 無法連接 LLM API: {e}")
+            # Fallback: 嘗試從文本中用正則提取股票代碼
+            text_content = "\n".join([a.get("content", "") for a in artifacts[:20] if a.get("type") == "text_chunk"])
+            return self._extract_stock_code_fallback(text_content)
+        except Exception as e:
+            logger.error(f"❌ LLM 提取失敗: {e}")
+            return None
+    
+    def _extract_stock_code_fallback(self, text: str) -> Optional[Dict[str, Any]]:
+        """後備方案：使用正則表達式從文本中提取股票代碼"""
+        # 港股格式: 00001, 00700, 0700.HK 等
+        hk_pattern = r'\b(\d{4,5})(?:\.HK)?\b'
+        #美股格式: AAPL, MSFT 等
+        us_pattern = r'\b([A-Z]{2,5})\b'
+        
+        matches = re.findall(hk_pattern, text)
+        if matches:
+            # 過濾掉明顯不是股票代碼的數字（如年份、頁碼等）
+            for match in matches:
+                code_num = int(match)
+                if 1 <= code_num <= 99999 and code_num > 1000:  # 股票代碼通常在 0001-99999 範圍
+                    stock_code = match.zfill(5) + ".HK"
+                    logger.info(f"📝 正則提取的股票代碼: {stock_code}")
+                    return {"stock_code": stock_code}
+        
+        return None
+    
+    async def _find_or_create_company(self, company_info: Dict[str, Any]) -> Optional[int]:
+        """
+        根據公司信息查找或創建公司記錄
+        
+        Returns:
+            company_id
+        """
+        stock_code = company_info.get("stock_code")
+        name_en = company_info.get("name_en")
+        name_zh = company_info.get("name_zh")
+        
+        if not stock_code and not name_en:
+            logger.warning("⚠️ 缺少股票代碼和公司名稱，無法創建公司記錄")
+            return None
+        
+        try:
+            # 1. 先嘗試查找現有公司
+            if stock_code:
+                existing_id = await self.db_conn.fetchval(
+                    "SELECT id FROM companies WHERE stock_code = $1",
+                    stock_code
+                )
+                if existing_id:
+                    logger.info(f"✅ 找到現有公司: ID={existing_id}, Stock Code={stock_code}")
+                    return existing_id
+            
+            if name_en:
+                existing_id = await self.db_conn.fetchval(
+                    "SELECT id FROM companies WHERE name_en ILIKE $1",
+                    f"%{name_en}%"
+                )
+                if existing_id:
+                    logger.info(f"✅ 找到現有公司: ID={existing_id}, Name={name_en}")
+                    return existing_id
+            
+            # 2. 創建新公司
+            new_id = await self.db_conn.fetchval(
+                """
+                INSERT INTO companies (name_en, name_zh, stock_code, industry, sector)
+                VALUES ($1, $2, $3, $4, $5)
+                RETURNING id
+                """,
+                name_en or f"Company_{stock_code or 'Unknown'}",
+                name_zh,
+                stock_code,
+                company_info.get("industry"),
+                company_info.get("sector")
+            )
+            logger.info(f"✅ 創建新公司: ID={new_id}, Stock Code={stock_code}, Name={name_en}")
+            return new_id
+            
+        except Exception as e:
+            logger.error(f"❌ 查找/創建公司失敗: {e}")
+            return None
+    
+    async def _update_document_company(self, doc_id: str, company_id: int):
+        """更新文檔的 company_id"""
+        await self.db_conn.execute(
+            "UPDATE documents SET company_id = $1, updated_at = NOW() WHERE doc_id = $2",
+            company_id,
+            doc_id
+        )
 
 
 async def main():

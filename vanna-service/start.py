@@ -84,6 +84,12 @@ class AskRequest(BaseModel):
     include_summary: bool = True
 
 
+class ExtractRequest(BaseModel):
+    """Extraction request model"""
+    text: str
+    extract_type: str = "company_info"  # company_info | financial_metrics | key_personnel
+
+
 class AskResponse(BaseModel):
     """Query response model"""
     question: str
@@ -800,6 +806,115 @@ async def train_with_sql(question: str, sql: str):
     except Exception as e:
         logger.error(f"❌ SQL 訓練失敗：{e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/extract")
+async def extract_info(request: ExtractRequest):
+    """
+    使用 LLM 從文本中提取結構化信息
+    
+    Args:
+        text: 要提取的文本內容
+        extract_type: 提取類型 (company_info | financial_metrics | key_personnel)
+    
+    Returns:
+        提取的結構化數據
+    """
+    if vn is None:
+        # Fallback: 使用正則表達式提取
+        return _extract_with_regex(request.text, request.extract_type)
+    
+    try:
+        logger.info(f"🔍 提取信息：type={request.extract_type}")
+        
+        if request.extract_type == "company_info":
+            # 構建提取公司信息的 prompt
+            prompt = f"""從以下財報內容中提取公司信息，返回 JSON 格式。
+
+需要提取的信息：
+- stock_code: 股票代碼（港股格式如 00001, 00700 等）
+- name_en: 公司英文名稱
+- name_zh: 公司中文名稱
+- industry: 所屬行業
+- sector: 所屬板塊
+
+文本內容：
+{request.text[:3000]}
+
+請只返回 JSON 格式，不要包含其他說明。如果無法提取某個字段，請返回 null。
+
+示例輸出：
+{{"stock_code": "00001", "name_en": "CK Hutchison Holdings Limited", "name_zh": "長江和記實業有限公司", "industry": "Conglomerates", "sector": "Conglomerates"}}
+"""
+            
+            # 使用 Vanna 的 LLM 進行提取
+            response = vn.client.chat.completions.create(
+                model=vn.config.get('model', 'gpt-4o-mini'),
+                messages=[
+                    {"role": "system", "content": "你是一個專業的財報分析助手，擅長從財報中提取結構化信息。只返回 JSON 格式，不要包含其他說明。"},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.1,
+                max_tokens=500
+            )
+            
+            result_text = response.choices[0].message.content.strip()
+            
+            # 嘗試解析 JSON
+            try:
+                # 移除可能的 markdown 代碼塊標記
+                if result_text.startswith("```"):
+                    result_text = result_text.split("```")[1]
+                    if result_text.startswith("json"):
+                        result_text = result_text[4:]
+                
+                import json
+                company_info = json.loads(result_text)
+                logger.info(f"✅ 提取成功：{company_info}")
+                return {"company_info": company_info}
+            except json.JSONDecodeError:
+                logger.warning(f"⚠️ JSON 解析失敗，嘗試正則提取")
+                return _extract_with_regex(request.text, request.extract_type)
+        
+        else:
+            # 其他類型的提取（未來擴展）
+            return {"extracted_data": None, "message": f"Extract type '{request.extract_type}' not implemented yet"}
+    
+    except Exception as e:
+        logger.error(f"❌ 信息提取失敗：{e}")
+        import traceback
+        traceback.print_exc()
+        # Fallback to regex extraction
+        return _extract_with_regex(request.text, request.extract_type)
+
+
+def _extract_with_regex(text: str, extract_type: str) -> dict:
+    """使用正則表達式提取信息（後備方案）"""
+    import re
+    
+    if extract_type == "company_info":
+        # 港股格式: 00001, 00700 等
+        hk_pattern = r'\b(\d{4,5})(?:\.HK)?\b'
+        matches = re.findall(hk_pattern, text)
+        
+        stock_code = None
+        for match in matches:
+            code_num = int(match)
+            if 1 <= code_num <= 99999 and code_num > 1000:
+                stock_code = match.zfill(5)
+                break
+        
+        return {
+            "company_info": {
+                "stock_code": stock_code,
+                "name_en": None,
+                "name_zh": None,
+                "industry": None,
+                "sector": None
+            }
+        }
+    
+    return {"extracted_data": None}
 
 
 if __name__ == "__main__":

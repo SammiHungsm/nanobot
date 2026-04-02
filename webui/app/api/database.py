@@ -17,7 +17,7 @@ async def get_db_pool():
     global _db_pool
     
     if _db_pool is None:
-        db_url = os.getenv("DATABASE_URL", "postgresql://postgres:postgres_password_change_me@postgres-financial:5432/financial_db")
+        db_url = os.getenv("DATABASE_URL", "postgresql://postgres:postgres_password_change_me@postgres-financial:5432/annual_reports")
         _db_pool = await asyncpg.create_pool(db_url, min_size=2, max_size=10)
     
     return _db_pool
