@@ -52,6 +52,7 @@ dependencies = [
     "asyncpg>=0.29.0",
     "psycopg2-binary>=2.9.11",
     "vanna[postgres]>=2.0.2",
+    "PyMuPDF>=1.23.0",  # PDF转图片用于Vision解析
 ]
 
 [project.optional-dependencies]
