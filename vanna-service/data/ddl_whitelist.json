@@ -4,11 +4,17 @@
   "allowed_tables": [
     {
       "name": "companies",
-      "allowed_columns": ["id", "name_en", "name_zh", "stock_code", "industry", "sector", "auditor", "auditor_opinion", "ultimate_controlling_shareholder", "principal_banker", "listing_status", "listing_date"]
+      "allowed_columns": ["id", "stock_code", "name_en_index", "name_en_extracted", "name_zh_extracted", "name_en", "name_zh", "industry", "sector", "auditor", "auditor_opinion", "ultimate_controlling_shareholder", "principal_banker", "listing_status", "listing_date"]
+    },
+    {
+      "name": "v_companies_resolved",
+      "allowed_columns": ["id", "stock_code", "display_name_en", "display_name_zh", "industry", "sector", "auditor", "auditor_opinion", "ultimate_controlling_shareholder", "principal_banker", "listing_status", "listing_date"],
+      "note": "Recommended view for Vanna queries - automatically selects best company name (index > extracted)"
     },
     {
       "name": "financial_metrics",
-      "allowed_columns": ["id", "company_id", "year", "fiscal_period", "metric_name", "metric_name_zh", "value", "unit", "category", "source_file", "source_page"]
+      "allowed_columns": ["id", "company_id", "year", "fiscal_period", "metric_name", "metric_name_zh", "original_metric_name", "value", "unit", "standardized_value", "standardized_currency", "category", "source_file", "source_page"],
+      "critical_note": "For cross-company comparisons (ranking, top N), ALWAYS use standardized_value. NEVER compare raw value directly as units differ across companies."
     },
     {
       "name": "market_data",
@@ -41,14 +47,6 @@
     {
       "name": "document_pages",
       "allowed_columns": ["id", "company_id", "doc_id", "year", "page_num", "markdown_content", "content_type", "has_images", "has_charts", "source_file"]
-    },
-    {
-      "name": "documents",
-      "allowed_columns": ["id", "doc_id", "company_id", "title", "document_type", "year", "file_path", "processing_status", "uploaded_at", "updated_at", "file_hash", "file_size_bytes", "processing_error", "processing_completed_at", "total_chunks", "total_artifacts"]
-    },
-    {
-      "name": "raw_artifacts",
-      "allowed_columns": ["id", "artifact_id", "doc_id", "company_id", "file_type", "file_path", "file_size_bytes", "metadata", "page_num", "source_file"]
     }
   ],
   "forbidden_keywords": ["DROP", "TRUNCATE", "DELETE FROM companies", "DELETE FROM financial_metrics", "UPDATE companies SET", "INSERT INTO companies"],

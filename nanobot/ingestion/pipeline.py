@@ -13,6 +13,9 @@ Two-Stage LLM Pipeline:
 3. Agent: LLM 提取結構化數據
 4. Validator: 數據驗證
 5. Repository: 數據入庫
+
+改進：
+- 跨頁表格合併：自動檢測並合併跨頁表格
 """
 
 import os
@@ -28,6 +31,130 @@ from loguru import logger
 from .parsers.vision_parser import VisionParser, FastParser
 from .extractors.financial_agent import FinancialAgent
 from .extractors.page_classifier import PageClassifier
+
+
+# ===========================================
+# 跨頁表格合併工具
+# ===========================================
+
+class CrossPageTableMerger:
+    """
+    跨頁表格合併器
+    
+    檢測並合併跨頁表格：
+    - 判斷表格是否延續到下一頁
+    - 合併表格內容
+    - 組合後再交給 LLM 提取
+    """
+    
+    def __init__(self):
+        self.previous_table: Optional[Dict[str, Any]] = None
+        self.previous_page: Optional[int] = None
+    
+    def reset(self):
+        """重置狀態"""
+        self.previous_table = None
+        self.previous_page = None
+    
+    def is_table_continuation(
+        self,
+        current_page: int,
+        table_data: Dict[str, Any],
+        table_position: str = "top"
+    ) -> bool:
+        """
+        判斷當前表格是否是上一頁表格的延續
+        
+        啟發式規則：
+        1. 當前頁碼 = 上一頁碼 + 1
+        2. 當前表格在頁面頂部
+        3. 當前表格缺乏標準表頭
+        4. 上一頁表格沒有 "Total" 或 "總計" 行
+        """
+        if not self.previous_table or not self.previous_page:
+            return False
+        
+        # 規則 1: 頁碼連續
+        if current_page != self.previous_page + 1:
+            return False
+        
+        # 規則 2: 當前表格在頁面頂部
+        if table_position != "top":
+            return False
+        
+        markdown = table_data.get("markdown_content", "")
+        
+        # 規則 3: 缺乏標準表頭
+        header_indicators = ["2024", "2023", "2022", "HK$", "RMB", "人民幣", "千元", "million"]
+        has_header = any(indicator in markdown for indicator in header_indicators)
+        if has_header:
+            return False
+        
+        # 規則 4: 上一頁表格沒有 Total
+        prev_markdown = self.previous_table.get("markdown_content", "")
+        total_indicators = ["Total", "total", "總計", "合計", "總額", "TOTAL"]
+        has_total = any(indicator in prev_markdown for indicator in total_indicators)
+        if has_total:
+            return False
+        
+        logger.info(f"   🔗 檢測到跨頁表格: Page {self.previous_page} → Page {current_page}")
+        return True
+    
+    def merge_tables(self, current_table: Dict[str, Any]) -> Dict[str, Any]:
+        """合併當前表格與上一頁表格"""
+        if not self.previous_table:
+            return current_table
+        
+        prev_markdown = self.previous_table.get("markdown_content", "")
+        curr_markdown = current_table.get("markdown_content", "")
+        
+        merged_markdown = self._merge_markdown(prev_markdown, curr_markdown)
+        
+        merged_table = {
+            "markdown_content": merged_markdown,
+            "source_pages": [
+                self.previous_table.get("source_page", self.previous_page),
+                current_table.get("source_page", self.previous_page + 1)
+            ],
+            "is_merged": True
+        }
+        
+        logger.info(f"   ✅ 跨頁表格已合併 ({len(prev_markdown)} + {len(curr_markdown)} chars)")
+        return merged_table
+    
+    def _merge_markdown(self, prev_md: str, curr_md: str) -> str:
+        """智能合併兩個 Markdown 表格"""
+        prev_lines = prev_md.strip().split("\n")
+        curr_lines = curr_md.strip().split("\n")
+        
+        # 找數據開始位置
+        prev_data_start = 0
+        for i, line in enumerate(prev_lines):
+            if line.strip().startswith("|") and "---" in line:
+                prev_data_start = i + 1
+                break
+        
+        curr_data_start = 0
+        for i, line in enumerate(curr_lines):
+            if line.strip().startswith("|") and "---" in line:
+                curr_data_start = i + 1
+                break
+        
+        header_lines = prev_lines[:prev_data_start]
+        prev_data = prev_lines[prev_data_start:]
+        curr_data = curr_lines[curr_data_start:]
+        
+        merged = header_lines + prev_data + curr_data
+        return "\n".join(merged)
+    
+    def update_state(self, page: int, table_data: Dict[str, Any], position: str = "bottom"):
+        """更新狀態"""
+        self.previous_table = {**table_data, "source_page": page, "position": position}
+        self.previous_page = page
+
+
+# 全局跨頁表格合併器
+_cross_page_merger = CrossPageTableMerger()
 from .validators.math_rules import validate_all, ValidationResult
 from .repository.db_client import DBClient
 
@@ -201,6 +328,10 @@ class DocumentPipeline:
                 if progress_callback:
                     progress_callback(20.0, "提取公司信息...")
                 company_id = await self._extract_and_create_company(pdf_path, doc_id)
+                # 更新 documents 表的 company_id 和 year
+                if company_id:
+                    year = self._infer_year(doc_id)
+                    await self.db.update_document_company_id(doc_id, company_id, year)
             
             # Step 5: 智能結構化提取
             if company_id:

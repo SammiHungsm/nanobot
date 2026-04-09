@@ -255,6 +255,99 @@ async def stop_queue():
     return {"message": "Queue will stop after current document"}
 
 
+@router.post("/documents/{doc_id}/retry")
+async def retry_document(doc_id: str, background_tasks: BackgroundTasks):
+    """
+    🔧 新增：重試失敗的文檔處理
+    """
+    if document_service is None:
+        raise HTTPException(status_code=500, detail="Document service not initialized")
+    
+    if doc_id not in document_service.documents_db:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    doc = document_service.documents_db[doc_id]
+    
+    # 只允許重試失敗的文檔
+    if doc["status"] not in ["failed", "Failed"]:
+        raise HTTPException(status_code=400, detail=f"Cannot retry document with status: {doc['status']}")
+    
+    # Reset status
+    doc["status"] = "queued"
+    doc["progress"] = 0.0
+    doc["error_message"] = None
+    
+    # Start queue processor if not running
+    if not document_service.queue_running:
+        document_service.queue_running = True
+        background_tasks.add_task(document_service.process_queue)
+    
+    logger.info(f"🔄 Retrying document: {doc['filename']} (ID: {doc_id})")
+    
+    return {"success": True, "message": f"Document {doc['filename']} queued for retry"}
+
+
+@router.post("/documents/batch-delete")
+async def batch_delete_documents(doc_ids: list[str]):
+    """
+    🔧 新增：批次刪除文檔
+    """
+    if document_service is None:
+        raise HTTPException(status_code=500, detail="Document service not initialized")
+    
+    deleted_count = 0
+    failed_count = 0
+    
+    for doc_id in doc_ids:
+        if document_service.delete_document(doc_id):
+            deleted_count += 1
+        else:
+            failed_count += 1
+    
+    return {
+        "success": True,
+        "deleted_count": deleted_count,
+        "failed_count": failed_count,
+        "message": f"Deleted {deleted_count} document(s)"
+    }
+
+
+@router.get("/documents/batch-download")
+async def batch_download_documents(doc_ids: str):
+    """
+    🔧 新增：批次下載文檔（返回 ZIP）
+    """
+    if document_service is None:
+        raise HTTPException(status_code=500, detail="Document service not initialized")
+    
+    doc_id_list = doc_ids.split(",")
+    files_to_zip = []
+    
+    for doc_id in doc_id_list:
+        if doc_id in document_service.documents_db:
+            doc = document_service.documents_db[doc_id]
+            file_path = Path(doc["path"])
+            if file_path.exists():
+                files_to_zip.append((file_path, doc["filename"]))
+    
+    if not files_to_zip:
+        raise HTTPException(status_code=404, detail="No documents found")
+    
+    # Create ZIP in memory
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        for file_path, filename in files_to_zip:
+            zip_file.write(file_path, arcname=filename)
+    
+    zip_buffer.seek(0)
+    
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": "attachment; filename=documents_batch.zip"}
+    )
+
+
 @router.get("/pdf/{doc_id}/output")
 async def get_processed_output(doc_id: str):
     """Get processed JSON output from OpenDataLoader"""

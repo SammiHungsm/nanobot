@@ -344,7 +344,7 @@ def train_vanna_on_schema():
 def train_vanna_with_enhanced_data() -> bool:
     """
     訓練 Vanna 完整的 DDL、Documentation 和 SQL Examples
-    基於所有 Sample Questions 的完整訓練
+    🔧 從 JSON 檔案載入訓練資料（資料與代碼分離）
     """
     global vn
     
@@ -355,165 +355,28 @@ def train_vanna_with_enhanced_data() -> bool:
     try:
         logger.info("🧠 開始訓練 Vanna 增強數據...")
         
-        # ===========================================
-        # 1. Documentation Training - 商業邏輯
-        # ===========================================
-        documentation_items = [
-            # Market Cap 計算
-            "Market Capital is calculated by multiplying the closing price by the issued shares. Formula: Market Capital = closing_price * issued_shares",
-            "IMPORTANT: Do NOT use a market_cap column. Always calculate market_cap as (closing_price * issued_shares) in your SQL query.",
-            
-            # BioTech Sector
-            "The BioTech list is flexible. Always query the companies table where sector = 'BioTech' instead of using a hardcoded list of stock codes.",
-            "BioTech sector includes pharmaceutical companies, biotechnology firms, medical device manufacturers, and healthcare technology companies.",
-            
-            # Auditor Opinion ENUM values
-            "Auditor opinion types (ENUM): 'Unqualified' (clean opinion), 'Qualified' (with reservations), 'Disclaimer' (unable to express opinion), 'Adverse' (material misstatements), 'Not Applicable'.",
-            "A 'Qualified Opinion' indicates that the auditor has reservations about certain aspects of the financial statements.",
-            
-            # Event Category ENUM values (IMPORTANT for correct WHERE clauses)
-            "Event categories (ENUM): 'Property Acquisition', 'Listing Reform', 'Consultation', 'Regulatory Action', 'Market Initiative', 'Enforcement', 'Other'.",
-            "When searching for property purchases, use event_category = 'Property Acquisition'.",
-            "When searching for listing reforms, use event_category = 'Listing Reform'.",
-            "When searching for consultations, use event_category = 'Consultation'.",
-            
-            # Category Type ENUM values
-            "Revenue breakdown category types (ENUM): 'Region', 'Business', 'Product', 'Segment'.",
-            "Use category_type = 'Region' for geographic breakdown (e.g., Canada, Asia, Australia).",
-            "Use category_type = 'Business' for business segment breakdown (e.g., Retail, Wholesale).",
-            
-            # Currency Handling (CRITICAL)
-            "CURRENCY WARNING: When summing amounts from revenue_breakdown or debt_maturity tables, ALWAYS GROUP BY currency.",
-            "NEVER sum amounts with different currencies together. Use GROUP BY currency or filter by a specific currency.",
-            "Example: SELECT SUM(amount), currency FROM debt_maturity GROUP BY currency;",
-            
-            # Fiscal Periods
-            "Fiscal periods: 'FY' = Full Year, 'H1' = First Half, 'H2' = Second Half, 'Q1/Q2/Q3/Q4' = Quarters.",
-            
-            # Stock Codes
-            "Hong Kong stock codes are typically 4-5 digits, e.g., '00001' for CK Hutchison, '00700' for Tencent.",
-            "Stock codes in the database do NOT include the '.HK' suffix.",
-            
-            # Revenue Categories
-            "Revenue breakdown categories can be by region (e.g., 'Canada', 'Asia', 'Australia') or by business segment (e.g., 'Retail', 'Wholesale').",
-            
-            # Shareholding
-            "Trust holdings are recorded with both the trust name and the trustee name. For example, 'Li Ka-Shing Unity Trust' with trustee 'Li Ka-Shing Unity Trustee Company Limited'.",
-            
-            # Principal Banker
-            "Principal banker refers to the main bank or banks that provide significant banking services to the company.",
-            
-            # Ultimate Controlling Shareholder
-            "Ultimate controlling shareholder is the person or entity that has ultimate control over the company, which may be different from the direct shareholders.",
-            
-            # Macro Data
-            "listing_applications table contains macro-level market data. company_id can be NULL for SFC-level statistics.",
-        ]
+        # 🔧 載入 JSON 訓練模組（資料與代碼分離）
+        from vanna_training import VannaTrainingData
         
-        logger.info("📚 訓練 Documentation...")
-        for doc in documentation_items:
-            try:
-                vn.train(documentation=doc)
-            except Exception as e:
-                logger.warning(f"   ⚠️ Documentation training error: {e}")
-        logger.info(f"   ✅ Documentation 訓練完成 ({len(documentation_items)} 條)")
+        # 確定資料目錄（Docker 或本地）
+        data_dir = "/app/data"
+        if not Path(data_dir).exists():
+            # 本地開發環境
+            data_dir = Path(__file__).parent / "data"
         
-        # ===========================================
-        # 2. SQL Training - Sample Questions
-        # ===========================================
-        sql_examples = [
-            # Stock 00001 Questions
-            {
-                "question": "What is the percentage of shareholding of Li Ka-Shing Unity Trustee Company Limited as trustee of The Li Ka-Shing Unity Trust?",
-                "sql": "SELECT shareholder_name, trust_name, percentage_held FROM shareholdings WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND trustee_name LIKE '%Li Ka-Shing Unity Trustee%' AND trust_name LIKE '%Li Ka-Shing Unity Trust%';"
-            },
-            {
-                "question": "List all executive directors of a company",
-                "sql": "SELECT person_name, role, committee FROM key_personnel WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND role LIKE '%Executive Director%' ORDER BY person_name;"
-            },
-            {
-                "question": "What is the percentage of total revenue from Canada?",
-                "sql": "SELECT category, percentage, amount FROM revenue_breakdown WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND year = 2023 AND category = 'Canada' AND category_type = 'Region';"
-            },
-            {
-                "question": "What is the amount of total debt to be matured in 2027?",
-                "sql": "SELECT maturity_year, SUM(amount) as total_amount, currency FROM debt_maturity WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND maturity_year = 2027 GROUP BY maturity_year, currency;"
-            },
-            {
-                "question": "Provide revenue figures from 2019 to 2023",
-                "sql": "SELECT year, value, unit FROM financial_metrics WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND metric_name LIKE '%revenue%' AND year BETWEEN 2019 AND 2023 AND fiscal_period = 'FY' ORDER BY year;"
-            },
-            {
-                "question": "Provide fixed assets figures from 2019 to 2023",
-                "sql": "SELECT year, value, unit FROM financial_metrics WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND metric_name LIKE '%fixed asset%' AND year BETWEEN 2019 AND 2023 AND fiscal_period = 'FY' ORDER BY year;"
-            },
-            # SFC Questions
-            {
-                "question": "List all members of the Securities Compensation Fund Committee",
-                "sql": "SELECT person_name, committee_position FROM key_personnel WHERE company_id = (SELECT id FROM companies WHERE stock_code = 'SFC') AND committee LIKE '%Securities Compensation Fund%' ORDER BY person_name;"
-            },
-            {
-                "question": "Generate the bio of Lisa Chen",
-                "sql": "SELECT person_name, biography, role FROM key_personnel WHERE company_id = (SELECT id FROM companies WHERE stock_code = 'SFC') AND person_name LIKE '%Lisa Chen%';"
-            },
-            {
-                "question": "How many floors did SFC purchase for the OIE office?",
-                "sql": "SELECT event_title, metric_value, metric_unit, event_detail FROM specific_events WHERE company_id = (SELECT id FROM companies WHERE stock_code = 'SFC') AND event_category = 'Property Acquisition' AND event_detail LIKE '%OIE%';"
-            },
-            {
-                "question": "When was the effective date of the SEHK GEM listing reform?",
-                "sql": "SELECT event_title, effective_date, event_detail FROM specific_events WHERE company_id = (SELECT id FROM companies WHERE stock_code = 'SFC') AND event_category = 'Listing Reform' AND event_detail LIKE '%GEM%';"
-            },
-            # BioTech Questions
-            {
-                "question": "Provide the Top 10 stock codes and names of the market capital from the BioTech Sector",
-                "sql": "SELECT c.stock_code, c.name_en as company_name, (m.closing_price * m.issued_shares) as market_capital FROM companies c JOIN market_data m ON c.id = m.company_id WHERE c.sector = 'BioTech' AND m.trade_date = (SELECT MAX(trade_date) FROM market_data) ORDER BY market_capital DESC LIMIT 10;"
-            },
-            {
-                "question": "Provide the Top 5 stock codes and names with the highest total liabilities in BioTech sector",
-                "sql": "SELECT c.stock_code, c.name_en as company_name, fm.value as total_liabilities FROM companies c JOIN financial_metrics fm ON c.id = fm.company_id WHERE c.sector = 'BioTech' AND fm.metric_name LIKE '%total liabilit%' AND fm.year = 2024 AND fm.fiscal_period = 'FY' ORDER BY fm.value DESC LIMIT 5;"
-            },
-            {
-                "question": "List all BioTech stocks which has the same auditor as stock 6160 Beone Medicines",
-                "sql": "SELECT c.stock_code, c.name_en, c.auditor FROM companies c WHERE c.sector = 'BioTech' AND c.auditor = (SELECT auditor FROM companies WHERE stock_code = '6160') ORDER BY c.stock_code;"
-            },
-            {
-                "question": "Provide all the ultimate controlling shareholders of each BioTech stock",
-                "sql": "SELECT stock_code, name_en, ultimate_controlling_shareholder FROM companies WHERE sector = 'BioTech' AND ultimate_controlling_shareholder IS NOT NULL ORDER BY stock_code;"
-            },
-            {
-                "question": "List all BioTech companies which has a Qualified Opinion from auditor",
-                "sql": "SELECT stock_code, name_en, auditor, auditor_opinion FROM companies WHERE sector = 'BioTech' AND auditor_opinion = 'Qualified' ORDER BY stock_code;"
-            },
-            {
-                "question": "What is the total revenue of stock 09969 in 2023 and 2024",
-                "sql": "SELECT year, value as total_revenue, unit FROM financial_metrics WHERE company_id = (SELECT id FROM companies WHERE stock_code = '09969') AND metric_name LIKE '%total revenue%' AND year IN (2023, 2024) AND fiscal_period = 'FY' ORDER BY year;"
-            },
-            {
-                "question": "What is the average trading volume for stock 09969 in 2022",
-                "sql": "SELECT AVG(trading_volume) as avg_volume FROM market_data WHERE company_id = (SELECT id FROM companies WHERE stock_code = '09969') AND trade_date BETWEEN '2022-01-01' AND '2022-12-31';"
-            },
-            {
-                "question": "Show closing price and trading volume for stock 09969 in 2022",
-                "sql": "SELECT trade_date, closing_price, trading_volume FROM market_data WHERE company_id = (SELECT id FROM companies WHERE stock_code = '09969') AND trade_date BETWEEN '2022-01-01' AND '2022-12-31' ORDER BY trade_date;"
-            },
-            {
-                "question": "List all BioTech stocks which principal bankers are HSBC",
-                "sql": "SELECT stock_code, name_en, principal_banker FROM companies WHERE sector = 'BioTech' AND principal_banker LIKE '%HSBC%';"
-            },
-        ]
+        trainer = VannaTrainingData(data_dir=str(data_dir))
         
-        logger.info("💾 訓練 SQL Examples...")
-        trained_sql = 0
-        for example in sql_examples:
-            try:
-                vn.train(question=example["question"], sql=example["sql"])
-                trained_sql += 1
-            except Exception as e:
-                logger.warning(f"   ⚠️ SQL training error: {e}")
-        logger.info(f"   ✅ SQL Examples 訓練完成 ({trained_sql}/{len(sql_examples)} 條)")
+        # 執行訓練（包含驗證）
+        stats = trainer.train_vanna(vn, validate=True)
         
         logger.info("✅ Vanna 增強訓練完成！")
+        logger.info(f"   DDL: {stats['ddl_trained']}")
+        logger.info(f"   Documentation: {stats['documentation_trained']}")
+        logger.info(f"   SQL: {stats['sql_trained']}")
+        
+        if stats['errors']:
+            logger.warning(f"   ⚠️ 錯誤: {len(stats['errors'])}")
+        
         return True
         
     except Exception as e:

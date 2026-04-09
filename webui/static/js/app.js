@@ -45,19 +45,13 @@ const App = {
         window.copyJsonOutput = () => Library.copyJsonOutput();
         window.downloadProcessedOutput = () => Library.downloadProcessedOutput();
         window.closeDetailsPanel = () => Library.closeDetailsPanel();
-        
-        // Database functions
-        window.Database = {
-            loadStats: () => this.loadDatabaseStats(),
-            loadChunks: () => this.loadDatabaseChunks()
-        };
     },
     
     /**
-     * Switch between chat, library, and database tabs
+     * Switch between chat and library tabs (Database tab removed)
      */
     switchTab(tab) {
-        const tabs = ['chat', 'library', 'database'];
+        const tabs = ['chat', 'library'];
         
         tabs.forEach(t => {
             const btn = document.getElementById(`tab-${t}`);
@@ -72,7 +66,6 @@ const App = {
                 // Load data when switching to tab
                 if (t === 'chat') UI.loadDocuments();
                 if (t === 'library') Library.loadDocuments();
-                if (t === 'database') this.loadDatabaseStats();
             } else {
                 btn.className = 'tab-inactive px-6 py-3 rounded-t-lg font-medium text-sm transition-colors border border-b-0';
                 content.classList.add('hidden');
@@ -82,71 +75,6 @@ const App = {
         // Update current tab
         if (window.UI) {
             UI.currentTab = tab;
-        }
-    },
-    
-    /**
-     * Load database statistics
-     */
-    async loadDatabaseStats() {
-        try {
-            const response = await fetch('/api/database/stats');
-            if (!response.ok) throw new Error('Failed to fetch stats');
-            
-            const stats = await response.json();
-            
-            document.getElementById('db-doc-count').textContent = stats.documents || 0;
-            document.getElementById('db-chunk-count').textContent = stats.chunks || 0;
-            document.getElementById('db-table-count').textContent = stats.tables || 0;
-            document.getElementById('db-image-count').textContent = stats.images || 0;
-            
-            // Load recent chunks
-            this.loadDatabaseChunks();
-        } catch (error) {
-            console.error('Failed to load database stats:', error);
-            // Show error in UI
-            document.getElementById('db-doc-count').textContent = 'Error';
-            document.getElementById('db-chunk-count').textContent = 'Error';
-            document.getElementById('db-table-count').textContent = 'Error';
-            document.getElementById('db-image-count').textContent = 'Error';
-        }
-    },
-    
-    /**
-     * Load recent document chunks from database
-     */
-    async loadDatabaseChunks() {
-        try {
-            const response = await fetch('/api/database/chunks?limit=50');
-            if (!response.ok) throw new Error('Failed to fetch chunks');
-            
-            const chunks = await response.json();
-            const tbody = document.getElementById('db-data-body');
-            
-            if (!chunks || chunks.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="4" class="text-center py-4 text-slate-400">No chunks found</td></tr>';
-                return;
-            }
-            
-            tbody.innerHTML = chunks.map(chunk => `
-                <tr class="border-b border-slate-200 hover:bg-slate-50">
-                    <td class="py-2 px-3 font-mono text-xs">${chunk.doc_id || 'N/A'}</td>
-                    <td class="py-2 px-3">
-                        <span class="px-2 py-1 rounded text-xs font-medium ${
-                            chunk.chunk_type === 'table' ? 'bg-purple-100 text-purple-700' :
-                            chunk.chunk_type === 'image' ? 'bg-orange-100 text-orange-700' :
-                            'bg-blue-100 text-blue-700'
-                        }">${chunk.chunk_type || 'text'}</span>
-                    </td>
-                    <td class="py-2 px-3 text-slate-600">${chunk.page_num || '-'}</td>
-                    <td class="py-2 px-3 text-slate-700 max-w-md truncate" title="${chunk.content || ''}">
-                        ${(chunk.content || chunk.metadata || '').toString().substring(0, 100)}${(chunk.content || '').length > 100 ? '...' : ''}
-                    </td>
-                </tr>
-            `).join('');
-        } catch (error) {
-            console.error('Failed to load database chunks:', error);
-            document.getElementById('db-data-body').innerHTML = '<tr><td colspan="4" class="text-center py-4 text-red-400">Error loading data</td></tr>';
         }
     },
     

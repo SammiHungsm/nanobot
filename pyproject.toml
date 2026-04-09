@@ -53,6 +53,8 @@ dependencies = [
     "psycopg2-binary>=2.9.11",
     "vanna[postgres]>=2.0.2",
     "PyMuPDF>=1.23.0",  # PDF转图片用于Vision解析
+    "lm-format-enforcer>=0.10.0",  # 强制结构化 JSON 输出
+    "json-repair>=0.57.0,<1.0.0",  # JSON 修复
 ]
 
 [project.optional-dependencies]

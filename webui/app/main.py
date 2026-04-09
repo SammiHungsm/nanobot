@@ -11,6 +11,8 @@ This is the new, clean main.py that only handles:
 All business logic is now in app/services/
 All API routes are now in app/api/
 All schemas are now in app/schemas/
+
+🔧 Database Router removed - Vanna uses PostgreSQL directly
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,8 +20,8 @@ from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 import os
 
-# Import routers
-from app.api import chat_router, document_router, database_router, init_document_service
+# Import routers (database_router removed - no longer needed)
+from app.api import chat_router, document_router, init_document_service
 
 # Initialize FastAPI application
 app = FastAPI(
@@ -53,10 +55,9 @@ init_document_service(UPLOAD_DIR, OUTPUT_DIR)
 # Mount static files
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-# Include routers
+# Include routers (database_router removed)
 app.include_router(chat_router)
 app.include_router(document_router)
-app.include_router(database_router)
 
 
 @app.get("/")

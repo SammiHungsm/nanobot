@@ -46,8 +46,205 @@ class DBClient:
             logger.info("📴 數據庫連接已關閉")
     
     # ===========================================
-    # Company Operations
+    # Company Operations (漸進式資料充實架構)
     # ===========================================
+    
+    async def get_company_by_stock_code(self, stock_code: str) -> Optional[Dict[str, Any]]:
+        """
+        根據股票代碼獲取公司信息
+        
+        Args:
+            stock_code: 股票代碼（如 '00001', '00700'）
+            
+        Returns:
+            Dict: 公司信息，或 None
+        """
+        if not stock_code:
+            return None
+        
+        # 標準化股票代碼（補零至 5 位）
+        normalized_code = stock_code.zfill(5)
+        
+        row = await self.conn.fetchrow(
+            "SELECT * FROM companies WHERE stock_code = $1",
+            normalized_code
+        )
+        return dict(row) if row else None
+    
+    async def upsert_company(
+        self,
+        stock_code: str,
+        name_en: str = None,
+        name_zh: str = None,
+        name_source: str = "extracted",
+        industry: str = None,
+        sector: str = None,
+        auditor: str = None,
+        auditor_opinion: str = None,
+        ultimate_controlling_shareholder: str = None,
+        principal_banker: str = None
+    ) -> Optional[int]:
+        """
+        🎯 漸進式 Upsert 公司信息（Update as need）
+        
+        核心邏輯：
+        1. 如果公司已存在，只更新「空值」欄位（不覆蓋已有數據）
+        2. 如果公司不存在，創建新記錄
+        3. 名字來源分為 index（恆指報表）和 extracted（PDF 擷取）
+        
+        Args:
+            stock_code: 股票代碼（必須）
+            name_en: 英文名稱
+            name_zh: 中文名稱
+            name_source: 名字來源 ('index' 或 'extracted')
+            industry: 行業
+            sector: 板塊
+            auditor: 核數師
+            auditor_opinion: 核數師意見
+            ultimate_controlling_shareholder: 最終控股股東
+            principal_banker: 主要銀行
+            
+        Returns:
+            int: 公司 ID
+        """
+        if not stock_code:
+            logger.warning("⚠️ 缺少股票代碼，無法 upsert 公司")
+            return None
+        
+        # 標準化股票代碼
+        normalized_code = stock_code.zfill(5)
+        
+        try:
+            # 1. 查找現有公司
+            existing = await self.get_company_by_stock_code(normalized_code)
+            
+            if existing:
+                # 2. 公司已存在，執行「按需更新」
+                company_id = existing['id']
+                update_fields = {}
+                
+                # 根據名字來源決定更新哪個欄位
+                if name_source == "index":
+                    # 恆指報表的名字是權威的，可以覆蓋
+                    if name_en:
+                        update_fields['name_en_index'] = name_en
+                    if name_zh:
+                        update_fields['name_zh_extracted'] = name_zh  # 恆指也可能有中文名
+                else:
+                    # PDF 擷取的名字只填空值
+                    if name_en and not existing.get('name_en_extracted'):
+                        update_fields['name_en_extracted'] = name_en
+                    if name_zh and not existing.get('name_zh_extracted'):
+                        update_fields['name_zh_extracted'] = name_zh
+                
+                # 其他欄位只更新空值
+                if industry and not existing.get('industry'):
+                    update_fields['industry'] = industry
+                if sector and not existing.get('sector'):
+                    update_fields['sector'] = sector
+                if auditor and not existing.get('auditor'):
+                    update_fields['auditor'] = auditor
+                if auditor_opinion and not existing.get('auditor_opinion'):
+                    update_fields['auditor_opinion'] = auditor_opinion
+                if ultimate_controlling_shareholder and not existing.get('ultimate_controlling_shareholder'):
+                    update_fields['ultimate_controlling_shareholder'] = ultimate_controlling_shareholder
+                if principal_banker and not existing.get('principal_banker'):
+                    update_fields['principal_banker'] = principal_banker
+                
+                if update_fields:
+                    await self.update_company(company_id, update_fields)
+                    logger.info(f"✅ 公司 {normalized_code} 已更新欄位: {list(update_fields.keys())}")
+                else:
+                    logger.debug(f"ℹ️ 公司 {normalized_code} 無需更新")
+                
+                return company_id
+            
+            else:
+                # 3. 創建新公司
+                insert_data = {
+                    'stock_code': normalized_code,
+                    'sector': sector or 'Unknown',
+                    'industry': industry
+                }
+                
+                # 根據名字來源設置欄位
+                if name_source == "index":
+                    if name_en:
+                        insert_data['name_en_index'] = name_en
+                    if name_zh:
+                        insert_data['name_zh_extracted'] = name_zh
+                else:
+                    if name_en:
+                        insert_data['name_en_extracted'] = name_en
+                    if name_zh:
+                        insert_data['name_zh_extracted'] = name_zh
+                
+                # 其他欄位
+                if auditor:
+                    insert_data['auditor'] = auditor
+                if auditor_opinion:
+                    insert_data['auditor_opinion'] = auditor_opinion
+                if ultimate_controlling_shareholder:
+                    insert_data['ultimate_controlling_shareholder'] = ultimate_controlling_shareholder
+                if principal_banker:
+                    insert_data['principal_banker'] = principal_banker
+                
+                company_id = await self.insert_company(insert_data)
+                logger.info(f"✅ 創建新公司: Stock Code={normalized_code}, ID={company_id}")
+                return company_id
+                
+        except Exception as e:
+            logger.error(f"❌ Upsert 公司失敗: {e}")
+            return None
+    
+    async def insert_company(self, data: Dict[str, Any]) -> int:
+        """
+        插入新公司記錄
+        
+        Args:
+            data: 公司數據字典
+            
+        Returns:
+            int: 新公司 ID
+        """
+        columns = list(data.keys())
+        values = [data[col] for col in columns]
+        placeholders = [f"${i+1}" for i in range(len(columns))]
+        
+        sql = f"""
+            INSERT INTO companies ({', '.join(columns)})
+            VALUES ({', '.join(placeholders)})
+            RETURNING id
+        """
+        
+        company_id = await self.conn.fetchval(sql, *values)
+        return company_id
+    
+    async def update_company(self, company_id: int, data: Dict[str, Any]) -> bool:
+        """
+        更新公司特定欄位
+        
+        Args:
+            company_id: 公司 ID
+            data: 要更新的欄位
+            
+        Returns:
+            bool: 是否成功
+        """
+        if not data:
+            return True
+        
+        set_clauses = [f"{key} = ${i+2}" for i, key in enumerate(data.keys())]
+        values = [company_id] + list(data.values())
+        
+        sql = f"""
+            UPDATE companies 
+            SET {', '.join(set_clauses)}, updated_at = NOW()
+            WHERE id = $1
+        """
+        
+        await self.conn.execute(sql, *values)
+        return True
     
     async def get_or_create_company(
         self,
@@ -58,7 +255,9 @@ class DBClient:
         sector: str = None
     ) -> Optional[int]:
         """
-        獲取或創建公司記錄
+        獲取或創建公司記錄（向後兼容方法）
+        
+        🔧 已重構為調用 upsert_company，支援漸進式資料充實
         
         Args:
             stock_code: 股票代碼
@@ -70,49 +269,14 @@ class DBClient:
         Returns:
             int: 公司 ID
         """
-        if not stock_code and not name_en:
-            logger.warning("⚠️ 缺少股票代碼和公司名稱，無法創建公司記錄")
-            return None
-        
-        try:
-            # 1. 先嘗試查找現有公司
-            if stock_code:
-                existing_id = await self.conn.fetchval(
-                    "SELECT id FROM companies WHERE stock_code = $1",
-                    stock_code
-                )
-                if existing_id:
-                    logger.info(f"✅ 找到現有公司: ID={existing_id}, Stock Code={stock_code}")
-                    return existing_id
-            
-            if name_en:
-                existing_id = await self.conn.fetchval(
-                    "SELECT id FROM companies WHERE name_en ILIKE $1",
-                    f"%{name_en}%"
-                )
-                if existing_id:
-                    logger.info(f"✅ 找到現有公司: ID={existing_id}, Name={name_en}")
-                    return existing_id
-            
-            # 2. 創建新公司
-            new_id = await self.conn.fetchval(
-                """
-                INSERT INTO companies (name_en, name_zh, stock_code, industry, sector)
-                VALUES ($1, $2, $3, $4, $5)
-                RETURNING id
-                """,
-                name_en or f"Company_{stock_code or 'Unknown'}",
-                name_zh,
-                stock_code,
-                industry,
-                sector
-            )
-            logger.info(f"✅ 創建新公司: ID={new_id}, Stock Code={stock_code}")
-            return new_id
-            
-        except Exception as e:
-            logger.error(f"❌ 查找/創建公司失敗: {e}")
-            return None
+        return await self.upsert_company(
+            stock_code=stock_code,
+            name_en=name_en,
+            name_zh=name_zh,
+            name_source="extracted",  # 預設為 PDF 擷取來源
+            industry=industry,
+            sector=sector
+        )
     
     async def get_company_by_id(self, company_id: int) -> Optional[Dict[str, Any]]:
         """根據 ID 獲取公司信息"""
@@ -121,6 +285,143 @@ class DBClient:
             company_id
         )
         return dict(row) if row else None
+    
+    # ===========================================
+    # Financial Metrics Operations (扁平化核心表)
+    # ===========================================
+    
+    async def insert_financial_metric(
+        self,
+        company_id: int,
+        year: int,
+        metric_name_raw: str,
+        value: float,
+        unit: str,
+        fiscal_period: str = "FY",
+        category: str = None,
+        source_file: str = None,
+        source_page: int = None
+    ) -> bool:
+        """
+        插入財務指標到扁平表（使用實體對齊 + 數值標準化）
+        
+        🔧 這是 PoC 核心方法，解決兩個致命傷：
+        1. Entity Resolution: 統一指標名稱 (resolve_metric_name)
+        2. Value Normalization: 統一數值單位和幣別 (normalize_financial_value)
+        
+        Args:
+            company_id: 公司 ID
+            year: 年份
+            metric_name_raw: 原始指標名稱（會被標準化）
+            value: 數值
+            unit: 單位
+            fiscal_period: 財政期間
+            category: 分類
+            source_file: 源文件
+            source_page: 源頁碼
+            
+        Returns:
+            bool: 是否成功
+        """
+        from ..extractors.entity_resolver import resolve_metric_name
+        from ..extractors.value_normalizer import normalize_financial_value
+        
+        try:
+            # 🚀 Step 1: 實體對齊 - 統一指標名稱
+            canonical_en, canonical_zh = resolve_metric_name(metric_name_raw)
+            
+            # 🚀 Step 2: 數值標準化 - 統一為港幣絕對單位
+            standardized_value, standardized_currency = normalize_financial_value(
+                raw_value=value,
+                unit_str=unit,
+                target_currency='HKD'  # 預設統一為港幣
+            )
+            
+            # 將 Decimal 轉換為 float（PostgreSQL 兼容）
+            standardized_value_float = float(standardized_value)
+            
+            await self.conn.execute(
+                """
+                INSERT INTO financial_metrics 
+                (company_id, year, fiscal_period, metric_name, metric_name_zh, 
+                 original_metric_name, value, unit, 
+                 standardized_value, standardized_currency,
+                 category, source_file, source_page)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                ON CONFLICT (company_id, year, fiscal_period, metric_name) 
+                DO UPDATE SET 
+                    original_metric_name = $6,
+                    value = $7,
+                    unit = $8,
+                    standardized_value = $9,
+                    standardized_currency = $10,
+                    source_file = $12,
+                    source_page = $13
+                """,
+                company_id,
+                year,
+                fiscal_period,
+                canonical_en,              # 標準化英文名稱
+                canonical_zh,              # 標準化中文名稱
+                metric_name_raw,           # 🔧 原始名稱（供溯源）
+                value,                     # 原始數值
+                unit,                      # 原始單位
+                standardized_value_float,  # 🔧 標準化數值（港幣絕對單位）
+                standardized_currency,     # 🔧 標準化幣別（HKD）
+                category,
+                source_file,
+                source_page
+            )
+            
+            logger.debug(
+                f"✅ 寫入指標: {canonical_en} = {value} {unit} → "
+                f"{standardized_value_float} {standardized_currency}"
+            )
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ 寫入財務指標失敗: {e}")
+            return False
+    
+    async def insert_financial_metrics_batch(
+        self,
+        company_id: int,
+        year: int,
+        metrics: List[Dict[str, Any]],
+        source_file: str = None,
+        source_page: int = None
+    ) -> int:
+        """
+        批量插入財務指標
+        
+        Args:
+            company_id: 公司 ID
+            year: 年份
+            metrics: 指標列表 [{"name": "...", "value": ..., "unit": "..."}]
+            source_file: 源文件
+            source_page: 源頁碼
+            
+        Returns:
+            int: 成功插入的數量
+        """
+        inserted = 0
+        for metric in metrics:
+            success = await self.insert_financial_metric(
+                company_id=company_id,
+                year=year,
+                metric_name_raw=metric.get("name", metric.get("metric_name", "")),
+                value=metric.get("value", 0),
+                unit=metric.get("unit", "HKD"),
+                fiscal_period=metric.get("fiscal_period", "FY"),
+                category=metric.get("category"),
+                source_file=source_file,
+                source_page=source_page
+            )
+            if success:
+                inserted += 1
+        
+        logger.info(f"✅ 批量寫入 {inserted}/{len(metrics)} 個財務指標")
+        return inserted
     
     # ===========================================
     # Revenue Breakdown Operations
@@ -137,7 +438,7 @@ class DBClient:
         currency: str = "HKD"
     ) -> int:
         """
-        插入 Revenue Breakdown 數據
+        插入 Revenue Breakdown 數據（使用實體對齊）
         
         Args:
             company_id: 公司 ID
@@ -151,12 +452,21 @@ class DBClient:
         Returns:
             int: 插入的記錄數量
         """
+        # 導入實體對齊器
+        from ..extractors.entity_resolver import resolve_region_name
+        
         try:
             inserted_count = 0
             
             for category, data in extracted_data.items():
                 percentage = data.get("percentage")
                 amount = data.get("amount")
+                
+                # 🚀 實體對齊：統一地區名稱
+                canonical_en, canonical_zh = resolve_region_name(category)
+                
+                # 使用標準英文名稱作為 category
+                standardized_category = canonical_en
                 
                 # 使用 UPSERT (ON CONFLICT DO UPDATE)
                 await self.conn.execute(
@@ -173,7 +483,7 @@ class DBClient:
                     """,
                     company_id,
                     year,
-                    category,
+                    standardized_category,  # 使用標準化名稱
                     category_type,
                     percentage,
                     amount,
@@ -183,7 +493,7 @@ class DBClient:
                 )
                 inserted_count += 1
             
-            logger.info(f"✅ 已寫入 {inserted_count} 條 Revenue Breakdown 記錄")
+            logger.info(f"✅ 已寫入 {inserted_count} 條 Revenue Breakdown 記錄（已標準化地區名稱）")
             return inserted_count
             
         except Exception as e:
@@ -436,6 +746,35 @@ class DBClient:
                 error,
                 doc_id
             )
+    
+    async def update_document_company_id(self, doc_id: str, company_id: int, year: int = None):
+        """更新文檔的公司 ID 和年份"""
+        if year:
+            await self.conn.execute(
+                """
+                UPDATE documents SET
+                    company_id = $1,
+                    year = $2,
+                    updated_at = NOW()
+                WHERE doc_id = $3
+                """,
+                company_id,
+                year,
+                doc_id
+            )
+            logger.info(f"✅ 已更新文檔 {doc_id} 的 company_id={company_id}, year={year}")
+        else:
+            await self.conn.execute(
+                """
+                UPDATE documents SET
+                    company_id = $1,
+                    updated_at = NOW()
+                WHERE doc_id = $2
+                """,
+                company_id,
+                doc_id
+            )
+            logger.info(f"✅ 已更新文檔 {doc_id} 的 company_id={company_id}")
     
     async def check_document_exists(self, doc_id: str, file_hash: str) -> bool:
         """檢查文檔是否已存在"""

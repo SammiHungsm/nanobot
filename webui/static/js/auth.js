@@ -1,6 +1,6 @@
 /**
  * Nanobot WebUI - Authentication Module
- * Handles user login, logout, and session management
+ * Handles user login, logout, and session management with localStorage persistence
  */
 
 const Auth = {
@@ -31,6 +31,34 @@ const Auth = {
         // Bind event listeners
         this.elements.form.addEventListener('submit', (e) => this.handleLogin(e));
         this.elements.logoutBtn.addEventListener('click', () => this.handleLogout());
+        
+        // 🔧 修復：檢查 localStorage 是否有登入記錄，自動恢復登入狀態
+        this.restoreSession();
+    },
+    
+    /**
+     * 🔧 新增：從 localStorage 恢復登入狀態
+     */
+    restoreSession() {
+        const savedUser = localStorage.getItem('nanobot_user');
+        if (savedUser) {
+            this.currentUser = savedUser;
+            this.elements.displayUsername.textContent = savedUser;
+            
+            // 隱藏登入畫面
+            this.elements.overlay.classList.add('opacity-0');
+            setTimeout(() => {
+                this.elements.overlay.classList.add('hidden');
+                this.elements.overlay.classList.remove('opacity-0');
+            }, 300);
+            
+            // 觸發 App 初始化
+            if (window.App && typeof App.init === 'function') {
+                App.init();
+            }
+            
+            console.log(`✅ Session restored for user: ${savedUser}`);
+        }
     },
     
     /**
@@ -43,6 +71,9 @@ const Auth = {
         if (username) {
             this.currentUser = username;
             this.elements.displayUsername.textContent = username;
+            
+            // 🔧 新增：保存到 localStorage
+            localStorage.setItem('nanobot_user', username);
             
             // Hide overlay with animation
             this.elements.overlay.classList.add('opacity-0');
@@ -65,6 +96,9 @@ const Auth = {
         this.currentUser = null;
         this.elements.usernameInput.value = '';
         this.elements.passwordInput.value = '';
+        
+        // 🔧 新增：清除 localStorage
+        localStorage.removeItem('nanobot_user');
         
         // Show overlay
         this.elements.overlay.classList.remove('hidden');

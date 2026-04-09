@@ -1,14 +1,19 @@
 """
-Parsers Module - PDF 解析層
+Parsers Module - PDF 解析層（優化版）
 
 負責將 PDF 轉換為結構化數據（文字、Markdown 等）。
+
+改進：
+1. 支援 Bounding Box 裁切 - 只處理表格區域，減少 VRAM 消耗
+2. 智能頁面檢測 - 判斷是否需要 Vision 解析
+3. 記憶體優化 - 避免整頁圖片傳給 VL
 """
 
 import os
 import re
 import base64
 import json
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any, Tuple, Union
 from pathlib import Path
 from loguru import logger
 
@@ -19,6 +24,15 @@ try:
 except ImportError:
     PYMUPDF_AVAILABLE = False
     logger.warning("⚠️ PyMuPDF 未安裝，PDF 處理功能將受限")
+
+# Pillow for image cropping
+try:
+    from PIL import Image
+    import io
+    PILLOW_AVAILABLE = True
+except ImportError:
+    PILLOW_AVAILABLE = False
+    logger.warning("⚠️ Pillow 未安裝，圖片裁切功能將受限")
 
 # OpenAI SDK for Vision API
 try:
@@ -180,15 +194,19 @@ class VisionParser:
         self,
         pdf_path: str,
         page_num: int,
-        zoom: float = 2.0
+        zoom: float = 2.0,
+        bbox: Optional[Union[List[float], Tuple[float, float, float, float]]] = None
     ) -> Optional[str]:
         """
-        將 PDF 特定頁面轉換為高品質 PNG 圖片並返回 Base64 字串
+        將 PDF 特定頁面（或其局部區域）轉換為 PNG 圖片並返回 Base64 字串
+        
+        **支援 Bounding Box 裁切** - 只傳遞表格區域給 VL，大幅減少 VRAM 消耗
         
         Args:
             pdf_path: PDF 檔案路徑
             page_num: 頁碼 (1-indexed)
             zoom: 放大倍數
+            bbox: 可選的 Bounding Box (x0, y0, x1, y1)，若提供則只裁切此區域
             
         Returns:
             str: Base64 編碼的 PNG 圖片
@@ -198,7 +216,10 @@ class VisionParser:
             return None
         
         try:
-            logger.info(f"👁️ 正在將 PDF 第 {page_num} 頁轉換為圖片...")
+            if bbox:
+                logger.info(f"👁️ 正在裁切 PDF 第 {page_num} 頁 (bbox: {bbox})...")
+            else:
+                logger.info(f"👁️ 正在將 PDF 第 {page_num} 頁轉換為圖片...")
             
             doc = fitz.open(pdf_path)
             
@@ -208,20 +229,78 @@ class VisionParser:
                 return None
             
             page = doc.load_page(page_num - 1)
-            mat = fitz.Matrix(zoom, zoom)
-            pix = page.get_pixmap(matrix=mat)
+            
+            if bbox and len(bbox) == 4:
+                # 🚀 關鍵優化：只裁切指定區域
+                x0, y0, x1, y1 = bbox
+                
+                # 添加邊距（10%），避免裁切過緊
+                margin_x = (x1 - x0) * 0.1
+                margin_y = (y1 - y0) * 0.1
+                x0 = max(0, x0 - margin_x)
+                y0 = max(0, y0 - margin_y)
+                x1 = min(page.rect.width, x1 + margin_x)
+                y1 = min(page.rect.height, y1 + margin_y)
+                
+                # 使用 PyMuPDF 的 clip 功能
+                clip_rect = fitz.Rect(x0, y0, x1, y1)
+                mat = fitz.Matrix(zoom, zoom)
+                pix = page.get_pixmap(matrix=mat, clip=clip_rect)
+                
+                logger.info(f"   ✂️ 已裁切區域: ({x0:.1f}, {y0:.1f}) - ({x1:.1f}, {y1:.1f})")
+            else:
+                # 整頁轉換
+                mat = fitz.Matrix(zoom, zoom)
+                pix = page.get_pixmap(matrix=mat)
             
             img_bytes = pix.tobytes("png")
             base64_image = base64.b64encode(img_bytes).decode('utf-8')
             
             doc.close()
             
-            logger.info(f"✅ PDF 頁面已轉換為 Base64 圖片 ({len(base64_image)} chars)")
+            # 顯示優化效果
+            if bbox:
+                original_size = page.rect.width * page.rect.height * zoom * zoom
+                cropped_size = pix.width * pix.height
+                reduction = (1 - cropped_size / original_size) * 100
+                logger.info(f"✅ 圖片已轉換 ({len(base64_image)} chars, 節省 {reduction:.1f}% 像素)")
+            else:
+                logger.info(f"✅ PDF 頁面已轉換為 Base64 圖片 ({len(base64_image)} chars)")
+            
             return base64_image
             
         except Exception as e:
             logger.error(f"❌ PDF 轉圖片失敗: {e}")
             return None
+    
+    def extract_table_region(
+        self,
+        pdf_path: str,
+        page_num: int,
+        table_bbox: Union[List[float], Tuple[float, float, float, float]]
+    ) -> Optional[str]:
+        """
+        提取表格區域的圖片（專用於表格提取）
+        
+        這是 Bounding Box 裁切的核心方法：
+        - 只傳遞表格區域給 Vision LLM
+        - 大幅減少 token 消耗
+        - 提高表格識別準確度
+        
+        Args:
+            pdf_path: PDF 檔案路徑
+            page_num: 頁碼 (1-indexed)
+            table_bbox: 表格的 Bounding Box (x0, y0, x1, y1)
+            
+        Returns:
+            str: Base64 編碼的表格圖片
+        """
+        return self.convert_page_to_image_base64(
+            pdf_path=pdf_path,
+            page_num=page_num,
+            zoom=2.5,  # 表格用更高解析度
+            bbox=table_bbox
+        )
     
     async def to_markdown(
         self,

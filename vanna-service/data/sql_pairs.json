@@ -119,8 +119,9 @@
     {
       "id": "biotech_top5_liabilities_001",
       "question": "Provide the Top 5 stock codes and names with the highest total liabilities in BioTech sector",
-      "sql": "SELECT c.stock_code, c.name_en as company_name, fm.value as total_liabilities, fm.unit FROM companies c JOIN financial_metrics fm ON c.id = fm.company_id WHERE c.sector = 'BioTech' AND fm.metric_name ILIKE '%total liabilit%' AND fm.year = 2024 AND fm.fiscal_period = 'FY' ORDER BY fm.value DESC LIMIT 5;",
-      "tags": ["biotech", "liabilities", "ranking", "top5"]
+      "sql": "SELECT c.stock_code, c.name_en as company_name, fm.standardized_value as total_liabilities, fm.standardized_currency FROM companies c JOIN financial_metrics fm ON c.id = fm.company_id WHERE c.sector = 'BioTech' AND fm.metric_name ILIKE '%Total Liabilities%' AND fm.year = 2024 AND fm.fiscal_period = 'FY' ORDER BY fm.standardized_value DESC LIMIT 5;",
+      "tags": ["biotech", "liabilities", "ranking", "top5", "standardized_value"],
+      "note": "Uses standardized_value for correct cross-company comparison. Raw 'value' would give wrong ranking due to unit differences."
     },
     {
       "id": "biotech_same_auditor_001",
@@ -143,8 +144,9 @@
     {
       "id": "biotech_top2_liabilities_price_001",
       "question": "Find the Top 2 BioTech stocks with the highest total liabilities in 2024 and show their closing price in 2022",
-      "sql": "SELECT c.stock_code, c.name_en, fm.value as total_liabilities_2024, m.trade_date, m.closing_price FROM companies c JOIN financial_metrics fm ON c.id = fm.company_id JOIN market_data m ON c.id = m.company_id WHERE c.sector = 'BioTech' AND fm.metric_name ILIKE '%total liabilit%' AND fm.year = 2024 AND fm.fiscal_period = 'FY' AND m.trade_date BETWEEN '2022-01-01' AND '2022-12-31' ORDER BY fm.value DESC LIMIT 100;",
-      "tags": ["biotech", "liabilities", "price", "cross_year"]
+      "sql": "SELECT c.stock_code, c.name_en, fm.standardized_value as total_liabilities_2024, fm.standardized_currency, m.trade_date, m.closing_price FROM companies c JOIN financial_metrics fm ON c.id = fm.company_id JOIN market_data m ON c.id = m.company_id WHERE c.sector = 'BioTech' AND fm.metric_name = 'Total Liabilities' AND fm.year = 2024 AND fm.fiscal_period = 'FY' AND m.trade_date BETWEEN '2022-01-01' AND '2022-12-31' ORDER BY fm.standardized_value DESC LIMIT 100;",
+      "tags": ["biotech", "liabilities", "price", "cross_year", "standardized_value"],
+      "note": "Uses standardized_value for ranking. Must GROUP BY standardized_currency if mixing currencies."
     },
     {
       "id": "stock_price_volume_chart_001",

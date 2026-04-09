@@ -730,6 +730,18 @@ const Library = {
     },
     
     /**
+     * 🔧 新增：刪除選中的單個文檔（封裝批次刪除）
+     */
+    async deleteSelectedDocument() {
+        if (!this.selectedDocument) return;
+        
+        // 利用既有的批次刪除功能來刪除單筆
+        this.selectedDocs.clear();
+        this.selectedDocs.add(this.selectedDocument.id);
+        await this.batchDeleteSelected();
+    },
+    
+    /**
      * Render processing log
      */
     renderProcessLog() {

@@ -3,6 +3,56 @@
   "version": "1.0.0",
   "items": [
     {
+      "id": "critical_standardized_value",
+      "content": "CRITICAL: financial_metrics table has TWO value columns: 'value' (original raw value) and 'standardized_value' (normalized to absolute units in HKD).",
+      "category": "critical"
+    },
+    {
+      "id": "standardized_value_usage",
+      "content": "IMPORTANT: When comparing or ranking companies (e.g., 'top 5 by revenue', 'highest liabilities'), ALWAYS use 'standardized_value' column.",
+      "category": "critical"
+    },
+    {
+      "id": "standardized_value_warning",
+      "content": "NEVER use raw 'value' for cross-company comparisons - it will give WRONG results because units differ (RMB '000 vs HKD Million vs USD).",
+      "category": "critical"
+    },
+    {
+      "id": "standardized_currency_default",
+      "content": "standardized_currency is always 'HKD' by default. All standardized_value are converted to Hong Kong Dollars using exchange rates.",
+      "category": "critical"
+    },
+    {
+      "id": "standardized_value_example_correct",
+      "content": "Example correct query: SELECT stock_code, standardized_value FROM financial_metrics ORDER BY standardized_value DESC LIMIT 5;",
+      "category": "example"
+    },
+    {
+      "id": "standardized_value_example_wrong",
+      "content": "Example wrong query: SELECT stock_code, value FROM financial_metrics ORDER BY value DESC LIMIT 5; -- WRONG! Units differ across companies!",
+      "category": "example"
+    },
+    {
+      "id": "metric_name_standardized",
+      "content": "metric_name in financial_metrics is STANDARDIZED by EntityResolver. Original names are stored in 'original_metric_name' for reference.",
+      "category": "definition"
+    },
+    {
+      "id": "standard_metric_names",
+      "content": "Standard metric names include: 'Revenue', 'Net Profit', 'R&D Expenses', 'Total Assets', 'Total Liabilities', 'Total Equity', 'Cash and Cash Equivalents'.",
+      "category": "definition"
+    },
+    {
+      "id": "metric_name_query_advice",
+      "content": "When querying, use the standardized metric_name (e.g., 'Total Liabilities'), not original names like '負債總額' or 'Liabilities Total'.",
+      "category": "best_practice"
+    },
+    {
+      "id": "no_market_cap_column",
+      "content": "IMPORTANT: Do NOT use a market_cap column. Always calculate market_cap as (closing_price * issued_shares) in your SQL query.",
+      "category": "critical"
+    },
+    {
       "id": "market_cap_formula",
       "content": "Market Capital is calculated by multiplying the closing price by the issued shares. Formula: Market Capital = closing_price * issued_shares",
       "category": "formula"
@@ -19,13 +69,58 @@
     },
     {
       "id": "auditor_opinion_types",
-      "content": "Auditor opinion types include: 'Unqualified' (clean opinion), 'Qualified' (with reservations), 'Disclaimer' (unable to express opinion), 'Adverse' (material misstatements).",
+      "content": "Auditor opinion types (ENUM): 'Unqualified' (clean opinion), 'Qualified' (with reservations), 'Disclaimer' (unable to express opinion), 'Adverse' (material misstatements), 'Not Applicable'.",
       "category": "definition"
     },
     {
       "id": "qualified_opinion_meaning",
       "content": "A 'Qualified Opinion' indicates that the auditor has reservations about certain aspects of the financial statements.",
       "category": "definition"
+    },
+    {
+      "id": "event_categories_enum",
+      "content": "Event categories (ENUM): 'Property Acquisition', 'Listing Reform', 'Consultation', 'Regulatory Action', 'Market Initiative', 'Enforcement', 'Other'.",
+      "category": "definition"
+    },
+    {
+      "id": "property_acquisition_query",
+      "content": "When searching for property purchases, use event_category = 'Property Acquisition'.",
+      "category": "best_practice"
+    },
+    {
+      "id": "listing_reform_query",
+      "content": "When searching for listing reforms, use event_category = 'Listing Reform'.",
+      "category": "best_practice"
+    },
+    {
+      "id": "category_types_enum",
+      "content": "Revenue breakdown category types (ENUM): 'Region', 'Business', 'Product', 'Segment'.",
+      "category": "definition"
+    },
+    {
+      "id": "region_breakdown",
+      "content": "Use category_type = 'Region' for geographic breakdown (e.g., Canada, Asia, Australia).",
+      "category": "best_practice"
+    },
+    {
+      "id": "business_breakdown",
+      "content": "Use category_type = 'Business' for business segment breakdown (e.g., Retail, Wholesale).",
+      "category": "best_practice"
+    },
+    {
+      "id": "currency_grouping",
+      "content": "CURRENCY WARNING: When summing amounts from revenue_breakdown or debt_maturity tables, ALWAYS GROUP BY currency.",
+      "category": "critical"
+    },
+    {
+      "id": "currency_no_mixing",
+      "content": "NEVER sum amounts with different currencies together. Use GROUP BY currency or filter by a specific currency.",
+      "category": "critical"
+    },
+    {
+      "id": "currency_example",
+      "content": "Example: SELECT SUM(amount), currency FROM debt_maturity GROUP BY currency;",
+      "category": "example"
     },
     {
       "id": "fiscal_periods",
@@ -63,6 +158,11 @@
       "category": "definition"
     },
     {
+      "id": "macro_data_null_company",
+      "content": "listing_applications table contains macro-level market data. company_id can be NULL for SFC-level statistics.",
+      "category": "definition"
+    },
+    {
       "id": "fallback_rule",
       "content": "當用戶詢問以下類型的問題，或者在專用表中找不到答案時，請務必使用 document_pages 表：未分類的政策（例如：AI政策、ESG政策）、公司願景、戰略方向、某個特定關鍵字或概念的提及、風險因素、未來展望、任何在專用表中找不到的內容。",
       "category": "fallback"
@@ -83,8 +183,18 @@
       "category": "system"
     },
     {
+      "id": "companies_view_preferred",
+      "content": "IMPORTANT: When querying company names, prefer the v_companies_resolved view over companies table. It automatically selects the most reliable name (index > extracted) using COALESCE logic.",
+      "category": "critical"
+    },
+    {
+      "id": "company_name_columns_explained",
+      "content": "Company name sources: 'name_en_index' = from Hang Seng Index report (authoritative), 'name_en_extracted' = from annual report PDF (may have variations). Always use display_name_en from v_companies_resolved for consistent results.",
+      "category": "definition"
+    },
+    {
       "id": "specialized_tables",
-      "content": "當用戶詢問具體的財務數字時，請優先查詢對應的專用表：revenue_breakdown（收入分佈）、key_personnel（高管）、shareholdings（股東）、specific_events（特定事件）、market_data（股價）、debt_maturity（債務）、companies（公司信息）。",
+      "content": "當用戶詢問具體的財務數字時，請優先查詢對應的專用表：revenue_breakdown（收入分佈）、key_personnel（高管）、shareholdings（股東）、specific_events（特定事件）、market_data（股價）、debt_maturity（債務）、v_companies_resolved（公司信息）。",
       "category": "system"
     }
   ]

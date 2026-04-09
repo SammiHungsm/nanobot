@@ -4,12 +4,18 @@
   "tables": [
     {
       "name": "companies",
-      "ddl": "CREATE TABLE companies (\n    id SERIAL PRIMARY KEY,\n    name_en VARCHAR(255) NOT NULL,\n    name_zh VARCHAR(255),\n    stock_code VARCHAR(20) UNIQUE,\n    industry VARCHAR(100),\n    sector VARCHAR(100),\n    auditor VARCHAR(200),\n    auditor_opinion VARCHAR(50),\n    ultimate_controlling_shareholder VARCHAR(255),\n    principal_banker VARCHAR(255),\n    listing_status VARCHAR(50) DEFAULT 'listed',\n    listing_date DATE\n);",
+      "ddl": "CREATE TABLE companies (\n    id SERIAL PRIMARY KEY,\n    name_en_index VARCHAR(255),\n    name_en_extracted VARCHAR(255),\n    name_zh_extracted VARCHAR(255),\n    name_en VARCHAR(255),\n    name_zh VARCHAR(255),\n    stock_code VARCHAR(20) UNIQUE,\n    industry VARCHAR(100),\n    sector VARCHAR(100),\n    listing_status VARCHAR(50) DEFAULT 'listed',\n    auditor VARCHAR(200),\n    auditor_opinion VARCHAR(50),\n    ultimate_controlling_shareholder VARCHAR(255),\n    principal_banker VARCHAR(255),\n    listing_date DATE\n);",
       "enabled": true
     },
     {
+      "name": "v_companies_resolved",
+      "ddl": "CREATE VIEW v_companies_resolved AS SELECT id, stock_code, COALESCE(name_en_index, name_en_extracted, name_en) AS display_name_en, COALESCE(name_zh_extracted, name_zh) AS display_name_zh, industry, sector, auditor, auditor_opinion, ultimate_controlling_shareholder, principal_banker, listing_status, listing_date FROM companies;",
+      "enabled": true,
+      "note": "Vanna 應優先查詢此視圖，它會自動選取最佳公司名稱（恆指報表 > PDF 擷取）"
+    },
+    {
       "name": "financial_metrics",
-      "ddl": "CREATE TABLE financial_metrics (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER NOT NULL REFERENCES companies(id),\n    year INTEGER NOT NULL,\n    fiscal_period VARCHAR(10) NOT NULL,\n    metric_name VARCHAR(100) NOT NULL,\n    metric_name_zh VARCHAR(100) NOT NULL,\n    value DOUBLE PRECISION NOT NULL,\n    unit VARCHAR(20) NOT NULL,\n    category VARCHAR(50),\n    source_file VARCHAR(500),\n    source_page INTEGER\n);",
+      "ddl": "CREATE TABLE financial_metrics (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER NOT NULL REFERENCES companies(id),\n    year INTEGER NOT NULL,\n    fiscal_period VARCHAR(10) NOT NULL,\n    metric_name VARCHAR(100) NOT NULL,\n    metric_name_zh VARCHAR(100) NOT NULL,\n    original_metric_name VARCHAR(200),\n    value DOUBLE PRECISION NOT NULL,\n    unit VARCHAR(20) NOT NULL,\n    standardized_value NUMERIC(20,2),\n    standardized_currency VARCHAR(10) DEFAULT 'HKD',\n    category VARCHAR(50),\n    source_file VARCHAR(500),\n    source_page INTEGER\n);",
       "enabled": true
     },
     {
