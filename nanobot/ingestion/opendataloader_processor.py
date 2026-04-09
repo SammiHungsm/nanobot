@@ -224,14 +224,7 @@ class OpenDataLoaderProcessor:
         """刪除現有文檔及其所有相關數據"""
         logger.info(f"🗑️ 正在刪除文檔 {doc_id} 的所有數據...")
         
-        # 1. 刪除 document_chunks
-        chunks_deleted = await self.db_conn.execute(
-            "DELETE FROM document_chunks WHERE doc_id = $1",
-            doc_id
-        )
-        logger.info(f"   📝 已刪除 document_chunks")
-        
-        # 2. 刪除 raw_artifacts
+        # 1. 刪除 raw_artifacts (document_chunks 已移除 - No RAG Option)
         artifacts_deleted = await self.db_conn.execute(
             "DELETE FROM raw_artifacts WHERE doc_id = $1",
             doc_id
@@ -559,23 +552,10 @@ class OpenDataLoaderProcessor:
         return stats
     
     async def _save_text_chunk(self, artifact: Dict, company_id: int, doc_id: str):
-        """保存文本塊"""
-        await self.db_conn.execute(
-            """
-            INSERT INTO document_chunks (
-                doc_id, company_id, chunk_index, page_num, 
-                chunk_type, content, metadata, source_file
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            """,
-            doc_id,
-            company_id,
-            0,  # chunk_index
-            artifact.get("page_num"),
-            "text",
-            artifact.get("content"),
-            json.dumps(artifact.get("metadata", {})),
-            doc_id
-        )
+        """保存文本塊 - 文本已保存在 output.json 中 (No RAG Option: document_chunks 表已移除)"""
+        # 文本塊已保存在 output.json 中，無需單獨存入數據庫
+        # document_chunks 表已根據 No RAG Option 移除
+        logger.debug(f"📝 文本塊已存在於 output.json (page {artifact.get('page_num')})")
     
     async def _save_table(self, artifact: Dict, company_id: int, doc_id: str, doc_dir: Path, idx: int):
         """保存表格"""
@@ -609,27 +589,8 @@ class OpenDataLoaderProcessor:
             doc_id
         )
         
-        # 3. 同時保存到 document_chunks (用于全文搜索)
-        content_json = artifact.get("content_json", {})
-        content_text = json.dumps(content_json, ensure_ascii=False)
-        
-        await self.db_conn.execute(
-            """
-            INSERT INTO document_chunks (
-                doc_id, company_id, chunk_index, page_num,
-                chunk_type, content, content_json, metadata, source_file
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-            """,
-            doc_id,
-            company_id,
-            idx,
-            page_num,
-            "table",
-            content_text,
-            json.dumps(content_json),
-            json.dumps(metadata),
-            doc_id
-        )
+        # raw_artifacts 記錄完成 (document_chunks 已移除 - No RAG Option)
+        logger.debug(f"📊 表格已保存：{artifact_id}")
     
     async def _save_image(self, artifact: Dict, company_id: int, doc_id: str, doc_dir: Path, idx: int):
         """保存圖片"""

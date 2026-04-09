@@ -10,7 +10,8 @@ from datetime import datetime
 from typing import Dict, Optional
 from loguru import logger
 
-from nanobot.ingestion.opendataloader_processor import OpenDataLoaderProcessor
+# 🌟 使用新的模組化 DocumentPipeline
+from nanobot.ingestion.pipeline import DocumentPipeline
 
 
 class DocumentService:
@@ -98,21 +99,21 @@ class DocumentService:
                 doc["progress"] = 5.0
                 
                 try:
-                    # 🚀 Use real OpenDataLoaderProcessor for PDF processing
+                    # 🚀 使用新的模組化 DocumentPipeline 處理 PDF
                     output_file = self.output_dir / f"{Path(doc['filename']).stem}_processed.json"
                     
                     # Update progress
                     doc["progress"] = 20.0
                     self.add_processing_log(
-                        f"Processing {doc['filename']}: Extracting with OpenDataLoader", 
+                        f"Processing {doc['filename']}: Extracting with DocumentPipeline", 
                         "info"
                     )
                     
-                    # Initialize OpenDataLoaderProcessor
+                    # 🌟 使用新的模組化 DocumentPipeline
                     db_url = os.getenv("DATABASE_URL", "postgresql://postgres:postgres_password_change_me@postgres-financial:5432/annual_reports")
                     data_dir = os.getenv("DATA_DIR", "/app/data/raw")
                     
-                    processor = OpenDataLoaderProcessor(db_url, data_dir)
+                    processor = DocumentPipeline(db_url=db_url, data_dir=data_dir)
                     await processor.connect()
                     
                     # 💡 建立一個更新進度的 Callback 函式

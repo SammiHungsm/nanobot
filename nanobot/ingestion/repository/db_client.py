@@ -208,6 +208,164 @@ class DBClient:
         return [dict(row) for row in rows]
     
     # ===========================================
+    # Document Pages Operations (兜底表 - Zone 2)
+    # ===========================================
+    
+    async def insert_document_page(
+        self,
+        company_id: int,
+        doc_id: str,
+        year: int,
+        page_num: int,
+        markdown_content: str,
+        source_file: str,
+        content_type: str = "markdown",
+        has_images: bool = False,
+        has_charts: bool = False
+    ) -> bool:
+        """
+        插入單個 PDF 頁面的原始 Markdown 到兜底表
+        
+        這是「雙軌制」的 Zone 2，確保所有原始數據都被保存，
+        供 Vanna 在找不到精準數據時進行全文搜索。
+        
+        Args:
+            company_id: 公司 ID
+            doc_id: 文檔 ID
+            year: 年份
+            page_num: 頁碼
+            markdown_content: 原始 Markdown 內容
+            source_file: 源文件名
+            content_type: 內容類型
+            has_images: 是否包含圖片
+            has_charts: 是否包含圖表
+            
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            await self.conn.execute(
+                """
+                INSERT INTO document_pages 
+                (company_id, doc_id, year, page_num, markdown_content, 
+                 content_type, has_images, has_charts, source_file)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                ON CONFLICT (company_id, year, page_num, source_file) 
+                DO UPDATE SET 
+                    markdown_content = $5,
+                    content_type = $6,
+                    has_images = $7,
+                    has_charts = $8
+                """,
+                company_id,
+                doc_id,
+                year,
+                page_num,
+                markdown_content,
+                content_type,
+                has_images,
+                has_charts,
+                source_file
+            )
+            
+            logger.debug(f"✅ Page {page_num} 已寫入 document_pages 兜底表")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ document_pages 入庫失敗 (Page {page_num}): {e}")
+            return False
+    
+    async def insert_document_pages_batch(
+        self,
+        pages: List[Dict[str, Any]]
+    ) -> int:
+        """
+        批量插入多個 PDF 頁面
+        
+        Args:
+            pages: 頁面列表，每個元素包含 company_id, doc_id, year, page_num, markdown_content 等
+            
+        Returns:
+            int: 成功插入的頁面數
+        """
+        inserted_count = 0
+        
+        for page in pages:
+            success = await self.insert_document_page(
+                company_id=page.get("company_id"),
+                doc_id=page.get("doc_id"),
+                year=page.get("year"),
+                page_num=page.get("page_num"),
+                markdown_content=page.get("markdown_content"),
+                source_file=page.get("source_file"),
+                content_type=page.get("content_type", "markdown"),
+                has_images=page.get("has_images", False),
+                has_charts=page.get("has_charts", False)
+            )
+            if success:
+                inserted_count += 1
+        
+        logger.info(f"✅ 已寫入 {inserted_count} 個頁面到 document_pages 兜底表")
+        return inserted_count
+    
+    async def search_document_pages(
+        self,
+        keywords: List[str],
+        company_id: int = None,
+        year: int = None,
+        limit: int = 5
+    ) -> List[Dict[str, Any]]:
+        """
+        全文搜索兜底表
+        
+        使用 ILIKE 進行模糊搜索，供 Vanna 在找不到精準數據時調用。
+        
+        Args:
+            keywords: 關鍵字列表
+            company_id: 公司 ID (可選)
+            year: 年份 (可選)
+            limit: 返回結果數量限制
+            
+        Returns:
+            List[Dict]: 匹配的頁面列表
+        """
+        try:
+            # 構建 ILIKE 條件
+            ilike_conditions = " OR ".join([
+                f"markdown_content ILIKE '%{keyword}%'" 
+                for keyword in keywords
+            ])
+            
+            sql = f"""
+                SELECT page_num, markdown_content, source_file
+                FROM document_pages
+                WHERE ({ilike_conditions})
+            """
+            
+            params = []
+            param_idx = 1
+            
+            if company_id:
+                sql += f" AND company_id = ${param_idx}"
+                params.append(company_id)
+                param_idx += 1
+            
+            if year:
+                sql += f" AND year = ${param_idx}"
+                params.append(year)
+                param_idx += 1
+            
+            sql += f" ORDER BY page_num LIMIT ${param_idx}"
+            params.append(limit)
+            
+            rows = await self.conn.fetch(sql, *params)
+            return [dict(row) for row in rows]
+            
+        except Exception as e:
+            logger.error(f"❌ 全文搜索失敗: {e}")
+            return []
+    
+    # ===========================================
     # Document Operations
     # ===========================================
     
@@ -296,8 +454,7 @@ class DBClient:
         """刪除文檔及其所有相關數據"""
         logger.info(f"🗑️ 正在刪除文檔 {doc_id} 的所有數據...")
         
-        # 刪除相關數據
-        await self.conn.execute("DELETE FROM document_chunks WHERE doc_id = $1", doc_id)
+        # 刪除相關數據 (document_chunks 已移除 - No RAG Option)
         await self.conn.execute("DELETE FROM raw_artifacts WHERE doc_id = $1", doc_id)
         await self.conn.execute("DELETE FROM documents WHERE doc_id = $1", doc_id)
         

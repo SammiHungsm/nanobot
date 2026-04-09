@@ -186,6 +186,7 @@ class DocumentPipeline:
         
         result = {
             "revenue_breakdown": {"pages": [], "extracted": 0},
+            "document_pages_saved": 0,  # 🌟 新增：記錄保存到兜底表的頁數
             "errors": []
         }
         
@@ -194,7 +195,17 @@ class DocumentPipeline:
             year = self._infer_year(doc_id)
             logger.info(f"   推斷年份: {year}")
             
-            # Step 2: 找出 Revenue Breakdown 頁面
+            # 🌟 Step 2: 保存所有頁面到兜底表 (Zone 2) - 確保數據不流失
+            if progress_callback:
+                progress_callback(35.0, "保存所有頁面到兜底表...")
+            
+            saved_pages = await self.save_all_pages_to_fallback_table(
+                pdf_path, company_id, doc_id, year
+            )
+            result["document_pages_saved"] = saved_pages
+            logger.info(f"   ✅ 已保存 {saved_pages} 個頁面到 document_pages 兜底表")
+            
+            # Step 3: 找出 Revenue Breakdown 頁面
             revenue_keywords = [
                 "revenue breakdown", "geographical breakdown",
                 "revenue by region", "收入分佈", "地區收入"
@@ -204,10 +215,10 @@ class DocumentPipeline:
             
             logger.info(f"   找到 {len(revenue_pages)} 個 Revenue Breakdown 候選頁面: {revenue_pages}")
             
-            # Step 3: 對每個頁面進行提取
+            # Step 4: 對每個頁面進行結構化提取 (Zone 1)
             for i, page_num in enumerate(revenue_pages):
                 if progress_callback:
-                    progress = 30.0 + (i + 1) / len(revenue_pages) * 50.0
+                    progress = 40.0 + (i + 1) / max(len(revenue_pages), 1) * 40.0
                     progress_callback(progress, f"提取 Page {page_num}...")
                 
                 extracted = await self.extract_revenue_from_page(
@@ -261,18 +272,33 @@ class DocumentPipeline:
                     logger.warning(f"   ⚠️ Markdown 轉換失敗，重試...")
                     continue
                 
-                # Step 2: Markdown → JSON
+                # 🌟 Step 1.5: 雙重寫入 (Dual-Write) - 保存原始 Markdown 到兜底表
+                # 這是 Zone 2，確保所有數據都不會流失
+                await self.db.insert_document_page(
+                    company_id=company_id,
+                    doc_id=doc_id,
+                    year=year,
+                    page_num=page_num,
+                    markdown_content=markdown,
+                    source_file=Path(pdf_path).name,
+                    content_type="markdown",
+                    has_images=True,  # 使用了 Vision 解析，通常有圖表
+                    has_charts=True
+                )
+                logger.info(f"   💾 Page {page_num} 已寫入 document_pages 兜底表 (Zone 2)")
+                
+                # Step 2: Markdown → JSON (Zone 1 結構化提取)
                 extracted_data = await self.agent.extract_revenue_breakdown(markdown)
                 
                 if not extracted_data:
-                    logger.warning(f"   ⚠️ JSON 提取失敗，重試...")
+                    logger.warning(f"   ⚠️ JSON 提取失敗，但原始 Markdown 已保存，可通過全文搜索查詢")
                     continue
                 
                 # Step 3: 驗證
                 validation = validate_all(extracted_data, "revenue_breakdown")
                 
                 if not validation.is_valid:
-                    logger.warning(f"   ⚠️ 驗證失敗: {validation.message}，重試...")
+                    logger.warning(f"   ⚠️ 驗證失敗: {validation.message}，但原始 Markdown 已保存")
                     continue
                 
                 # Step 4: 入庫
@@ -292,6 +318,74 @@ class DocumentPipeline:
                 continue
         
         return 0
+    
+    async def save_all_pages_to_fallback_table(
+        self,
+        pdf_path: str,
+        company_id: int,
+        doc_id: str,
+        year: int
+    ) -> int:
+        """
+        🛡️ 保存所有 PDF 頁面到兜底表 (Zone 2)
+        
+        這是「雙軌制」的關鍵步驟：確保所有原始內容都被保存，
+        即使無法提取結構化數據，Vanna 仍然可以通過全文搜索找到答案。
+        
+        Args:
+            pdf_path: PDF 路徑
+            company_id: 公司 ID
+            doc_id: 文檔 ID
+            year: 年份
+            
+        Returns:
+            int: 成功保存的頁面數
+        """
+        logger.info(f"   📄 正在保存所有頁面到兜底表...")
+        
+        total_pages = FastParser.get_page_count(pdf_path)
+        if total_pages == 0:
+            logger.warning("   ⚠️ 無法獲取 PDF 頁數")
+            return 0
+        
+        saved_count = 0
+        source_file = Path(pdf_path).name
+        
+        for page_num in range(1, total_pages + 1):
+            try:
+                # 使用 FastParser 快速提取文字
+                text_content = FastParser.extract_text(pdf_path, page_num)
+                
+                if not text_content or len(text_content.strip()) < 10:
+                    # 跳過空白或太短的頁面
+                    continue
+                
+                # 檢測頁面類型（是否包含圖表）
+                # 這裡用簡單的啟發式規則判斷
+                has_charts = any(kw in text_content.lower() for kw in 
+                    ['chart', 'figure', 'pie', 'bar', 'graph', '圖', '表'])
+                
+                # 保存到兜底表
+                success = await self.db.insert_document_page(
+                    company_id=company_id,
+                    doc_id=doc_id,
+                    year=year,
+                    page_num=page_num,
+                    markdown_content=text_content,
+                    source_file=source_file,
+                    content_type="text",
+                    has_charts=has_charts
+                )
+                
+                if success:
+                    saved_count += 1
+                    
+            except Exception as e:
+                logger.warning(f"   ⚠️ Page {page_num} 保存失敗: {e}")
+                continue
+        
+        logger.info(f"   ✅ 已保存 {saved_count}/{total_pages} 頁到 document_pages 表")
+        return saved_count
     
     # ===========================================
     # 輔助方法

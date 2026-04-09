@@ -18,6 +18,46 @@ except ImportError:
     logger.warning("⚠️ OpenAI SDK 未安裝")
 
 
+def _get_config_api_credentials() -> tuple[Optional[str], Optional[str]]:
+    """
+    從 nanobot config.json 讀取 API 憑證
+    
+    Returns:
+        tuple: (api_key, api_base)
+    """
+    try:
+        from nanobot.config.loader import load_config
+        from pathlib import Path
+        import os
+        
+        # 優先使用 NANOBOT_CONFIG 環境變數指定的路徑
+        config_path = None
+        nanobot_config_env = os.getenv("NANOBOT_CONFIG")
+        if nanobot_config_env:
+            config_path = Path(nanobot_config_env)
+            if not config_path.exists():
+                config_path = None
+        
+        config = load_config(config_path)
+        provider = config.get_provider()
+        
+        if provider:
+            api_key = provider.api_key or None
+            api_base = provider.api_base or None
+            
+            # 檢查是否為佔位符
+            if api_key and api_key.startswith("sk-YOUR"):
+                api_key = None
+            
+            if api_key:
+                logger.debug(f"✅ 從 config.json 載入 API Key: {api_key[:10]}...")
+                return api_key, api_base
+    except Exception as e:
+        logger.warning(f"⚠️ 無法從 config.json 載入 API 憑證: {e}")
+    
+    return None, None
+
+
 class FinancialAgent:
     """
     Financial Agent - LLM 審計師
@@ -35,15 +75,19 @@ class FinancialAgent:
         初始化
         
         Args:
-            api_key: API Key
+            api_key: API Key (優先使用參數，其次從 config.json 讀取)
             api_base: API Base URL
             model: LLM 模型名稱
         """
-        self.api_key = api_key or os.getenv("CUSTOM_API_KEY", os.getenv("OPENAI_API_KEY"))
-        self.api_base = api_base or os.getenv(
-            "CUSTOM_API_BASE",
-            os.getenv("OPENAI_API_BASE", "https://coding.dashscope.aliyuncs.com/v1")
-        )
+        # 優先順序：參數 > config.json > 環境變數
+        if not api_key or not api_base:
+            config_key, config_base = _get_config_api_credentials()
+            api_key = api_key or config_key
+            api_base = api_base or config_base
+        
+        # 最後嘗試環境變數作為 fallback
+        self.api_key = api_key or os.getenv("CUSTOM_API_KEY") or os.getenv("MINIMAX_API_KEY") or os.getenv("OPENAI_API_KEY")
+        self.api_base = api_base or os.getenv("CUSTOM_API_BASE") or os.getenv("OPENAI_API_BASE")
         self.model = model
         self.client = None
     

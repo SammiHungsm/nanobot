@@ -3,7 +3,7 @@ Batch PDF Processor
 
 功能：
 1. 監控目錄中的新 PDF 文件
-2. 批量調用 OpenDataLoader 處理
+2. 批量調用 DocumentPipeline 處理
 3. 支持並行處理和進度追蹤
 4. 失敗重試機制
 """
@@ -17,7 +17,8 @@ from datetime import datetime
 from loguru import logger
 import sys
 
-from nanobot.ingestion.opendataloader_processor import OpenDataLoaderProcessor
+# 🌟 使用新的模組化 DocumentPipeline
+from nanobot.ingestion.pipeline import DocumentPipeline
 
 
 class BatchPDFProcessor:
@@ -43,7 +44,7 @@ class BatchPDFProcessor:
         self.db_url = db_url
         self.data_dir = data_dir
         self.input_dir = Path(input_dir)
-        self.processor: Optional[OpenDataLoaderProcessor] = None
+        self.processor: Optional[DocumentPipeline] = None
         
         # 配置
         self.max_concurrent = int(os.getenv("MAX_CONCURRENT_TASKS", "5"))
@@ -54,7 +55,7 @@ class BatchPDFProcessor:
     
     async def initialize(self):
         """初始化處理器"""
-        self.processor = OpenDataLoaderProcessor(self.db_url, self.data_dir)
+        self.processor = DocumentPipeline(db_url=self.db_url, data_dir=self.data_dir)
         await self.processor.connect()
     
     async def close(self):

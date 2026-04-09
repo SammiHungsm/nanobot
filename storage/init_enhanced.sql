@@ -280,10 +280,53 @@ COMMENT ON TABLE listing_applications IS '上市申請統計 (company_id 可為 
 
 CREATE INDEX idx_listing_year ON listing_applications USING btree (year);
 
-COMMENT ON TABLE listing_applications IS '上市申請統計';
+COMMENT ON TABLE listing_applications IS '上市申請統計 (company_id 可為 NULL 表示宏觀市場數據)';
 
 -- ===========================================
--- 9. Views for Vanna 查詢
+-- 9. 🛡️ Document Pages 表 - 原始 Markdown 兜底表 (Hybrid Fallback)
+-- ===========================================
+-- 這張表是「雙軌制」的 Zone 2，負責存儲所有未結構化的原始內容
+-- 當 Vanna 在 Zone 1 (精準表) 找不到答案時，會自動 fallback 到這裡做全文搜索
+
+CREATE TABLE IF NOT EXISTS document_pages (
+    id SERIAL PRIMARY KEY,
+    company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE,
+    doc_id VARCHAR(100),             -- 關聯文檔 ID
+    year INTEGER NOT NULL,
+    page_num INTEGER NOT NULL,
+    
+    -- 🌟 核心欄位：存儲整頁的原始 Markdown / 文字
+    markdown_content TEXT NOT NULL,
+    
+    -- 元數據
+    content_type VARCHAR(50),        -- 'markdown', 'text', 'table'
+    has_images BOOLEAN DEFAULT FALSE,
+    has_charts BOOLEAN DEFAULT FALSE,
+    
+    -- 來源追蹤
+    source_file VARCHAR(500) NOT NULL,
+    
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    CONSTRAINT unique_document_page UNIQUE (company_id, year, page_num, source_file)
+);
+
+-- 🔍 全文搜索索引 (GIN Index for Full-Text Search)
+-- 使用 PostgreSQL 內置的 to_tsvector 支援英文全文搜索
+CREATE INDEX idx_document_pages_content ON document_pages USING gin (to_tsvector('english', markdown_content));
+
+-- 🚀 ILIKE 搜索優化 (Trigram Index for Pattern Matching)
+-- 需要先啟用 pg_trgm extension: CREATE EXTENSION IF NOT EXISTS pg_trgm;
+-- CREATE INDEX idx_document_pages_trgm ON document_pages USING gin (markdown_content gin_trgm_ops);
+
+CREATE INDEX idx_document_pages_company ON document_pages USING btree (company_id);
+CREATE INDEX idx_document_pages_year ON document_pages USING btree (year);
+CREATE INDEX idx_document_pages_doc ON document_pages USING btree (doc_id);
+
+COMMENT ON TABLE document_pages IS '🛡️ 兜底表：存儲所有 PDF 頁面的原始 Markdown 內容，供 Vanna 在找不到精準數據時進行全文搜索 (Zone 2)';
+
+-- ===========================================
+-- 10. Views for Vanna 查詢
 -- ===========================================
 
 -- BioTech 公司視圖 (Market Cap 計算)

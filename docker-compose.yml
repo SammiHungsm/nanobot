@@ -80,6 +80,7 @@ services:
       - ./data/outputs:/app/outputs
       - ./data/raw:/app/data/raw
       - ./nanobot:/app/nanobot:ro  # Mount nanobot package as read-only
+      - ./config:/app/config  # Mount config folder to read config.json
     ports:
       - "3000:8080"
     environment:
@@ -92,6 +93,7 @@ services:
       - PYTHONPATH=/app
       - JAVA_OPTS=-Xmx2g -Xms512m  # Java heap for OpenDataLoader (2GB max, 512MB min)
       - _JAVA_OPTIONS=-Xmx2g -Xms512m
+      - NANOBOT_CONFIG=/app/config/config.json  # Config file path for API keys
     depends_on:
       postgres-financial:
         condition: service_healthy
