@@ -1,0 +1,91 @@
+{
+  "description": "Documentation Training Data for Vanna - Business Logic",
+  "version": "1.0.0",
+  "items": [
+    {
+      "id": "market_cap_formula",
+      "content": "Market Capital is calculated by multiplying the closing price by the issued shares. Formula: Market Capital = closing_price * issued_shares",
+      "category": "formula"
+    },
+    {
+      "id": "biotech_flexible",
+      "content": "The BioTech list is flexible. Always query the companies table where sector = 'BioTech' instead of using a hardcoded list of stock codes.",
+      "category": "best_practice"
+    },
+    {
+      "id": "biotech_definition",
+      "content": "BioTech sector includes pharmaceutical companies, biotechnology firms, medical device manufacturers, and healthcare technology companies.",
+      "category": "definition"
+    },
+    {
+      "id": "auditor_opinion_types",
+      "content": "Auditor opinion types include: 'Unqualified' (clean opinion), 'Qualified' (with reservations), 'Disclaimer' (unable to express opinion), 'Adverse' (material misstatements).",
+      "category": "definition"
+    },
+    {
+      "id": "qualified_opinion_meaning",
+      "content": "A 'Qualified Opinion' indicates that the auditor has reservations about certain aspects of the financial statements.",
+      "category": "definition"
+    },
+    {
+      "id": "fiscal_periods",
+      "content": "Fiscal periods: 'FY' = Full Year, 'H1' = First Half, 'H2' = Second Half, 'Q1/Q2/Q3/Q4' = Quarters.",
+      "category": "definition"
+    },
+    {
+      "id": "hk_stock_codes",
+      "content": "Hong Kong stock codes are typically 4-5 digits, e.g., '00001' for CK Hutchison, '00700' for Tencent.",
+      "category": "convention"
+    },
+    {
+      "id": "stock_code_no_suffix",
+      "content": "Stock codes in the database do NOT include the '.HK' suffix.",
+      "category": "convention"
+    },
+    {
+      "id": "revenue_categories",
+      "content": "Revenue breakdown categories can be by region (e.g., 'Canada', 'Asia', 'Australia') or by business segment (e.g., 'Retail', 'Wholesale').",
+      "category": "definition"
+    },
+    {
+      "id": "trust_holdings",
+      "content": "Trust holdings are recorded with both the trust name and the trustee name. For example, 'Li Ka-Shing Unity Trust' with trustee 'Li Ka-Shing Unity Trustee Company Limited'.",
+      "category": "example"
+    },
+    {
+      "id": "principal_banker",
+      "content": "Principal banker refers to the main bank or banks that provide significant banking services to the company.",
+      "category": "definition"
+    },
+    {
+      "id": "ultimate_controlling_shareholder",
+      "content": "Ultimate controlling shareholder is the person or entity that has ultimate control over the company, which may be different from the direct shareholders.",
+      "category": "definition"
+    },
+    {
+      "id": "fallback_rule",
+      "content": "當用戶詢問以下類型的問題，或者在專用表中找不到答案時，請務必使用 document_pages 表：未分類的政策（例如：AI政策、ESG政策）、公司願景、戰略方向、某個特定關鍵字或概念的提及、風險因素、未來展望、任何在專用表中找不到的內容。",
+      "category": "fallback"
+    },
+    {
+      "id": "document_pages_usage",
+      "content": "document_pages 表存儲了所有 PDF 頁面的原始 Markdown 內容。使用 ILIKE '%關鍵字%' 進行模糊搜索。返回 page_num 和 markdown_content 給用戶。可以同時搜索多個關鍵字，用 OR 連接。",
+      "category": "fallback"
+    },
+    {
+      "id": "document_pages_examples",
+      "content": "搜索單個關鍵字：SELECT page_num, markdown_content FROM document_pages WHERE markdown_content ILIKE '%關鍵字%' LIMIT 5; 搜索多個關鍵字：SELECT page_num, markdown_content FROM document_pages WHERE markdown_content ILIKE '%AI%' OR markdown_content ILIKE '%Artificial Intelligence%';",
+      "category": "fallback"
+    },
+    {
+      "id": "vanna_role",
+      "content": "你是 SFC AI 財報分析系統的智能查詢助手。你負責將用戶的自然語言問題轉換為 SQL 查詢。",
+      "category": "system"
+    },
+    {
+      "id": "specialized_tables",
+      "content": "當用戶詢問具體的財務數字時，請優先查詢對應的專用表：revenue_breakdown（收入分佈）、key_personnel（高管）、shareholdings（股東）、specific_events（特定事件）、market_data（股價）、debt_maturity（債務）、companies（公司信息）。",
+      "category": "system"
+    }
+  ]
+}

@@ -1,0 +1,56 @@
+{
+  "description": "DDL Whitelist for Vanna - Allowed Tables and Columns",
+  "version": "1.0.0",
+  "allowed_tables": [
+    {
+      "name": "companies",
+      "allowed_columns": ["id", "name_en", "name_zh", "stock_code", "industry", "sector", "auditor", "auditor_opinion", "ultimate_controlling_shareholder", "principal_banker", "listing_status", "listing_date"]
+    },
+    {
+      "name": "financial_metrics",
+      "allowed_columns": ["id", "company_id", "year", "fiscal_period", "metric_name", "metric_name_zh", "value", "unit", "category", "source_file", "source_page"]
+    },
+    {
+      "name": "market_data",
+      "allowed_columns": ["id", "company_id", "trade_date", "closing_price", "opening_price", "high_price", "low_price", "issued_shares", "trading_volume", "market_cap"]
+    },
+    {
+      "name": "key_personnel",
+      "allowed_columns": ["id", "company_id", "year", "person_name", "person_name_zh", "role", "role_zh", "committee", "committee_position", "biography", "biography_zh", "age", "source_file", "source_page"]
+    },
+    {
+      "name": "shareholdings",
+      "allowed_columns": ["id", "company_id", "year", "shareholder_name", "shareholder_name_zh", "shareholder_type", "percentage_held", "shares_held", "trust_name", "trustee_name", "source_file", "source_page"]
+    },
+    {
+      "name": "specific_events",
+      "allowed_columns": ["id", "company_id", "doc_id", "event_category", "event_type", "event_title", "event_detail", "event_date", "effective_date", "metric_value", "metric_unit", "source_file", "source_page"]
+    },
+    {
+      "name": "revenue_breakdown",
+      "allowed_columns": ["id", "company_id", "year", "category", "category_type", "percentage", "amount", "currency", "sub_category", "sub_percentage", "source_file", "source_page"]
+    },
+    {
+      "name": "debt_maturity",
+      "allowed_columns": ["id", "company_id", "year", "maturity_year", "maturity_date", "amount", "currency", "debt_type", "source_file", "source_page"]
+    },
+    {
+      "name": "listing_applications",
+      "allowed_columns": ["id", "company_id", "doc_id", "year", "application_count", "approved_count", "rejected_count", "source_file", "source_page"]
+    },
+    {
+      "name": "document_pages",
+      "allowed_columns": ["id", "company_id", "doc_id", "year", "page_num", "markdown_content", "content_type", "has_images", "has_charts", "source_file"]
+    },
+    {
+      "name": "documents",
+      "allowed_columns": ["id", "doc_id", "company_id", "title", "document_type", "year", "file_path", "processing_status", "uploaded_at", "updated_at", "file_hash", "file_size_bytes", "processing_error", "processing_completed_at", "total_chunks", "total_artifacts"]
+    },
+    {
+      "name": "raw_artifacts",
+      "allowed_columns": ["id", "artifact_id", "doc_id", "company_id", "file_type", "file_path", "file_size_bytes", "metadata", "page_num", "source_file"]
+    }
+  ],
+  "forbidden_keywords": ["DROP", "TRUNCATE", "DELETE FROM companies", "DELETE FROM financial_metrics", "UPDATE companies SET", "INSERT INTO companies"],
+  "max_result_rows": 1000
+}

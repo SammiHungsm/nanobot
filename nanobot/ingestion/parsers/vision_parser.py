@@ -29,12 +29,14 @@ except ImportError:
     logger.warning("⚠️ OpenAI SDK 未安裝，Vision 功能將不可用")
 
 
-def _get_config_api_credentials() -> tuple[Optional[str], Optional[str]]:
+def _get_config_api_credentials() -> tuple[Optional[str], Optional[str], Optional[str]]:
     """
-    從 nanobot config.json 讀取 API 憑證
+    從 nanobot config.json 讀取 API 憑證和 Vision 模型
+    
+    模型配置從 provider 層級讀取，因為不同 provider 有不同的可用模型。
     
     Returns:
-        tuple: (api_key, api_base)
+        tuple: (api_key, api_base, vision_model)
     """
     try:
         from nanobot.config.loader import load_config
@@ -52,6 +54,13 @@ def _get_config_api_credentials() -> tuple[Optional[str], Optional[str]]:
         config = load_config(config_path)
         provider = config.get_provider()
         
+        # 從 agents.defaults 讀取模型 (vision 使用相同的 model)
+        model = None
+        try:
+            model = config.agents.defaults.model
+        except AttributeError:
+            pass
+        
         if provider:
             api_key = provider.api_key or None
             api_base = provider.api_base or None
@@ -61,12 +70,12 @@ def _get_config_api_credentials() -> tuple[Optional[str], Optional[str]]:
                 api_key = None
             
             if api_key:
-                logger.debug(f"✅ 從 config.json 載入 API Key: {api_key[:10]}...")
-                return api_key, api_base
+                logger.debug(f"✅ VisionParser 從 config 讀取: model={model}")
+                return api_key, api_base, model
     except Exception as e:
-        logger.warning(f"⚠️ 無法從 config.json 載入 API 憑證: {e}")
+        logger.warning(f"⚠️ VisionParser 無法從 config.json 載入配置: {e}")
     
-    return None, None
+    return None, None, None
 
 
 class VisionParser:
@@ -80,7 +89,7 @@ class VisionParser:
         self,
         api_key: str = None,
         api_base: str = None,
-        model: str = "qwen-vl-max"
+        model: str = None
     ):
         """
         初始化
@@ -88,19 +97,25 @@ class VisionParser:
         Args:
             api_key: API Key (優先使用參數，其次從 config.json 讀取)
             api_base: API Base URL
-            model: Vision 模型名稱
+            model: Vision 模型名稱 (優先使用參數，其次從 config.json 讀取)
         """
-        # 優先順序：參數 > config.json > 環境變數
-        if not api_key or not api_base:
-            config_key, config_base = _get_config_api_credentials()
+        # 優先順序：參數 > config.json
+        if not api_key or not api_base or not model:
+            config_key, config_base, config_vision_model = _get_config_api_credentials()
             api_key = api_key or config_key
             api_base = api_base or config_base
+            model = model or config_vision_model
         
         # 最後嘗試環境變數作為 fallback
         self.api_key = api_key or os.getenv("CUSTOM_API_KEY") or os.getenv("MINIMAX_API_KEY") or os.getenv("OPENAI_API_KEY")
         self.api_base = api_base or os.getenv("CUSTOM_API_BASE") or os.getenv("OPENAI_API_BASE")
-        self.model = model
+        self.model = model  # 不使用硬編碼 fallback
         self.client = None
+        
+        if not self.model:
+            raise ValueError("❌ VisionParser: vision_model 未配置！請在 config.json 的 provider 中設定 vision_model")
+        
+        logger.debug(f"✅ VisionParser 初始化: model={self.model}")
     
     def _get_client(self) -> Optional[AsyncOpenAI]:
         """獲取 OpenAI 客戶端"""

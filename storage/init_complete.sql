@@ -123,8 +123,13 @@ CREATE TABLE public.revenue_breakdown (
  amount numeric(20, 2) NULL,
  currency varchar(10) NULL,
  source_file varchar(500) NOT NULL,
- created_at timestamp DEFAULT CURRENT_TIMESTAMP
+ source_page int4 NULL,
+ created_at timestamp DEFAULT CURRENT_TIMESTAMP,
+ CONSTRAINT unique_revenue_breakdown UNIQUE (company_id, year, category, category_type)
 );
+CREATE INDEX idx_revenue_company ON public.revenue_breakdown USING btree (company_id);
+CREATE INDEX idx_revenue_year ON public.revenue_breakdown USING btree (year);
+CREATE INDEX idx_revenue_category ON public.revenue_breakdown USING btree (category);
 
 -- 8. Debt Maturity (債務到期)
 CREATE TABLE public.debt_maturity (

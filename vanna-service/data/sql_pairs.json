@@ -1,0 +1,246 @@
+{
+  "description": "SQL Training Pairs for Vanna - Question-SQL Examples",
+  "version": "2.0.0",
+  "pairs": [
+    {
+      "id": "shareholding_001",
+      "question": "What is the percentage of shareholding of Li Ka-Shing Unity Trustee Company Limited as trustee of The Li Ka-Shing Unity Trust in CK Hutchison?",
+      "sql": "SELECT shareholder_name, trust_name, trustee_name, percentage_held FROM shareholdings WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND trustee_name LIKE '%Li Ka-Shing Unity Trustee%' AND trust_name LIKE '%Li Ka-Shing Unity Trust%';",
+      "tags": ["shareholdings", "ck_hutchison", "trust", "percentage"]
+    },
+    {
+      "id": "executive_directors_001",
+      "question": "Can you list the executive directors?",
+      "sql": "SELECT person_name, person_name_zh, role, committee FROM key_personnel WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND role ILIKE '%Executive Director%' ORDER BY person_name;",
+      "tags": ["key_personnel", "ck_hutchison", "directors", "executive"]
+    },
+    {
+      "id": "revenue_canada_001",
+      "question": "What is the percentage of total revenue from Canada?",
+      "sql": "SELECT category, percentage, amount, currency FROM revenue_breakdown WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND year = 2023 AND category = 'Canada' AND category_type = 'Region';",
+      "tags": ["revenue_breakdown", "ck_hutchison", "geographic", "canada"]
+    },
+    {
+      "id": "revenue_asia_australia_001",
+      "question": "What is the % and amount of total revenue from Asia, Australia & Others respectively based on the chart?",
+      "sql": "SELECT category, percentage, amount, currency FROM revenue_breakdown WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND year = 2023 AND category IN ('Asia, Australia & Others', 'Asia', 'Australia') AND category_type = 'Region' ORDER BY percentage DESC;",
+      "tags": ["revenue_breakdown", "ck_hutchison", "geographic", "asia"]
+    },
+    {
+      "id": "revenue_asia_retail_001",
+      "question": "What is the % of total revenue from Asia, Australia & Others? Within Asia, Australia & Others, what is the % of revenue for Retail Sector?",
+      "sql": "SELECT category, sub_category, sub_percentage, percentage FROM revenue_breakdown WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND year = 2023 AND category LIKE '%Asia%' AND (sub_category ILIKE '%Retail%' OR category ILIKE '%Retail%');",
+      "tags": ["revenue_breakdown", "ck_hutchison", "segment", "retail"]
+    },
+    {
+      "id": "profit_loss_5years_001",
+      "question": "Please provide the profit and loss figures with 5 comparative periods?",
+      "sql": "SELECT year, metric_name, metric_name_zh, value, unit FROM financial_metrics WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND category IN ('revenue', 'profit', 'loss') AND fiscal_period = 'FY' AND year >= 2019 ORDER BY year DESC, metric_name;",
+      "tags": ["financial_metrics", "ck_hutchison", "multi_year", "profit_loss"]
+    },
+    {
+      "id": "profit_attributable_001",
+      "question": "Please provide profit attributable to ordinary shareholders of the company from 2019 – 2023?",
+      "sql": "SELECT year, value, unit FROM financial_metrics WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND metric_name ILIKE '%profit attributable%shareholder%' AND year BETWEEN 2019 AND 2023 AND fiscal_period = 'FY' ORDER BY year;",
+      "tags": ["financial_metrics", "ck_hutchison", "profit", "shareholders"]
+    },
+    {
+      "id": "revenue_5years_001",
+      "question": "Please provide revenue figures of the company from 2019 – 2023?",
+      "sql": "SELECT year, value, unit FROM financial_metrics WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND metric_name ILIKE '%revenue%' AND year BETWEEN 2019 AND 2023 AND fiscal_period = 'FY' ORDER BY year;",
+      "tags": ["financial_metrics", "ck_hutchison", "revenue", "multi_year"]
+    },
+    {
+      "id": "fixed_assets_5years_001",
+      "question": "Please provide fixed assets figures for CK Hutchison from 2019 – 2023",
+      "sql": "SELECT year, value, unit FROM financial_metrics WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND metric_name ILIKE '%fixed asset%' AND year BETWEEN 2019 AND 2023 AND fiscal_period = 'FY' ORDER BY year;",
+      "tags": ["financial_metrics", "ck_hutchison", "assets", "multi_year"]
+    },
+    {
+      "id": "debt_maturity_2027_001",
+      "question": "What is the amount of total debt to be matured in 2027?",
+      "sql": "SELECT maturity_year, SUM(amount) as total_amount, currency FROM debt_maturity WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND maturity_year = 2027 GROUP BY maturity_year, currency;",
+      "tags": ["debt_maturity", "ck_hutchison", "debt", "2027"]
+    },
+    {
+      "id": "sfc_cash_001",
+      "question": "What is the amount of cash at bank and in hand for the year 2024 mentioned in SFC Annual Report?",
+      "sql": "SELECT year, value, unit FROM financial_metrics WHERE company_id = (SELECT id FROM companies WHERE name_en ILIKE '%Securities and Futures Commission%' OR name_en ILIKE '%SFC%') AND metric_name ILIKE '%cash at bank%' AND year = 2024;",
+      "tags": ["financial_metrics", "sfc", "cash", "2024"]
+    },
+    {
+      "id": "sfc_committee_001",
+      "question": "List all members of the Securities Compensation Fund Committee",
+      "sql": "SELECT person_name, person_name_zh, role, committee FROM key_personnel WHERE company_id = (SELECT id FROM companies WHERE name_en ILIKE '%Securities and Futures Commission%' OR name_en ILIKE '%SFC%') AND committee ILIKE '%Securities Compensation Fund%' ORDER BY person_name;",
+      "tags": ["key_personnel", "sfc", "committee", "members"]
+    },
+    {
+      "id": "sfc_office_floors_001",
+      "question": "How many floors did SFC purchase for the OIE office?",
+      "sql": "SELECT event_title, metric_value, metric_unit FROM specific_events WHERE company_id = (SELECT id FROM companies WHERE name_en ILIKE '%SFC%') AND event_category = 'Property Acquisition' AND event_title ILIKE '%OIE%' OR event_detail ILIKE '%floor%';",
+      "tags": ["specific_events", "sfc", "property", "office"]
+    },
+    {
+      "id": "sfc_listing_reform_001",
+      "question": "When was the effective date of the SEHK GEM listing reform?",
+      "sql": "SELECT event_title, effective_date, announcement_date FROM specific_events WHERE event_category = 'Listing Reform' AND event_title ILIKE '%GEM%' ORDER BY effective_date DESC LIMIT 5;",
+      "tags": ["specific_events", "sfc", "listing_reform", "GEM"]
+    },
+    {
+      "id": "sfc_listing_applications_001",
+      "question": "How many listing applications were processed by SFC?",
+      "sql": "SELECT year, application_count, approved_count, rejected_count FROM listing_applications WHERE company_id IS NULL ORDER BY year DESC LIMIT 5;",
+      "tags": ["listing_applications", "sfc", "statistics", "listing"]
+    },
+    {
+      "id": "sfc_share_buyback_001",
+      "question": "When was the consultation on share buy-backs conducted?",
+      "sql": "SELECT event_title, announcement_date, effective_date FROM specific_events WHERE event_category = 'Consultation' AND event_title ILIKE '%buy-back%' OR event_detail ILIKE '%share buy-back%' ORDER BY announcement_date DESC;",
+      "tags": ["specific_events", "sfc", "consultation", "buyback"]
+    },
+    {
+      "id": "sfc_rmb_counters_001",
+      "question": "How many stocks were launched for the RMB counters?",
+      "sql": "SELECT event_title, metric_value, metric_unit FROM specific_events WHERE event_category = 'Market Initiative' AND event_title ILIKE '%RMB%' OR event_detail ILIKE '%RMB counter%';",
+      "tags": ["specific_events", "sfc", "rmb", "market_initiative"]
+    },
+    {
+      "id": "sfc_bio_001",
+      "question": "Generate the bio of Lisa Chen mentioned in SFC Annual Report",
+      "sql": "SELECT person_name, person_name_zh, role, committee, biography FROM key_personnel WHERE company_id = (SELECT id FROM companies WHERE name_en ILIKE '%SFC%') AND person_name ILIKE '%Lisa Chen%';",
+      "tags": ["key_personnel", "sfc", "bio", "person"]
+    },
+    {
+      "id": "biotech_top10_marketcap_001",
+      "question": "Provide the Top 10 stock codes and names of the market capital from the BioTech Sector. The result is shown in a table.",
+      "sql": "SELECT c.stock_code, c.name_en as company_name, (m.closing_price * m.issued_shares) as market_capital, m.closing_price, m.issued_shares FROM companies c JOIN market_data m ON c.id = m.company_id WHERE c.sector = 'BioTech' AND m.trade_date = (SELECT MAX(trade_date) FROM market_data) ORDER BY market_capital DESC LIMIT 10;",
+      "tags": ["biotech", "market_cap", "ranking", "top10"]
+    },
+    {
+      "id": "biotech_top5_liabilities_001",
+      "question": "Provide the Top 5 stock codes and names with the highest total liabilities in BioTech sector",
+      "sql": "SELECT c.stock_code, c.name_en as company_name, fm.value as total_liabilities, fm.unit FROM companies c JOIN financial_metrics fm ON c.id = fm.company_id WHERE c.sector = 'BioTech' AND fm.metric_name ILIKE '%total liabilit%' AND fm.year = 2024 AND fm.fiscal_period = 'FY' ORDER BY fm.value DESC LIMIT 5;",
+      "tags": ["biotech", "liabilities", "ranking", "top5"]
+    },
+    {
+      "id": "biotech_same_auditor_001",
+      "question": "List all BioTech stocks which has the same auditor as stock 6160 Beone Medicines",
+      "sql": "SELECT c.stock_code, c.name_en, c.auditor FROM companies c WHERE c.sector = 'BioTech' AND c.auditor = (SELECT auditor FROM companies WHERE stock_code = '6160') ORDER BY c.stock_code;",
+      "tags": ["biotech", "auditor", "filter", "comparison"]
+    },
+    {
+      "id": "biotech_shareholders_001",
+      "question": "Please provide all the ultimate controlling shareholders of each BioTech stock",
+      "sql": "SELECT stock_code, name_en, name_zh, ultimate_controlling_shareholder FROM companies WHERE sector = 'BioTech' AND ultimate_controlling_shareholder IS NOT NULL ORDER BY stock_code;",
+      "tags": ["biotech", "shareholders", "list", "controlling"]
+    },
+    {
+      "id": "biotech_qualified_opinion_001",
+      "question": "List all BioTech companies which has a Qualified Opinion from auditor's opinion",
+      "sql": "SELECT stock_code, name_en, name_zh, auditor, auditor_opinion FROM companies WHERE sector = 'BioTech' AND auditor_opinion = 'Qualified' ORDER BY stock_code;",
+      "tags": ["biotech", "auditor_opinion", "filter", "qualified"]
+    },
+    {
+      "id": "biotech_top2_liabilities_price_001",
+      "question": "Find the Top 2 BioTech stocks with the highest total liabilities in 2024 and show their closing price in 2022",
+      "sql": "SELECT c.stock_code, c.name_en, fm.value as total_liabilities_2024, m.trade_date, m.closing_price FROM companies c JOIN financial_metrics fm ON c.id = fm.company_id JOIN market_data m ON c.id = m.company_id WHERE c.sector = 'BioTech' AND fm.metric_name ILIKE '%total liabilit%' AND fm.year = 2024 AND fm.fiscal_period = 'FY' AND m.trade_date BETWEEN '2022-01-01' AND '2022-12-31' ORDER BY fm.value DESC LIMIT 100;",
+      "tags": ["biotech", "liabilities", "price", "cross_year"]
+    },
+    {
+      "id": "stock_price_volume_chart_001",
+      "question": "Plot the line chart of the closing price and transaction volume for stock 09969 in 2022",
+      "sql": "SELECT trade_date, closing_price, trading_volume FROM market_data WHERE company_id = (SELECT id FROM companies WHERE stock_code = '09969') AND trade_date BETWEEN '2022-01-01' AND '2022-12-31' ORDER BY trade_date;",
+      "tags": ["market_data", "price", "volume", "chart", "biotech"]
+    },
+    {
+      "id": "stock_revenue_avg_volume_001",
+      "question": "What is the total revenue of stock 09969 in 2023 & 2024 and what is the average trading volume in 2022?",
+      "sql": "SELECT 'Revenue' as metric, year, value, unit FROM financial_metrics WHERE company_id = (SELECT id FROM companies WHERE stock_code = '09969') AND metric_name ILIKE '%revenue%' AND year IN (2023, 2024) AND fiscal_period = 'FY' UNION ALL SELECT 'Avg Volume' as metric, 2022 as year, AVG(trading_volume) as value, 'shares' as unit FROM market_data WHERE company_id = (SELECT id FROM companies WHERE stock_code = '09969') AND trade_date BETWEEN '2022-01-01' AND '2022-12-31';",
+      "tags": ["financial_metrics", "market_data", "revenue", "volume", "cross_year"]
+    },
+    {
+      "id": "stock_revenue_001",
+      "question": "What is the total revenue of stock 09969 in 2023 and 2024",
+      "sql": "SELECT year, value as total_revenue, unit FROM financial_metrics WHERE company_id = (SELECT id FROM companies WHERE stock_code = '09969') AND metric_name ILIKE '%total revenue%' AND year IN (2023, 2024) AND fiscal_period = 'FY' ORDER BY year;",
+      "tags": ["financial_metrics", "revenue", "biotech", "09969"]
+    },
+    {
+      "id": "stock_avg_volume_001",
+      "question": "What is the average trading volume for stock 09969 in 2022",
+      "sql": "SELECT AVG(trading_volume) as avg_volume FROM market_data WHERE company_id = (SELECT id FROM companies WHERE stock_code = '09969') AND trade_date BETWEEN '2022-01-01' AND '2022-12-31';",
+      "tags": ["market_data", "average", "volume", "biotech"]
+    },
+    {
+      "id": "biotech_hsbc_001",
+      "question": "List all BioTech stocks in 2024 which principal bankers are HSBC",
+      "sql": "SELECT stock_code, name_en, name_zh, principal_banker FROM companies WHERE sector = 'BioTech' AND principal_banker ILIKE '%HSBC%' ORDER BY stock_code;",
+      "tags": ["biotech", "principal_banker", "filter", "hsbc"]
+    },
+    {
+      "id": "biotech_hsbc_avg_price_001",
+      "question": "Show average closing price for BioTech stocks with HSBC as principal banker in 2022",
+      "sql": "SELECT c.stock_code, c.name_en, AVG(m.closing_price) as avg_closing_price FROM companies c JOIN market_data m ON c.id = m.company_id WHERE c.sector = 'BioTech' AND c.principal_banker ILIKE '%HSBC%' AND m.trade_date BETWEEN '2022-01-01' AND '2022-12-31' GROUP BY c.stock_code, c.name_en ORDER BY avg_closing_price DESC;",
+      "tags": ["biotech", "hsbc", "average", "price", "cross_year"]
+    },
+    {
+      "id": "fallback_ai_strategy_001",
+      "question": "What is the company's strategy on Artificial Intelligence or AI?",
+      "sql": "SELECT page_num, markdown_content FROM document_pages WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND (markdown_content ILIKE '%Artificial Intelligence%' OR markdown_content ILIKE '% AI %' OR markdown_content ILIKE '%machine learning%' OR markdown_content ILIKE '%人工智能%') LIMIT 5;",
+      "tags": ["document_pages", "fallback", "strategy", "ai"]
+    },
+    {
+      "id": "fallback_esg_001",
+      "question": "Did the report mention anything about ESG policies?",
+      "sql": "SELECT page_num, markdown_content FROM document_pages WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND (markdown_content ILIKE '%ESG%' OR markdown_content ILIKE '%Environmental, Social, and Governance%' OR markdown_content ILIKE '%sustainability%' OR markdown_content ILIKE '%可持續%') LIMIT 5;",
+      "tags": ["document_pages", "fallback", "esg", "sustainability"]
+    },
+    {
+      "id": "fallback_risk_factors_001",
+      "question": "What are the risk factors mentioned in the report?",
+      "sql": "SELECT page_num, markdown_content FROM document_pages WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND (markdown_content ILIKE '%risk factor%' OR markdown_content ILIKE '%主要風險%' OR markdown_content ILIKE '%uncertainty%' OR markdown_content ILIKE '%風險因素%') LIMIT 5;",
+      "tags": ["document_pages", "fallback", "risk", "factors"]
+    },
+    {
+      "id": "fallback_vision_001",
+      "question": "What is the company's vision or future outlook?",
+      "sql": "SELECT page_num, markdown_content FROM document_pages WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND (markdown_content ILIKE '%vision%' OR markdown_content ILIKE '%outlook%' OR markdown_content ILIKE '%future%' OR markdown_content ILIKE '%展望%' OR markdown_content ILIKE '%願景%') LIMIT 5;",
+      "tags": ["document_pages", "fallback", "vision", "outlook"]
+    },
+    {
+      "id": "fallback_carbon_001",
+      "question": "Does the company have any carbon emission or climate change initiatives?",
+      "sql": "SELECT page_num, markdown_content FROM document_pages WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND (markdown_content ILIKE '%carbon%' OR markdown_content ILIKE '%emission%' OR markdown_content ILIKE '%climate change%' OR markdown_content ILIKE '%碳排放%' OR markdown_content ILIKE '%氣候變化%') LIMIT 5;",
+      "tags": ["document_pages", "fallback", "carbon", "climate"]
+    },
+    {
+      "id": "fallback_digital_transformation_001",
+      "question": "What digital transformation initiatives has the company undertaken?",
+      "sql": "SELECT page_num, markdown_content FROM document_pages WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND (markdown_content ILIKE '%digital transformation%' OR markdown_content ILIKE '%數碼轉型%' OR markdown_content ILIKE '%數字化%') LIMIT 5;",
+      "tags": ["document_pages", "fallback", "digital", "transformation"]
+    },
+    {
+      "id": "fallback_dividend_001",
+      "question": "Find information about dividend policy",
+      "sql": "SELECT page_num, markdown_content FROM document_pages WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND (markdown_content ILIKE '%dividend%' OR markdown_content ILIKE '%股息%' OR markdown_content ILIKE '%派息%') LIMIT 5;",
+      "tags": ["document_pages", "fallback", "dividend", "policy"]
+    },
+    {
+      "id": "fallback_cybersecurity_001",
+      "question": "What is mentioned about cyber security?",
+      "sql": "SELECT page_num, markdown_content FROM document_pages WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND (markdown_content ILIKE '%cyber security%' OR markdown_content ILIKE '%cybersecurity%' OR markdown_content ILIKE '%網絡安全%' OR markdown_content ILIKE '%信息安全%') LIMIT 5;",
+      "tags": ["document_pages", "fallback", "cybersecurity", "security"]
+    },
+    {
+      "id": "fallback_merger_001",
+      "question": "Does the report discuss any merger and acquisition activities?",
+      "sql": "SELECT page_num, markdown_content FROM document_pages WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND (markdown_content ILIKE '%merger%' OR markdown_content ILIKE '%acquisition%' OR markdown_content ILIKE '%M&A%' OR markdown_content ILIKE '%收購%' OR markdown_content ILIKE '%合併%') LIMIT 5;",
+      "tags": ["document_pages", "fallback", "merger", "acquisition"]
+    },
+    {
+      "id": "fallback_governance_001",
+      "question": "What is the company's approach to corporate governance?",
+      "sql": "SELECT page_num, markdown_content FROM document_pages WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND (markdown_content ILIKE '%corporate governance%' OR markdown_content ILIKE '%企業管治%' OR markdown_content ILIKE '%公司治理%') LIMIT 5;",
+      "tags": ["document_pages", "fallback", "governance", "corporate"]
+    }
+  ]
+}

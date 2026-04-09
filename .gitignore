@@ -42,7 +42,7 @@ config\config.json
 # Docker Data Volumes - DO NOT COMMIT
 # ===========================================
 # Generated PDF data
-data/
+./data/*
 webui/uploads/
 webui/outputs/
 webui/data/
@@ -51,8 +51,7 @@ webui/data/
 postgres_data/
 
 # Vanna training data
-vanna_data/
-vanna-service/data/
+
 
 # Raw extracted data
 data/raw/

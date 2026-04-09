@@ -46,7 +46,7 @@ def _get_config_api_credentials() -> tuple[Optional[str], Optional[str], Optiona
         config = load_config(config_path)
         provider = config.get_provider()
         
-        # 從 agents.defaults 讀取模型配置
+        # 從 agents.defaults 讀取模型
         model = None
         try:
             model = config.agents.defaults.model
@@ -62,7 +62,7 @@ def _get_config_api_credentials() -> tuple[Optional[str], Optional[str], Optiona
                 api_key = None
             
             if api_key:
-                logger.debug(f"✅ PageClassifier 從 config.json 載入: model={model}, api_key={api_key[:10]}...")
+                logger.debug(f"✅ PageClassifier 從 config 讀取: model={model}")
                 return api_key, api_base, model
     except Exception as e:
         logger.warning(f"⚠️ PageClassifier 無法從 config.json 載入配置: {e}")
@@ -102,13 +102,15 @@ class PageClassifier:
         # 最後嘗試環境變數作為 fallback
         self.api_key = api_key or os.getenv("CUSTOM_API_KEY") or os.getenv("MINIMAX_API_KEY") or os.getenv("OPENAI_API_KEY")
         self.api_base = api_base or os.getenv("CUSTOM_API_BASE") or os.getenv("OPENAI_API_BASE")
-        self.model = model or "qwen3.5-plus"  # 最終 fallback
+        self.model = model  # 不使用硬編碼 fallback
         self.client = None
         
         if not self.api_key:
             logger.warning("⚠️ PageClassifier: 未配置有效的 API Key")
-        else:
-            logger.info(f"✅ PageClassifier 初始化: model={self.model}")
+        if not self.model:
+            raise ValueError("❌ PageClassifier: model 未配置！請在 config.json 的 provider 中設定 model")
+        
+        logger.info(f"✅ PageClassifier 初始化: model={self.model}")
     
     def _get_client(self) -> Optional[AsyncOpenAI]:
         """獲取 OpenAI 客戶端"""

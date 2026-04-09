@@ -48,6 +48,9 @@ class DocumentPipeline:
         """
         從 nanobot config.json 讀取 API 憑證和模型
         
+        API 憑證從 provider 讀取，模型從 agents.defaults 讀取。
+        Vision 模型使用相同的 model（不單獨配置）。
+        
         Returns:
             tuple: (api_key, api_base, model)
         """
@@ -65,6 +68,7 @@ class DocumentPipeline:
             config = load_config(config_path)
             provider = config.get_provider()
             
+            # 從 agents.defaults 讀取模型
             model = None
             try:
                 model = config.agents.defaults.model
@@ -79,7 +83,7 @@ class DocumentPipeline:
                     api_key = None
                 
                 if api_key:
-                    logger.debug(f"✅ DocumentPipeline 從 config.json 載入: model={model}")
+                    logger.debug(f"✅ DocumentPipeline 從 config 讀取: model={model}")
                     return api_key, api_base, model
         except Exception as e:
             logger.warning(f"⚠️ DocumentPipeline 無法從 config.json 載入配置: {e}")
@@ -112,8 +116,12 @@ class DocumentPipeline:
         # 優先順序：參數 > config.json
         api_key = api_key or config_key
         api_base = api_base or config_base
-        llm_model = llm_model or config_model or "qwen3.5-plus"
-        vision_model = vision_model or "qwen-vl-max"
+        llm_model = llm_model or config_model
+        vision_model = vision_model or llm_model  # 使用相同的 model
+        
+        # 驗證必要配置
+        if not llm_model:
+            raise ValueError("❌ LLM model 未配置！請在 config.json 的 agents.defaults.model 中設定")
         
         self.db_url = db_url or os.getenv(
             "DATABASE_URL",
