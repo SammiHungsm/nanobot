@@ -324,14 +324,12 @@ class DocumentPipeline:
             await self._create_document(pdf_path, company_id, doc_id, file_hash)
             
             # Step 4: 提取公司信息 (如果沒有 company_id)
+            # 🎯 漸進式提取：只取前 2 頁，Upsert 公司信息
             if not company_id:
                 if progress_callback:
-                    progress_callback(20.0, "提取公司信息...")
+                    progress_callback(20.0, "從封面提取公司元數據...")
                 company_id = await self._extract_and_create_company(pdf_path, doc_id)
-                # 更新 documents 表的 company_id 和 year
-                if company_id:
-                    year = self._infer_year(doc_id)
-                    await self.db.update_document_company_id(doc_id, company_id, year)
+                # 注意：_extract_and_create_company 已內部處理 year 更新
             
             # Step 5: 智能結構化提取
             if company_id:
@@ -395,9 +393,13 @@ class DocumentPipeline:
         }
         
         try:
-            # Step 1: 推斷年份
-            year = self._infer_year(doc_id)
-            logger.info(f"   推斷年份: {year}")
+            # Step 1: 從數據庫獲取年份（已由 _extract_and_create_company 從封面提取）
+            year = await self._get_document_year(doc_id)
+            if not year:
+                year = datetime.now().year  # Fallback
+                logger.warning(f"   ⚠️ 無法從文檔記錄獲取年份，使用當前年份: {year}")
+            else:
+                logger.info(f"   📅 文檔年份: {year}")
             
             # 🌟 Step 2: 保存所有頁面到兜底表 (Zone 2) - 確保數據不流失
             if progress_callback:
@@ -668,46 +670,93 @@ class DocumentPipeline:
         pdf_path: str,
         doc_id: str
     ) -> Optional[int]:
-        """提取公司信息並創建公司記錄"""
-        # 快速提取前幾頁文字
-        text_content = ""
-        for page_num in range(1, min(6, FastParser.get_page_count(pdf_path) + 1)):
+        """
+        🎯 漸進式提取與 Upsert 公司信息
+        
+        核心改進：
+        1. 只提取前 2 頁文本（封面和目錄）
+        2. 使用精準 LLM 提取 stock_code, year, names
+        3. 實現 Upsert：如果公司已存在，只更新空值
+        
+        Returns:
+            int: 公司 ID
+        """
+        logger.info(f"🎯 正在從封面提取公司元數據...")
+        
+        # Step 1: 只提取前 2 頁文字（封面和目錄）
+        front_pages_text = ""
+        total_pages = FastParser.get_page_count(pdf_path)
+        
+        for page_num in range(1, min(3, total_pages + 1)):  # 🎯 只取前 2 頁
             text = FastParser.extract_text(pdf_path, page_num)
             if text:
-                text_content += text + "\n"
+                front_pages_text += text + "\n"
         
-        if not text_content:
+        if not front_pages_text:
+            logger.warning("⚠️ 無法提取封面文本")
             return None
         
-        # 提取公司信息
-        company_info = await self.agent.extract_company_info(text_content[:5000])
+        # Step 2: 使用精準 LLM 提取元數據
+        metadata = await self.agent.extract_company_metadata_from_cover(front_pages_text)
         
-        if not company_info:
+        if not metadata:
+            logger.warning("⚠️ 封面元數據提取失敗")
             return None
         
-        # 創建公司
-        company_id = await self.db.get_or_create_company(
-            stock_code=company_info.get("stock_code"),
-            name_en=company_info.get("name_en"),
-            name_zh=company_info.get("name_zh"),
-            industry=company_info.get("industry"),
-            sector=company_info.get("sector")
+        stock_code = metadata.get("stock_code")
+        year = metadata.get("year")
+        name_en = metadata.get("name_en")
+        name_zh = metadata.get("name_zh")
+        
+        # Step 3: 驗證必要欄位
+        if not stock_code:
+            logger.error(f"❌ 封面解析失敗：找不到 Stock Code！PDF: {pdf_path}")
+            return None
+        
+        logger.info(f"✅ 封面解析成功: Stock={stock_code}, Year={year}, Name={name_en or name_zh}")
+        
+        # Step 4: Upsert 公司信息（Update as need）
+        # 使用 db_client 的 upsert_company 方法實現漸進式更新
+        company_id = await self.db.upsert_company(
+            stock_code=stock_code,
+            name_en=name_en,
+            name_zh=name_zh,
+            name_source="extracted",  # 來自 PDF 提取
+            sector="BioTech"  # 預設板塊
         )
+        
+        # Step 5: 更新文檔的 year
+        if year and company_id:
+            await self.db.update_document_company_id(doc_id, company_id, year)
+            logger.info(f"✅ 文檔 {doc_id} 已關聯公司 ID={company_id}, Year={year}")
         
         return company_id
     
-    def _infer_year(self, doc_id: str) -> int:
-        """從文檔 ID 推斷年份"""
-        import re
-        year_match = re.search(r'(\d{4})', doc_id)
-        if year_match:
-            year = int(year_match.group(1))
-            if 2000 <= year <= 2030:
-                return year
-        return datetime.now().year
-
-
-# ===========================================
+    async def _get_document_year(self, doc_id: str) -> Optional[int]:
+        """
+        從數據庫獲取文檔的年份
+        
+        🎯 取代爛正則表達式：年份現在由 LLM 從封面精準提取
+        
+        Args:
+            doc_id: 文檔 ID
+            
+        Returns:
+            int: 年份，如果未找到則返回 None
+        """
+        try:
+            row = await self.db.conn.fetchrow(
+                "SELECT year FROM documents WHERE doc_id = $1",
+                doc_id
+            )
+            if row and row['year']:
+                return row['year']
+        except Exception as e:
+            logger.warning(f"⚠️ 無法從數據庫獲取年份: {e}")
+        
+        return None
+    
+    # ===========================================
 # 便捷函數
 # ===========================================
 

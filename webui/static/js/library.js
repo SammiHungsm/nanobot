@@ -15,6 +15,10 @@ const Library = {
     currentSort: 'date_desc',
     searchTerm: '',
     
+    // 🎯 Upload state (显式声明架构)
+    pendingFiles: [],        // Files waiting for type selection
+    selectedDocType: 'annual_report',  // User-selected document type
+    
     // DOM elements
     elements: {},
     
@@ -43,7 +47,8 @@ const Library = {
         // Bind event listeners
         this.elements.fileUpload.addEventListener('change', async (e) => {
             const files = Array.from(e.target.files);
-            await this.handleFileUpload(files);
+            // 🎯 改為先顯示類型選擇 modal，再上傳
+            this.showDocTypeModal(files);
             e.target.value = '';
         });
         
@@ -51,6 +56,64 @@ const Library = {
         setInterval(() => this.loadProcessingLogs(), 2000);
         
         this.log('Library module initialized');
+    },
+    
+    // ===========================================
+    // 🎯 Document Type Selection (显式声明架构)
+    // ===========================================
+    
+    /**
+     * Show document type selection modal
+     */
+    showDocTypeModal(files) {
+        if (!files || files.length === 0) return;
+        
+        this.pendingFiles = files;
+        this.selectedDocType = 'annual_report';  // Reset to default
+        
+        // Reset radio buttons
+        const radioBtns = document.querySelectorAll('input[name="doc-type"]');
+        radioBtns.forEach(btn => btn.checked = btn.value === 'annual_report');
+        
+        // Show modal
+        const modal = document.getElementById('doc-type-modal');
+        if (modal) {
+            modal.classList.remove('hidden');
+        }
+        
+        this.log(`准备上传 ${files.length} 个文件，请选择文档类型...`);
+    },
+    
+    /**
+     * Close document type selection modal
+     */
+    closeDocTypeModal() {
+        const modal = document.getElementById('doc-type-modal');
+        if (modal) {
+            modal.classList.add('hidden');
+        }
+        this.pendingFiles = [];
+    },
+    
+    /**
+     * Confirm upload with selected document type
+     */
+    async confirmUpload() {
+        // Get selected document type
+        const selectedRadio = document.querySelector('input[name="doc-type"]:checked');
+        const docType = selectedRadio ? selectedRadio.value : 'annual_report';
+        
+        this.selectedDocType = docType;
+        
+        // Close modal
+        this.closeDocTypeModal();
+        
+        // Proceed with upload
+        if (this.pendingFiles.length > 0) {
+            this.log(`🚀 开始上传 ${this.pendingFiles.length} 个文件 (类型: ${docType})`, 'warning');
+            await this.handleFileUpload(this.pendingFiles, docType);
+            this.pendingFiles = [];
+        }
     },
     
     /**
@@ -172,8 +235,10 @@ const Library = {
     
     /**
      * Handle file upload with size check and progress
+     * @param {File[]} files - Files to upload
+     * @param {string} docType - Document type ('annual_report' or 'index_report')
      */
-    async handleFileUpload(files) {
+    async handleFileUpload(files, docType = 'annual_report') {
         if (!files || files.length === 0) return;
         
         const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
@@ -190,7 +255,7 @@ const Library = {
         // 這樣可以確保後端是 Single Source of Truth
         
         // Show upload progress modal
-        this.showUploadProgress(files[0].name, 0, 'Starting upload...');
+        this.showUploadProgress(files[0].name, 0, `Starting upload (${docType})...`);
         
         try {
             const formData = new FormData();
@@ -198,8 +263,13 @@ const Library = {
                 formData.append('files', files[i]);
             }
             
+            // 🎯 添加文档类型参数 (显式声明)
+            formData.append('doc_type', docType);
+            
+            this.log(`📤 上传文件类型: ${docType}`, 'info');
+            
             // Use XMLHttpRequest for progress tracking with retry logic
-            await this.uploadWithProgress(formData, files);
+            await this.uploadWithProgress(formData, files, docType);
             
         } catch (error) {
             this.closeUploadModal();
@@ -211,13 +281,15 @@ const Library = {
     /**
      * Upload with progress tracking using XMLHttpRequest
      * 🚀 支援 409 錯誤處理：當檔案已存在時詢問用戶是否覆蓋
+     * 🎯 支援 doc_type 顯式宣告
      */
-    uploadWithProgress(formData, files, replace = false) {
+    uploadWithProgress(formData, files, docType = 'annual_report', replace = false) {
         return new Promise((resolve, reject) => {
             const xhr = new XMLHttpRequest();
             this.uploadXHR = xhr;
             
-            xhr.open('POST', `/api/upload?replace=${replace}`, true);
+            // 🎯 URL 包含 doc_type 和 replace 參數
+            xhr.open('POST', `/api/upload?doc_type=${encodeURIComponent(docType)}&replace=${replace}`, true);
             
             // Track upload progress
             xhr.upload.addEventListener('progress', (e) => {
@@ -235,7 +307,8 @@ const Library = {
                     setTimeout(() => this.loadDocuments(), 1000);
                     
                     if (window.UI) {
-                        UI.appendMessage('bot', `✅ Uploaded successfully! Processing has started.`);
+                        const typeLabel = docType === 'index_report' ? 'Hang Seng Index Report' : 'Annual Report';
+                        UI.appendMessage('bot', `✅ Uploaded successfully! Processing ${typeLabel}...`);
                     }
                     resolve(result);
                 
@@ -248,14 +321,14 @@ const Library = {
                         // 彈出確認對話框
                         const userWantsToReplace = confirm(
                             `Document "${fileName}" already exists in the system.\n\n` +
-                            `Do you want to REPLACE it and rerun the OpenDataLoader analysis?`
+                            `Do you want to REPLACE it and rerun the analysis?`
                         );
                         
                         if (userWantsToReplace) {
                             // 用戶選擇覆蓋，重新上傳並帶入 replace=true
                             this.log(`User chose to replace: ${fileName}`, 'info');
                             this.showUploadProgress(fileName, 0, 'Replacing...');
-                            return this.uploadWithProgress(formData, files, true)
+                            return this.uploadWithProgress(formData, files, docType, true)
                                 .then(resolve)
                                 .catch(reject);
                         } else {

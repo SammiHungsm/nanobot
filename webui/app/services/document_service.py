@@ -46,13 +46,19 @@ class DocumentService:
         file_path: str,
         uploader: str = "System",
         file_size: int = 0,
-        replace: bool = False  # 👈 新增 replace 參數
+        replace: bool = False,  # 👈 新增 replace 參數
+        doc_type: str = "annual_report"  # 🎯 顯式宣告文件類型
     ) -> str:
         """
         Add a document to the database and queue for processing.
         
         Args:
+            filename: 檔案名稱
+            file_path: 檔案路徑
+            uploader: 上傳者
+            file_size: 檔案大小
             replace: 是否強制重新處理 (覆蓋已存在的文檔)
+            doc_type: 文件類型 ('annual_report' 或 'index_report')
             
         Returns:
             document_id: Unique identifier for the document
@@ -60,6 +66,10 @@ class DocumentService:
         # Generate document ID
         doc_hash = hashlib.md5(filename.encode()).hexdigest()[:8]
         doc_id = f"{Path(filename).stem}_{doc_hash}"
+        
+        # 🎯 根據文件類型決定處理方式
+        type_label = "恆指報表" if doc_type == "index_report" else "年報"
+        logger.info(f"📥 新增文檔: {filename} (類型: {type_label})")
         
         # Add to database
         self.documents_db[doc_id] = {
@@ -73,11 +83,12 @@ class DocumentService:
             "error_message": None,
             "created_at": datetime.now().isoformat(),
             "replace": replace,  # 👈 存儲 replace 標記
+            "doc_type": doc_type,  # 🎯 存儲顯式文件類型
         }
         
         # Add to processing queue
         await self.processing_queue.put(doc_id)
-        self.add_processing_log(f"Queued for processing: {filename} (ID: {doc_id})", "info")
+        self.add_processing_log(f"📥 佇列新增: {filename} ({type_label})", "info")
         
         return doc_id
     
@@ -99,40 +110,26 @@ class DocumentService:
                 doc["progress"] = 5.0
                 
                 try:
-                    # 🚀 使用新的模組化 DocumentPipeline 處理 PDF
-                    output_file = self.output_dir / f"{Path(doc['filename']).stem}_processed.json"
+                    # 🎯 基於顯式宣告的絕對分流 (Update as need)
+                    doc_type = doc.get("doc_type", "annual_report")
                     
-                    # Update progress
-                    doc["progress"] = 20.0
-                    self.add_processing_log(
-                        f"Processing {doc['filename']}: Extracting with DocumentPipeline", 
-                        "info"
-                    )
-                    
-                    # 🌟 使用新的模組化 DocumentPipeline
-                    db_url = os.getenv("DATABASE_URL", "postgresql://postgres:postgres_password_change_me@postgres-financial:5432/annual_reports")
-                    data_dir = os.getenv("DATA_DIR", "/app/data/raw")
-                    
-                    processor = DocumentPipeline(db_url=db_url, data_dir=data_dir)
-                    await processor.connect()
-                    
-                    # 💡 建立一個更新進度的 Callback 函式
-                    def update_progress(percent: float, message: str):
-                        doc["progress"] = percent
-                        doc["status_message"] = message
-                        self.add_processing_log(f"[{doc['filename']}] {message}", "info")
-                    
-                    # Run real processing (parses PDF, inserts to PostgreSQL, triggers Vanna)
-                    # company_id 會由 LLM 自動從文檔中提取
-                    result = await processor.process_pdf(
-                        pdf_path=doc["path"], 
-                        company_id=None,  # 由 LLM 自動提取
-                        doc_id=doc_id,
-                        progress_callback=update_progress,
-                        replace=doc.get("replace", False)  # 👈 傳遞 replace 參數
-                    )
-                    
-                    await processor.close()
+                    if doc_type == "index_report":
+                        # 🎯 路線 A：恆指主數據更新 Pipeline
+                        self.add_processing_log(
+                            f"🎯 執行路線 A：恆指主數據更新 Pipeline", 
+                            "warning"
+                        )
+                        # TODO: 實現 index_report 處理邏輯
+                        # result = await self._process_master_index_report(doc["path"], doc_id)
+                        # 暫時使用標準 Pipeline
+                        result = await self._process_with_pipeline(doc, update_progress)
+                    else:
+                        # 📄 路線 B：一般公司年報 Pipeline
+                        self.add_processing_log(
+                            f"📄 執行路線 B：一般公司年報 Pipeline", 
+                            "info"
+                        )
+                        result = await self._process_with_pipeline(doc, update_progress)
                     
                     # Check if processing failed
                     if result.get("status") == "failed":
@@ -217,3 +214,40 @@ class DocumentService:
         self.add_processing_log(f"Deleted document: {doc['filename']}", "info")
         
         return True
+    
+    async def _process_with_pipeline(self, doc: dict, update_progress) -> dict:
+        """
+        使用 DocumentPipeline 處理 PDF
+        
+        Args:
+            doc: 文檔記錄
+            update_progress: 進度更新回調
+            
+        Returns:
+            處理結果
+        """
+        doc_id = doc["id"]
+        
+        # 🌟 使用新的模組化 DocumentPipeline
+        db_url = os.getenv(
+            "DATABASE_URL", 
+            "postgresql://postgres:postgres_password_change_me@postgres-financial:5432/annual_reports"
+        )
+        data_dir = os.getenv("DATA_DIR", "/app/data/raw")
+        
+        processor = DocumentPipeline(db_url=db_url, data_dir=data_dir)
+        await processor.connect()
+        
+        # Run real processing (parses PDF, inserts to PostgreSQL, triggers Vanna)
+        # company_id 會由 LLM 自動從文檔中提取
+        result = await processor.process_pdf(
+            pdf_path=doc["path"], 
+            company_id=None,  # 由 LLM 自動提取
+            doc_id=doc_id,
+            progress_callback=update_progress,
+            replace=doc.get("replace", False)
+        )
+        
+        await processor.close()
+        
+        return result

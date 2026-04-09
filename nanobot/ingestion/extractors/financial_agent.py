@@ -432,39 +432,60 @@ Expected format:
         """
         從文本中提取公司信息
         
+        🔧 優化：專注於前兩頁文本，提高準確率
+        
         Args:
-            text_content: 文本內容
+            text_content: 文本內容（最好是前 1-2 頁的封面文本）
             
         Returns:
             Dict: 公司信息
         """
         from .prompts import get_prompt
         
-        logger.info(f"🧠 正在提取公司信息...")
+        logger.info(f"🧠 正在從封面提取公司元數據...")
         
         system_prompt = get_prompt("company_info")
         
+        # 🎯 優化後的 Prompt：強調這是封面文本，精準提取
         enhanced_system_prompt = f"""{system_prompt}
 
-IMPORTANT: You MUST respond with valid JSON only. No markdown, no explanations, just pure JSON.
+🎯 這是一份港股年報的封面與目錄頁文本。請精準提取以下 4 個核心資訊：
 
-Expected format:
+1. **stock_code**: 股票代碼（通常是 4-5 位數字，如 01093, 02359）
+   - 必須是純數字，不要包含任何符號
+   - 範例：00001, 00700, 02359
+
+2. **year**: 這份財報的年份（如 2023, 2024）
+   - 通常是財務年度結束年份
+
+3. **name_en**: 公司英文名稱
+   - 如果找不到，請填 null，不要猜測
+
+4. **name_zh**: 公司中文名稱
+   - 如果找不到，請填 null，不要猜測
+
+⚠️ CRITICAL RULES:
+- 如果找不到任何資訊，請填 null
+- 不要從內容中「推測」或「聯想」
+- stock_code 必須是純數字字符串
+
+Expected JSON format:
 {{
-  "stock_code": "00001",
-  "name_en": "CK Hutchison Holdings Limited",
-  "name_zh": "長江和記實業有限公司",
-  "industry": "Conglomerates",
-  "sector": "Conglomerates"
+  "stock_code": "02359",
+  "name_en": "Pharmaron Beijing Co., Ltd.",
+  "name_zh": "康龍化成（北京）新藥技術股份有限公司",
+  "industry": "Pharmaceuticals",
+  "sector": "BioTech"
 }}"""
         
         messages = [
             {"role": "system", "content": enhanced_system_prompt},
-            {"role": "user", "content": text_content[:5000]}  # 限制長度
+            {"role": "user", "content": text_content[:3000]}  # 🎯 縮小範圍：前兩頁通常 <3000 字
         ]
         
         result_text = await self._call_llm_with_retry(
             messages=messages,
-            temperature=0.0,
+            temperature=0.0,  # 🎯 零溫度：最高精確度
             response_format={"type": "json_object"}
         )
         
@@ -476,11 +497,90 @@ Expected format:
         if result:
             try:
                 validated = CompanyInfo(**result)
-                logger.info(f"✅ 公司信息提取成功: {validated.name_en or validated.name_zh}")
+                logger.info(f"✅ 公司元數據提取成功: Stock={validated.stock_code}, Name={validated.name_en or validated.name_zh}")
                 return validated.model_dump()
             except Exception as e:
                 logger.warning(f"⚠ Schema 驗證失敗，返回原始數據: {e}")
                 return result
+        
+        return None
+    
+    async def extract_company_metadata_from_cover(
+        self,
+        front_pages_text: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        🎯 新增：專門從封面提取核心 Metadata（stock_code, year, names）
+        
+        這是精準版本，只處理封面文本，確保最高準確率。
+        
+        Args:
+            front_pages_text: 前 1-2 頁的文本內容
+            
+        Returns:
+            Dict: {stock_code, year, name_en, name_zh}
+        """
+        logger.info(f"🎯 從封面精準提取核心 Metadata...")
+        
+        prompt = """你是一個精準的文檔解析器。請從以下港股年報封面文本中提取 4 個核心資訊。
+
+⚠️ 嚴格規則：
+1. stock_code: 股票代碼（4-5 位純數字，如 02359）
+2. year: 財報年份（如 2024）
+3. name_en: 公司英文名（找不到填 null）
+4. name_zh: 公司中文名（找不到填 null）
+
+封面文本：
+""" + front_pages_text[:2000] + """
+
+只回傳 JSON，不要解釋：
+{""" 
+        
+        messages = [
+            {"role": "user", "content": prompt}
+        ]
+        
+        result_text = await self._call_llm_with_retry(
+            messages=messages,
+            temperature=0.0,
+            response_format={"type": "json_object"}
+        )
+        
+        if not result_text:
+            logger.warning("⚠️ 封面元數據提取失敗")
+            return None
+        
+        result = self.json_processor.repair_and_parse(result_text)
+        
+        if result:
+            stock_code = result.get("stock_code")
+            year = result.get("year")
+            
+            # 🎯 驗證：stock_code 必須是純數字
+            if stock_code:
+                # 清理：移除非數字字符
+                stock_code = re.sub(r'[^\d]', '', str(stock_code))
+                if len(stock_code) < 4:
+                    logger.warning(f"⚠️ 股票代碼格式異常: {stock_code}")
+                    result["stock_code"] = None
+                else:
+                    # 標準化：補零至 5 位
+                    result["stock_code"] = stock_code.zfill(5)
+            
+            # 🎯 驗證：year 必須是合理的年份
+            if year:
+                try:
+                    year_int = int(year)
+                    if 2000 <= year_int <= 2030:
+                        result["year"] = year_int
+                    else:
+                        logger.warning(f"⚠️ 年份格式異常: {year}")
+                        result["year"] = None
+                except:
+                    result["year"] = None
+            
+            logger.info(f"✅ 封面元數據: Stock={result.get('stock_code')}, Year={result.get('year')}")
+            return result
         
         return None
     

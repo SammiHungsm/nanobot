@@ -88,11 +88,22 @@ async def upload_document(
     background_tasks: BackgroundTasks,
     files: list[UploadFile] = File(...),
     username: str = "anonymous",
-    replace: bool = False  # 👈 接收前端傳來的 replace 參數
+    replace: bool = False,  # 👈 接收前端傳來的 replace 參數
+    doc_type: str = "annual_report"  # 🎯 顯式宣告文件類型
 ):
-    """Upload one or more PDF documents"""
+    """
+    Upload one or more PDF documents
+    
+    🎯 顯式宣告架構 (Explicit Declaration):
+    - doc_type="annual_report": 單一公司年報，走標準 Pipeline
+    - doc_type="index_report": 恆指生技主數據，更新公司主檔
+    
+    這種設計避免了後端猜測文件類型的風險，100% 準確分流。
+    """
     if document_service is None:
         raise HTTPException(status_code=500, detail="Document service not initialized")
+    
+    logger.info(f"📥 收到上傳請求: {len(files)} 個文件, 類型={doc_type}, replace={replace}")
     
     try:
         uploaded_files = []
@@ -171,7 +182,8 @@ async def upload_document(
                 file_path=str(file_path),
                 uploader=username,
                 file_size=actual_size,
-                replace=replace  # 👈 傳遞 replace 參數
+                replace=replace,  # 👈 傳遞 replace 參數
+                doc_type=doc_type  # 🎯 傳遞顯式文件類型
             )
             
             uploaded_files.append({
