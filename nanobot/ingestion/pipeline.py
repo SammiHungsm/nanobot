@@ -3,11 +3,16 @@ Document Pipeline - 主流程協調器
 
 這是整個 ingestion 系統的大腦，協調各個模組完成 PDF 處理流程。
 
+Two-Stage LLM Pipeline:
+1. Stage 1 (便宜 & 快速): PageClassifier (gpt-4o-mini) 語義分類
+2. Stage 2 (昂貴 & 精準): Vision Parser + Financial Agent 只處理相關頁面
+
 流程：
 1. Parser: 解析 PDF → Markdown/文字
-2. Agent: LLM 提取結構化數據
-3. Validator: 數據驗證
-4. Repository: 數據入庫
+2. Classifier: LLM 智能路由 (找出目標頁面)
+3. Agent: LLM 提取結構化數據
+4. Validator: 數據驗證
+5. Repository: 數據入庫
 """
 
 import os
@@ -22,6 +27,7 @@ from loguru import logger
 # 導入各個模組
 from .parsers.vision_parser import VisionParser, FastParser
 from .extractors.financial_agent import FinancialAgent
+from .extractors.page_classifier import PageClassifier
 from .validators.math_rules import validate_all, ValidationResult
 from .repository.db_client import DBClient
 
@@ -30,8 +36,55 @@ class DocumentPipeline:
     """
     Document Pipeline - 企業級文檔處理管道
     
-    協調 Parser → Agent → Validator → Repository 完成完整的數據處理流程。
+    Two-Stage LLM Pipeline:
+    1. Stage 1 (便宜 & 快速): PageClassifier 語義分類
+    2. Stage 2 (昂貴 & 精準): Vision Parser + Financial Agent 只處理相關頁面
+    
+    所有配置從 config.json 讀取，不硬編碼模型名稱或 API Key。
     """
+    
+    @staticmethod
+    def _get_config_credentials() -> Tuple[Optional[str], Optional[str], Optional[str]]:
+        """
+        從 nanobot config.json 讀取 API 憑證和模型
+        
+        Returns:
+            tuple: (api_key, api_base, model)
+        """
+        try:
+            from nanobot.config.loader import load_config
+            from pathlib import Path
+            
+            config_path = None
+            nanobot_config_env = os.getenv("NANOBOT_CONFIG")
+            if nanobot_config_env:
+                config_path = Path(nanobot_config_env)
+                if not config_path.exists():
+                    config_path = None
+            
+            config = load_config(config_path)
+            provider = config.get_provider()
+            
+            model = None
+            try:
+                model = config.agents.defaults.model
+            except AttributeError:
+                pass
+            
+            if provider:
+                api_key = provider.api_key or None
+                api_base = provider.api_base or None
+                
+                if api_key and api_key.startswith("sk-YOUR"):
+                    api_key = None
+                
+                if api_key:
+                    logger.debug(f"✅ DocumentPipeline 從 config.json 載入: model={model}")
+                    return api_key, api_base, model
+        except Exception as e:
+            logger.warning(f"⚠️ DocumentPipeline 無法從 config.json 載入配置: {e}")
+        
+        return None, None, None
     
     def __init__(
         self,
@@ -39,8 +92,8 @@ class DocumentPipeline:
         data_dir: str = None,
         api_key: str = None,
         api_base: str = None,
-        vision_model: str = "qwen-vl-max",
-        llm_model: str = "qwen3.5-plus"
+        vision_model: str = None,
+        llm_model: str = None
     ):
         """
         初始化
@@ -48,11 +101,20 @@ class DocumentPipeline:
         Args:
             db_url: 數據庫連接字符串
             data_dir: 數據存儲目錄
-            api_key: API Key
-            api_base: API Base URL
-            vision_model: Vision 模型名稱
-            llm_model: LLM 模型名稱
+            api_key: API Key (優先使用參數，其次從 config.json 讀取)
+            api_base: API Base URL (優先使用參數，其次從 config.json 讀取)
+            vision_model: Vision 模型名稱 (優先使用參數，其次使用默認值)
+            llm_model: LLM 模型名稱 (優先使用參數，其次從 config.json 讀取)
         """
+        # 🌟 從 config.json 讀取配置
+        config_key, config_base, config_model = self._get_config_credentials()
+        
+        # 優先順序：參數 > config.json
+        api_key = api_key or config_key
+        api_base = api_base or config_base
+        llm_model = llm_model or config_model or "qwen3.5-plus"
+        vision_model = vision_model or "qwen-vl-max"
+        
         self.db_url = db_url or os.getenv(
             "DATABASE_URL",
             "postgresql://postgres:postgres_password_change_me@localhost:5433/annual_reports"
@@ -66,7 +128,10 @@ class DocumentPipeline:
         self.fast_parser = FastParser()
         self.agent = FinancialAgent(api_key, api_base, llm_model)
         
-        logger.info("📁 DocumentPipeline 初始化完成")
+        # 🌟 LLM 智能頁面路由器 (使用相同的 LLM 模型)
+        self.page_classifier = PageClassifier(api_key=api_key, api_base=api_base, model=llm_model)
+        
+        logger.info(f"📁 DocumentPipeline 初始化完成 (model={llm_model})")
     
     async def connect(self):
         """連接數據庫"""
@@ -205,15 +270,23 @@ class DocumentPipeline:
             result["document_pages_saved"] = saved_pages
             logger.info(f"   ✅ 已保存 {saved_pages} 個頁面到 document_pages 兜底表")
             
-            # Step 3: 找出 Revenue Breakdown 頁面
-            revenue_keywords = [
-                "revenue breakdown", "geographical breakdown",
-                "revenue by region", "收入分佈", "地區收入"
-            ]
-            revenue_pages = FastParser.scan_for_keywords(pdf_path, revenue_keywords)
+            # 🌟 Step 3: 使用 LLM 智能路由找出目標頁面 (取代傳統 keyword scanning)
+            if progress_callback:
+                progress_callback(37.0, "LLM 智能路由分析頁面...")
+            
+            # 提取所有頁面的文字（用於 LLM 分類）
+            pages_text = await self._extract_all_pages_text(pdf_path)
+            
+            # 使用 PageClassifier 進行語義分類
+            classification_result = await self.page_classifier.find_candidate_pages(
+                pages_text,
+                target_data_types=["revenue_breakdown", "key_personnel"]
+            )
+            
+            revenue_pages = classification_result.get("revenue_breakdown", [])
             result["revenue_breakdown"]["pages"] = revenue_pages
             
-            logger.info(f"   找到 {len(revenue_pages)} 個 Revenue Breakdown 候選頁面: {revenue_pages}")
+            logger.info(f"   🎯 LLM 路由找到 {len(revenue_pages)} 個 Revenue Breakdown 候選頁面: {revenue_pages}")
             
             # Step 4: 對每個頁面進行結構化提取 (Zone 1)
             for i, page_num in enumerate(revenue_pages):
@@ -398,6 +471,40 @@ class DocumentPipeline:
             for chunk in iter(lambda: f.read(8192), b''):
                 sha256.update(chunk)
         return sha256.hexdigest()
+    
+    async def _extract_all_pages_text(
+        self,
+        pdf_path: str,
+        preview_chars: int = 400
+    ) -> Dict[int, str]:
+        """
+        提取 PDF 所有頁面的文字 (用於 LLM 分類)
+        
+        Args:
+            pdf_path: PDF 路徑
+            preview_chars: 每頁提取的字符數 (用於節省 Token)
+            
+        Returns:
+            Dict[int, str]: {page_num: "頁面文字..."}
+        """
+        pages_text = {}
+        
+        try:
+            total_pages = FastParser.get_page_count(pdf_path)
+            logger.info(f"   📄 提取 {total_pages} 頁文字用於 LLM 分類...")
+            
+            for page_num in range(1, total_pages + 1):
+                text = FastParser.extract_text(pdf_path, page_num)
+                if text and len(text.strip()) > 10:
+                    # 取頁面開頭部分 (通常包含標題和關鍵內容)
+                    pages_text[page_num] = text[:preview_chars]
+            
+            logger.info(f"   ✅ 已提取 {len(pages_text)} 頁文字")
+            
+        except Exception as e:
+            logger.error(f"   ❌ 提取頁面文字失敗: {e}")
+        
+        return pages_text
     
     async def _create_document(
         self,

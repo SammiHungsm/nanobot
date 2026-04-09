@@ -5,6 +5,7 @@ Parsers Module - PDF 解析層
 """
 
 import os
+import re
 import base64
 import json
 from typing import Optional, List, Dict, Any, Tuple
@@ -338,14 +339,83 @@ class FastParser:
             return count
         except:
             return 0
-    
+
+    @staticmethod
+    def is_candidate_page(page, keywords: List[str]) -> bool:
+        """
+        🚀 企業級掃描器：結合文字正規化與視覺特徵的多維度特徵掃描
+        
+        Args:
+            page: PyMuPDF Page 對象
+            keywords: 關鍵字列表
+            
+        Returns:
+            bool: 是否為候選頁面
+        """
+        # ==========================================
+        # 策略 1: 正規化模糊搜尋 (Normalized Text Search)
+        # ==========================================
+        raw_text = page.get_text("text")
+        
+        # 將所有換行、多餘空格、標點符號全部剷除，變成純小寫字母
+        # 例如 "Revenue \n Breakdown" 會變成 "revenuebreakdown"
+        normalized_text = re.sub(r'[\s\W_]+', '', raw_text.lower())
+        
+        for kw in keywords:
+            # 將 keyword 也做同樣的正規化
+            norm_kw = re.sub(r'[\s\W_]+', '', kw.lower())
+            if norm_kw in normalized_text:
+                logger.debug(f"🔍 模糊搜尋命中 Keyword: {kw}")
+                return True
+
+        # ==========================================
+        # 策略 2: 視覺特徵偵測 (Visual Feature Detection - 針對圖表)
+        # ==========================================
+        # 如果文字找不到，但這頁有大量的向量繪圖 (通常是 Pie Chart / Bar Chart)
+        try:
+            drawings = page.get_drawings()
+            if len(drawings) > 15:  # 財報圖表通常由數十條 path 組成
+                logger.debug("📊 偵測到大量向量繪圖，疑似複雜圖表頁面")
+                # 檢查附近有沒有 "%" 符號 - 財務圖表通常有百分比
+                if "%" in raw_text:
+                    logger.debug("   ✅ 同時偵測到 % 符號，標記為候選")
+                    return True
+        except Exception as e:
+            logger.debug(f"   ⚠️ 向量繪圖檢測失敗: {e}")
+
+        # ==========================================
+        # 策略 3: 表格特徵偵測 (Table Feature Detection)
+        # ==========================================
+        # 即使找不到 Keyword，但這頁如果有大型表格結構，也交給 LLM 判斷
+        try:
+            tables = page.find_tables()
+            if tables and len(tables.tables) > 0:
+                # 檢查表格內容是否包含地區或數字
+                for table in tables.tables:
+                    table_content = table.extract()
+                    if table_content:
+                        table_text = "\n".join([str(cell) for row in table_content for cell in row if cell])
+                        # 檢查是否包含財務特徵
+                        financial_indicators = ["HK$", "RMB", "US$", "Total", "total", 
+                                                  "revenue", "turnover", "sales", "income",
+                                                  "Europe", "China", "Asia", "Canada", "Hong Kong",
+                                                  "地區", "地", "區域", "地理"]
+                        for indicator in financial_indicators:
+                            if indicator in table_text:
+                                logger.debug(f"📑 偵測到包含財務特徵的表格 ({indicator})，標記為候選")
+                                return True
+        except Exception as e:
+            logger.debug(f"   ⚠️ 表格檢測失敗: {e}")
+
+        return False
+
     @staticmethod
     def scan_for_keywords(
         pdf_path: str,
         keywords: List[str]
     ) -> List[int]:
         """
-        掃描 PDF 找出包含關鍵字的頁面
+        掃描 PDF 找出包含關鍵字或財務特徵的頁面 (企業級多維度掃描)
         
         Args:
             pdf_path: PDF 檔案路徑
@@ -355,23 +425,23 @@ class FastParser:
             List[int]: 包含關鍵字的頁碼列表 (1-indexed)
         """
         if not PYMUPDF_AVAILABLE:
+            logger.warning("⚠️ PyMuPDF 未安裝，無法進行掃描")
             return []
         
         candidate_pages = []
         
         try:
             doc = fitz.open(pdf_path)
+            logger.info(f"   📄 開始掃描 {len(doc)} 頁...")
             
-            for page_num in range(1, len(doc) + 1):
-                page = doc.load_page(page_num - 1)
-                text = page.get_text("text").lower()
-                
-                for keyword in keywords:
-                    if keyword.lower() in text:
-                        candidate_pages.append(page_num)
-                        break
+            for page_num in range(len(doc)):
+                page = doc.load_page(page_num)
+                if FastParser.is_candidate_page(page, keywords):
+                    candidate_pages.append(page_num + 1)  # 1-indexed
             
             doc.close()
+            
+            logger.info(f"   🎯 掃描完成：找到 {len(candidate_pages)} 個候選頁面: {candidate_pages[:10]}{'...' if len(candidate_pages) > 10 else ''}")
             return sorted(set(candidate_pages))
             
         except Exception as e:

@@ -6,5 +6,6 @@ Extractors Module - LLM 數據提取層
 
 from .financial_agent import FinancialAgent
 from .prompts import get_prompt
+from .page_classifier import PageClassifier, find_revenue_breakdown_pages
 
-__all__ = ["FinancialAgent", "get_prompt"]
+__all__ = ["FinancialAgent", "get_prompt", "PageClassifier", "find_revenue_breakdown_pages"]
