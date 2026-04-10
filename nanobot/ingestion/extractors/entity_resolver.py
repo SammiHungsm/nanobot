@@ -1,13 +1,14 @@
 """
-Entity Resolver - 財務名詞標準化
+Entity Resolver - 財務名詞標準化 (v3.0)
 
 核心功能：
 1. 統一不同公司的會計名詞到標準名稱 (Canonical Name)
 2. 支援中英文對照
 3. 確保 Vanna 查詢的一致性
 
-PoC 核心精神："Garbage in, garbage out"
-只有標準化的數據輸入，才能保證 Text-to-SQL 的準確性
+v3.0 改進：
+- 移除冗餘的雙重定義（只保留 core_metrics）
+- 支援動態地區/業務分類（不自動歸類）
 """
 
 import json
@@ -19,7 +20,7 @@ from functools import lru_cache
 
 class EntityResolver:
     """
-    實體對齊器
+    實體對齊器 (v3.0)
     
     將不同公司的會計名詞強制統一為標準名稱
     """
@@ -32,11 +33,11 @@ class EntityResolver:
             mapping_path: 財務名詞對照表路徑
         """
         if mapping_path is None:
-            mapping_path = Path(__file__).parent / "config" / "financial_terms_mapping.json"
+            mapping_path = Path(__file__).parent.parent / "config" / "financial_terms_mapping.json"
         
         self.mapping_path = Path(mapping_path)
         self.mapping: Dict[str, Any] = {}
-        self._alias_to_canonical: Dict[str, Tuple[str, str]] = {}  # alias -> (canonical_en, canonical_zh)
+        self._alias_to_canonical: Dict[str, Tuple[str, str, str]] = {}  # alias -> (canonical_en, canonical_zh, category)
         self._load_mapping()
     
     def _load_mapping(self):
@@ -45,35 +46,33 @@ class EntityResolver:
             with open(self.mapping_path, 'r', encoding='utf-8') as f:
                 self.mapping = json.load(f)
             
-            # 構建快速查找表
-            for term_key, term_data in self.mapping.get("canonical_terms", {}).items():
-                canonical_en = term_data["canonical_en"]
-                canonical_zh = term_data["canonical_zh"]
-                
-                # 英文別名
-                for alias in term_data.get("aliases_en", []):
-                    self._alias_to_canonical[alias.lower()] = (canonical_en, canonical_zh)
-                
-                # 中文別名
-                for alias in term_data.get("aliases_zh", []):
-                    self._alias_to_canonical[alias] = (canonical_en, canonical_zh)
+            # 構建快速查找表（只從 core_metrics）
+            for metric in self.mapping.get("core_metrics", []):
+                canonical_en = metric["standard_name"]
+                canonical_zh = metric["canonical_zh"]
+                category = metric.get("category", "unknown")
                 
                 # 標準名稱本身
-                self._alias_to_canonical[canonical_en.lower()] = (canonical_en, canonical_zh)
-                self._alias_to_canonical[canonical_zh] = (canonical_en, canonical_zh)
-            
-            # 地區對照
-            for region_key, region_data in self.mapping.get("revenue_regions", {}).items():
-                canonical_en = region_data["canonical_en"]
-                canonical_zh = region_data["canonical_zh"]
+                self._alias_to_canonical[canonical_en.lower()] = (canonical_en, canonical_zh, category)
+                self._alias_to_canonical[canonical_zh] = (canonical_en, canonical_zh, category)
                 
-                for alias in region_data.get("aliases", []):
-                    self._alias_to_canonical[alias.lower()] = (canonical_en, canonical_zh)
-                
-                self._alias_to_canonical[canonical_en.lower()] = (canonical_en, canonical_zh)
-                self._alias_to_canonical[canonical_zh] = (canonical_en, canonical_zh)
+                # 同義詞
+                for alias in metric.get("synonyms", []):
+                    self._alias_to_canonical[alias.lower()] = (canonical_en, canonical_zh, category)
             
-            logger.info(f"✅ EntityResolver 載入 {len(self._alias_to_canonical)} 個名詞對照")
+            # 公司屬性
+            for attr in self.mapping.get("company_attributes", []):
+                canonical_en = attr["standard_name"]
+                canonical_zh = attr["canonical_zh"]
+                category = attr.get("category", "unknown")
+                
+                self._alias_to_canonical[canonical_en.lower()] = (canonical_en, canonical_zh, category)
+                self._alias_to_canonical[canonical_zh] = (canonical_en, canonical_zh, category)
+                
+                for alias in attr.get("synonyms", []):
+                    self._alias_to_canonical[alias.lower()] = (canonical_en, canonical_zh, category)
+            
+            logger.info(f"✅ EntityResolver 載入 {len(self._alias_to_canonical)} 個名詞對照（v3.0）")
             
         except Exception as e:
             logger.error(f"❌ 載入名詞對照表失敗: {e}")
@@ -96,25 +95,55 @@ class EntityResolver:
         # 直接查找
         result = self._alias_to_canonical.get(raw_name.lower())
         if result:
-            return result
+            return result[0], result[1]
         
         result = self._alias_to_canonical.get(raw_name)
         if result:
-            return result
+            return result[0], result[1]
         
         # 模糊匹配（處理大小寫、空格差異）
         normalized = raw_name.lower().strip()
-        for alias, canonical in self._alias_to_canonical.items():
+        for alias, canonical_tuple in self._alias_to_canonical.items():
             if normalized == alias.lower().strip():
-                return canonical
+                return canonical_tuple[0], canonical_tuple[1]
         
-        # 未找到對照，返回原始名稱（但記錄警告）
-        logger.warning(f"⚠️ 未找到名詞對照: '{raw_name}'，使用原始名稱")
-        return raw_name, raw_name
+        # 未找到對照 → 使用 Fallback 規則
+        # 轉換為小寫英文底線格式
+        fallback_name = self._apply_fallback_rule(raw_name)
+        logger.info(f"ℹ️ 未找到名詞對照: '{raw_name}' → 使用 Fallback: '{fallback_name}'")
+        return fallback_name, raw_name
+    
+    def _apply_fallback_rule(self, raw_name: str) -> str:
+        """
+        應用 Fallback 規則
+        
+        v3.0 改進：
+        - 不自動歸類地區或業務分類
+        - 直接轉換為小寫英文底線格式
+        
+        Args:
+            raw_name: 原始名稱
+            
+        Returns:
+            str: Fallback 名稱
+        """
+        # 簡單的中文轉拼音或英文轉底線
+        # 這裡只是示意，實際應該用更智能的方法
+        
+        # 如果是純英文，轉小寫加底線
+        if raw_name.replace(' ', '').replace('-', '').replace('&', '').isalpha():
+            return raw_name.lower().replace(' ', '_').replace('-', '_').replace('&', 'and')
+        
+        # 如果包含中文，保留原文（實際應該用翻譯）
+        return raw_name
     
     def resolve_region_name(self, raw_name: str) -> Tuple[str, str]:
         """
         解析地區名稱（Revenue Breakdown 用）
+        
+        v3.0 重要改變：
+        - 不再自動歸類到預定義的地區
+        - 直接返回原文的小寫英文底線格式
         
         Args:
             raw_name: 原始地區名稱
@@ -122,7 +151,10 @@ class EntityResolver:
         Returns:
             Tuple[str, str]: (canonical_en, canonical_zh)
         """
-        return self.resolve_metric_name(raw_name)
+        # 不再使用硬編碼的地區對照
+        # 直接使用 Fallback 規則
+        fallback_name = self._apply_fallback_rule(raw_name)
+        return fallback_name, raw_name
     
     def get_all_canonical_terms(self) -> List[Dict[str, str]]:
         """
@@ -132,14 +164,16 @@ class EntityResolver:
             List[Dict]: 標準名稱列表
         """
         terms = []
-        for term_key, term_data in self.mapping.get("canonical_terms", {}).items():
+        
+        # 從 core_metrics 提取
+        for metric in self.mapping.get("core_metrics", []):
             terms.append({
-                "canonical_en": term_data["canonical_en"],
-                "canonical_zh": term_data["canonical_zh"],
-                "category": term_data.get("category", "unknown"),
-                "aliases_en": term_data.get("aliases_en", []),
-                "aliases_zh": term_data.get("aliases_zh", [])
+                "standard_name": metric["standard_name"],
+                "canonical_zh": metric["canonical_zh"],
+                "category": metric.get("category", "unknown"),
+                "synonyms": metric.get("synonyms", [])
             })
+        
         return terms
     
     def generate_vanna_training_data(self) -> str:
@@ -150,51 +184,55 @@ class EntityResolver:
             str: 訓練文檔
         """
         lines = [
-            "# 財務指標標準名稱對照表",
+            "# 財務指標標準名稱對照表 (v3.0)",
             "",
             "以下是所有財務指標的標準名稱。查詢時請使用這些標準名稱：",
-            "",
-            "## 損益表 (Income Statement)",
             ""
         ]
         
-        for term_data in self.get_all_canonical_terms():
-            if term_data["category"] == "income_statement":
-                lines.append(f"- **{term_data['canonical_en']}** ({term_data['canonical_zh']})")
-                if term_data["aliases_en"]:
-                    lines.append(f"  - English aliases: {', '.join(term_data['aliases_en'][:3])}")
-                if term_data["aliases_zh"]:
-                    lines.append(f"  - 中文別名: {', '.join(term_data['aliases_zh'][:3])}")
+        # 按類別分組
+        categories = {}
+        for metric in self.mapping.get("core_metrics", []):
+            cat = metric.get("category", "unknown")
+            if cat not in categories:
+                categories[cat] = []
+            categories[cat].append(metric)
         
-        lines.extend([
-            "",
-            "## 資產負債表 (Balance Sheet)",
-            ""
-        ])
+        # 生成文檔
+        category_names = {
+            "income_statement": "損益表 (Income Statement)",
+            "balance_sheet": "資產負債表 (Balance Sheet)",
+            "cash_flow": "現金流量表 (Cash Flow)",
+            "per_share": "每股數據 (Per Share)",
+            "market_data": "市場數據 (Market Data)"
+        }
         
-        for term_data in self.get_all_canonical_terms():
-            if term_data["category"] == "balance_sheet":
-                lines.append(f"- **{term_data['canonical_en']}** ({term_data['canonical_zh']})")
+        for cat_key, cat_name in category_names.items():
+            if cat_key in categories:
+                lines.append(f"## {cat_name}")
+                lines.append("")
+                
+                for metric in categories[cat_key]:
+                    lines.append(f"- **{metric['standard_name']}** ({metric['canonical_zh']})")
+                    synonyms = metric.get("synonyms", [])
+                    if synonyms:
+                        # 只顯示前 5 個同義詞
+                        lines.append(f"  - 別名: {', '.join(synonyms[:5])}")
+                
+                lines.append("")
         
-        lines.extend([
-            "",
-            "## 現金流量表 (Cash Flow)",
-            ""
-        ])
-        
-        for term_data in self.get_all_canonical_terms():
-            if term_data["category"] == "cash_flow":
-                lines.append(f"- **{term_data['canonical_en']}** ({term_data['canonical_zh']})")
-        
-        lines.extend([
-            "",
-            "## 每股數據 (Per Share)",
-            ""
-        ])
-        
-        for term_data in self.get_all_canonical_terms():
-            if term_data["category"] == "per_share":
-                lines.append(f"- **{term_data['canonical_en']}** ({term_data['canonical_zh']})")
+        # 添加 Fallback 規則說明
+        fallback = self.mapping.get("fallback_rule", {})
+        if fallback:
+            lines.extend([
+                "## 動態指標處理規則",
+                "",
+                "對於未在上述列表中的指標（如地區收入、業務分類）：",
+                ""
+            ])
+            
+            for rule in fallback.get("rules", []):
+                lines.append(f"- {rule}")
         
         return "\n".join(lines)
 
@@ -217,7 +255,7 @@ def resolve_metric_name(raw_name: str) -> Tuple[str, str]:
 
 
 def resolve_region_name(raw_name: str) -> Tuple[str, str]:
-    """便捷函數：解析地區名稱"""
+    """便捷函數：解析地區名稱（v3.0 不自動歸類）"""
     return get_entity_resolver().resolve_region_name(raw_name)
 
 
@@ -237,22 +275,20 @@ if __name__ == "__main__":
         "總資產"
     ]
     
-    print("\n📊 財務指標對照測試：")
+    print("\n📊 財務指標對照測試 (v3.0)：")
     for name in test_cases:
         canonical_en, canonical_zh = resolver.resolve_metric_name(name)
         print(f"  '{name}' → {canonical_en} / {canonical_zh}")
     
-    # 測試地區
+    # 測試地區（不再自動歸類）
     test_regions = [
         "Hong Kong",
-        "香港",
-        "Mainland China",
-        "中國",
-        "Europe",
-        "歐洲"
+        "大灣區",
+        "APAC",
+        "雲端服務"
     ]
     
-    print("\n🌍 地區對照測試：")
+    print("\n🌍 地區對照測試（v3.0 不自動歸類）：")
     for name in test_regions:
         canonical_en, canonical_zh = resolver.resolve_region_name(name)
         print(f"  '{name}' → {canonical_en} / {canonical_zh}")

@@ -1,214 +1,229 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "港股財務名詞標準化對照表 - 強制統一不同公司的會計名詞",
-  "version": "1.0.0",
+  "description": "港股財務名詞標準化對照表 (Master Data Taxonomy)",
+  "version": "3.0.0",
   
-  "canonical_terms": {
-    "revenue": {
-      "canonical_en": "Revenue",
+  "instruction": "【強制規則】提取數據時，請優先將財報上的名詞映射到 'core_metrics' 的 standard_name。若為未定義的指標或特定公司的業務/地區分類，請套用 fallback_rule 動態生成。",
+  
+  "core_metrics": [
+    {
+      "standard_name": "revenue",
       "canonical_zh": "營業收入",
-      "aliases_en": ["Total Revenue", "Turnover", "Operating Revenue", "Sales", "Net Revenue", "Total turnover"],
-      "aliases_zh": ["收入", "營業額", "總收入", "收益", "營業收益", "銷售額"],
-      "category": "income_statement"
+      "category": "income_statement",
+      "synonyms": ["Turnover", "Sales", "營業額", "收益", "收入", "Total Revenue", "Operating Revenue", "Net Revenue", "總收入", "營業收益", "銷售額"]
     },
-    "cost_of_sales": {
-      "canonical_en": "Cost of Sales",
+    {
+      "standard_name": "cost_of_sales",
       "canonical_zh": "銷售成本",
-      "aliases_en": ["Cost of Goods Sold", "COGS", "Cost of Revenue", "Cost of Sales and Services"],
-      "aliases_zh": ["銷售成本", "主營業務成本", "營業成本", "成本"],
-      "category": "income_statement"
+      "category": "income_statement",
+      "synonyms": ["Cost of Goods Sold", "COGS", "Cost of Revenue", "主營業務成本", "營業成本", "成本", "Cost of Sales and Services"]
     },
-    "gross_profit": {
-      "canonical_en": "Gross Profit",
+    {
+      "standard_name": "gross_profit",
       "canonical_zh": "毛利",
-      "aliases_en": ["Gross Margin", "Total Gross Profit"],
-      "aliases_zh": ["毛利潤", "毛收益", "毛利"],
-      "category": "income_statement"
+      "category": "income_statement",
+      "synonyms": ["Gross Margin", "Total Gross Profit", "毛利潤", "毛收益", "毛利"]
     },
-    "operating_expenses": {
-      "canonical_en": "Operating Expenses",
+    {
+      "standard_name": "operating_expenses",
       "canonical_zh": "營運開支",
-      "aliases_en": ["Operating Costs", "Total Operating Expenses", "OpEx"],
-      "aliases_zh": ["營運費用", "經營費用", "營業費用", "經營開支"],
-      "category": "income_statement"
+      "category": "income_statement",
+      "synonyms": ["Operating Costs", "Total Operating Expenses", "OpEx", "營運費用", "經營費用", "營業費用", "經營開支"]
     },
-    "rd_expenses": {
-      "canonical_en": "R&D Expenses",
+    {
+      "standard_name": "rd_expenses",
       "canonical_zh": "研發開支",
-      "aliases_en": ["Research and Development Expenses", "R&D Costs", "R&D expenditure", "Research and development costs"],
-      "aliases_zh": ["研發費用", "研發成本", "研究及開發開支", "研發支出", "研究開發費用"],
-      "category": "income_statement"
+      "category": "income_statement",
+      "synonyms": ["Research and Development Expenses", "R&D Costs", "R&D expenditure", "研發費用", "研發成本", "研究及開發開支", "研發支出"]
     },
-    "selling_expenses": {
-      "canonical_en": "Selling Expenses",
+    {
+      "standard_name": "selling_expenses",
       "canonical_zh": "銷售費用",
-      "aliases_en": ["Selling and Marketing Expenses", "Sales and Marketing Costs", "Selling and distribution expenses"],
-      "aliases_zh": ["銷售及推廣費用", "銷售開支", "營銷費用", "銷售與市場費用"],
-      "category": "income_statement"
+      "category": "income_statement",
+      "synonyms": ["Selling and Marketing Expenses", "Sales and Marketing Costs", "Selling and distribution expenses", "銷售及推廣費用", "銷售開支", "營銷費用"]
     },
-    "admin_expenses": {
-      "canonical_en": "Administrative Expenses",
+    {
+      "standard_name": "admin_expenses",
       "canonical_zh": "行政費用",
-      "aliases_en": ["General and Administrative Expenses", "G&A Expenses", "Administrative Costs"],
-      "aliases_zh": ["管理費用", "行政管理費用", "一般及行政開支", "管理開支"],
-      "category": "income_statement"
+      "category": "income_statement",
+      "synonyms": ["General and Administrative Expenses", "G&A Expenses", "Administrative Costs", "管理費用", "行政管理費用", "一般及行政開支"]
     },
-    "finance_costs": {
-      "canonical_en": "Finance Costs",
+    {
+      "standard_name": "finance_costs",
       "canonical_zh": "融資成本",
-      "aliases_en": ["Finance Expenses", "Interest Expense", "Financing Costs"],
-      "aliases_zH": ["財務費用", "利息支出", "融資費用", "財務成本"],
-      "category": "income_statement"
+      "category": "income_statement",
+      "synonyms": ["Finance Expenses", "Interest Expense", "Financing Costs", "財務費用", "利息支出", "融資費用"]
     },
-    "profit_before_tax": {
-      "canonical_en": "Profit Before Tax",
+    {
+      "standard_name": "profit_before_tax",
       "canonical_zh": "稅前溢利",
-      "aliases_en": ["Profit Before Income Tax", "Earnings Before Tax", "PBT", "Pre-tax Profit"],
-      "aliases_zh": ["稅前利潤", "除稅前溢利", "稅前盈利", "稅前純利"],
-      "category": "income_statement"
+      "category": "income_statement",
+      "synonyms": ["Profit Before Income Tax", "Earnings Before Tax", "PBT", "Pre-tax Profit", "稅前利潤", "除稅前溢利", "稅前盈利"]
     },
-    "net_profit": {
-      "canonical_en": "Net Profit",
+    {
+      "standard_name": "net_income",
       "canonical_zh": "純利",
-      "aliases_en": ["Net Income", "Profit for the Year", "Net Earnings", "Net Profit attributable to shareholders"],
-      "aliases_zh": ["淨利潤", "淨收益", "年度溢利", "淨盈利", "股東應佔溢利"],
-      "category": "income_statement"
+      "category": "income_statement",
+      "synonyms": ["Net Profit", "Profit for the year", "淨利潤", "年度溢利", "淨收益", "淨盈利", "股東應佔溢利", "Net Earnings", "Net Profit attributable to shareholders"]
     },
-    "total_assets": {
-      "canonical_en": "Total Assets",
+    {
+      "standard_name": "total_assets",
       "canonical_zh": "資產總額",
-      "aliases_en": ["Total Assets", "Assets"],
-      "aliases_zh": ["總資產", "資產合計", "資產總計"],
-      "category": "balance_sheet"
+      "category": "balance_sheet",
+      "synonyms": ["Total Assets", "Assets", "總資產", "資產合計", "資產總計"]
     },
-    "total_liabilities": {
-      "canonical_en": "Total Liabilities",
+    {
+      "standard_name": "total_liabilities",
       "canonical_zh": "負債總額",
-      "aliases_en": ["Total Liabilities", "Liabilities", "Total Liability", "Liabilities Total"],
-      "aliases_zh": ["總負債", "負債合計", "負債總計", "負債"],
-      "category": "balance_sheet"
+      "category": "balance_sheet",
+      "synonyms": ["Total Liabilities", "Liabilities", "總負債", "負債合計", "負債總計"]
     },
-    "total_equity": {
-      "canonical_en": "Total Equity",
+    {
+      "standard_name": "total_equity",
       "canonical_zh": "權益總額",
-      "aliases_en": ["Total Shareholders' Equity", "Net Assets", "Equity"],
-      "aliases_zh": ["股東權益", "淨資產", "權益合計", "股東權益總額"],
-      "category": "balance_sheet"
+      "category": "balance_sheet",
+      "synonyms": ["Total Shareholders' Equity", "Net Assets", "Equity", "股東權益", "淨資產", "權益合計", "股東權益總額"]
     },
-    "cash_and_equivalents": {
-      "canonical_en": "Cash and Cash Equivalents",
+    {
+      "standard_name": "cash_and_equivalents",
       "canonical_zh": "現金及現金等價物",
-      "aliases_en": ["Cash", "Cash and Bank Balances", "Cash at bank and in hand"],
-      "aliases_zh": ["現金", "銀行結餘", "現金及銀行結存"],
-      "category": "balance_sheet"
+      "category": "balance_sheet",
+      "synonyms": ["Cash", "Cash and Bank Balances", "Cash at bank and in hand", "現金", "銀行結餘", "現金及銀行結存"]
     },
-    "inventory": {
-      "canonical_en": "Inventory",
+    {
+      "standard_name": "inventory",
       "canonical_zh": "存貨",
-      "aliases_en": ["Stock", "Inventories"],
-      "aliases_zh": ["存貨", "庫存", "存貨及在製品"],
-      "category": "balance_sheet"
+      "category": "balance_sheet",
+      "synonyms": ["Stock", "Inventories", "存貨", "庫存", "存貨及在製品"]
     },
-    "trade_receivables": {
-      "canonical_en": "Trade Receivables",
+    {
+      "standard_name": "trade_receivables",
       "canonical_zh": "應收貿賬款",
-      "aliases_en": ["Accounts Receivable", "Trade Debtors", "Receivables"],
-      "aliases_zh": ["應收賬款", "貿易應收款項", "應收款項"],
-      "category": "balance_sheet"
+      "category": "balance_sheet",
+      "synonyms": ["Accounts Receivable", "Trade Debtors", "Receivables", "應收賬款", "貿易應收款項"]
     },
-    "trade_payables": {
-      "canonical_en": "Trade Payables",
+    {
+      "standard_name": "trade_payables",
       "canonical_zh": "應付貿賬款",
-      "aliases_en": ["Accounts Payable", "Trade Creditors", "Payables"],
-      "aliases_zh": ["應付賬款", "貿易應付款項", "應付款項"],
-      "category": "balance_sheet"
+      "category": "balance_sheet",
+      "synonyms": ["Accounts Payable", "Trade Creditors", "Payables", "應付賬款", "貿易應付款項"]
     },
-    "operating_cash_flow": {
-      "canonical_en": "Operating Cash Flow",
-      "canonical_zh": "經營活動現金流",
-      "aliases_en": ["Cash Flow from Operations", "Net Cash from Operating Activities", "CFO"],
-      "aliases_zh": ["經營活動現金淨額", "經營活動產生之現金", "營運現金流"],
-      "category": "cash_flow"
+    {
+      "standard_name": "operating_cash_flow",
+      "canonical_zh": "經營現金流",
+      "category": "cash_flow",
+      "synonyms": ["Cash Flow from Operations", "Net Cash from Operating Activities", "CFO", "經營活動現金淨額", "營運現金流"]
     },
-    "investing_cash_flow": {
-      "canonical_en": "Investing Cash Flow",
-      "canonical_zh": "投資活動現金流",
-      "aliases_en": ["Cash Flow from Investing Activities", "Net Cash used in Investing Activities"],
-      "aliases_zh": ["投資活動現金淨額", "投資活動產生之現金"],
-      "category": "cash_flow"
+    {
+      "standard_name": "investing_cash_flow",
+      "canonical_zh": "投資現金流",
+      "category": "cash_flow",
+      "synonyms": ["Cash Flow from Investing Activities", "Net Cash used in Investing Activities", "投資活動現金淨額"]
     },
-    "financing_cash_flow": {
-      "canonical_en": "Financing Cash Flow",
-      "canonical_zh": "融資活動現金流",
-      "aliases_en": ["Cash Flow from Financing Activities", "Net Cash used in Financing Activities"],
-      "aliases_zh": ["融資活動現金淨額", "融資活動產生之現金"],
-      "category": "cash_flow"
+    {
+      "standard_name": "financing_cash_flow",
+      "canonical_zh": "融資現金流",
+      "category": "cash_flow",
+      "synonyms": ["Cash Flow from Financing Activities", "Net Cash used in Financing Activities", "融資活動現金淨額"]
     },
-    "dividend_per_share": {
-      "canonical_en": "Dividend Per Share",
+    {
+      "standard_name": "dividend_per_share",
       "canonical_zh": "每股股息",
-      "aliases_en": ["DPS", "Dividends per share"],
-      "aliases_zh": ["每股股利", "每股派息", "股息"],
-      "category": "per_share"
+      "category": "per_share",
+      "synonyms": ["DPS", "Dividends per share", "每股股利", "每股派息", "股息"]
     },
-    "earnings_per_share": {
-      "canonical_en": "Earnings Per Share",
+    {
+      "standard_name": "earnings_per_share",
       "canonical_zh": "每股盈利",
-      "aliases_en": ["EPS", "Basic EPS", "Diluted EPS"],
-      "aliases_zh": ["每股收益", "基本每股盈利", "每股淨利"],
-      "category": "per_share"
+      "category": "per_share",
+      "synonyms": ["EPS", "Basic EPS", "Diluted EPS", "每股收益", "基本每股盈利", "每股淨利"]
     },
-    "book_value_per_share": {
-      "canonical_en": "Book Value Per Share",
+    {
+      "standard_name": "book_value_per_share",
       "canonical_zh": "每股賬面值",
-      "aliases_en": ["BVPS", "Net Asset Value Per Share"],
-      "aliases_zh": ["每股淨資產", "每股賬面淨值"],
-      "category": "per_share"
+      "category": "per_share",
+      "synonyms": ["BVPS", "Net Asset Value Per Share", "每股淨資產", "每股賬面淨值"]
     },
-    "market_cap": {
-      "canonical_en": "Market Capitalization",
+    {
+      "standard_name": "market_cap",
       "canonical_zh": "市值",
-      "aliases_en": ["Market Cap", "Market Value", "Mkt Cap"],
-      "aliases_zh": ["總市值", "股票市值"],
-      "category": "market_data"
+      "category": "market_data",
+      "synonyms": ["Market Capitalization", "Market Cap", "Market Value", "Mkt Cap", "總市值", "股票市值"]
     }
-  },
+  ],
   
-  "revenue_regions": {
-    "hong_kong": {
-      "canonical_en": "Hong Kong",
-      "canonical_zh": "香港",
-      "aliases": ["HK", "Hong Kong SAR", "香港特別行政區", "本港"]
+  "company_attributes": [
+    {
+      "standard_name": "chief_executive",
+      "canonical_zh": "最高行政人員",
+      "category": "personnel",
+      "value_type": "string",
+      "synonyms": ["CEO", "Chief Executive Officer", "Chair person", "主席", "行政總裁", "執行董事", "總裁"]
     },
-    "mainland_china": {
-      "canonical_en": "Mainland China",
-      "canonical_zh": "中國內地",
-      "aliases": ["China", "PRC", "中國", "內地", "中國大陸", "中國內地"]
+    {
+      "standard_name": "auditor",
+      "canonical_zh": "核數師",
+      "category": "governance",
+      "value_type": "string",
+      "synonyms": ["核數師", "審計師", "審計機構", "Auditor Firm"]
     },
-    "europe": {
-      "canonical_en": "Europe",
-      "canonical_zh": "歐洲",
-      "aliases": ["EU", "歐洲"]
+    {
+      "standard_name": "auditor_opinion",
+      "canonical_zh": "核數師意見",
+      "category": "governance",
+      "value_type": "string",
+      "synonyms": ["審計意見", "核數師意見", "Auditor's Opinion"]
     },
-    "north_america": {
-      "canonical_en": "North America",
-      "canonical_zh": "北美",
-      "aliases": ["NA", "North America", "北美"]
+    {
+      "standard_name": "ultimate_controlling_shareholder",
+      "canonical_zh": "最終控股股東",
+      "category": "governance",
+      "value_type": "string",
+      "synonyms": ["最終控股股東", "實際控制人", "最終控制人", "Ultimate Controller"]
     },
-    "canada": {
-      "canonical_en": "Canada",
-      "canonical_zh": "加拿大",
-      "aliases": ["加拿大"]
+    {
+      "standard_name": "principal_banker",
+      "canonical_zh": "主要銀行",
+      "category": "business",
+      "value_type": "string",
+      "synonyms": ["主要銀行", "主要往來銀行", "Main Bank"]
     },
-    "asia_pacific": {
-      "canonical_en": "Asia Pacific",
-      "canonical_zh": "亞太地區",
-      "aliases": ["Asia-Pacific", "APAC", "亞太", "亞洲太平洋地區", "Asia, Australia & Others", "Asia and Others"]
+    {
+      "standard_name": "major_customers",
+      "canonical_zh": "主要客戶",
+      "category": "business",
+      "value_type": "array",
+      "synonyms": ["Major Customers", "主要客戶", "核心客戶", "Key Customers"]
     },
-    "other_regions": {
-      "canonical_en": "Other Regions",
-      "canonical_zh": "其他地區",
-      "aliases": ["Others", "其他", "Other markets", "其他市場"]
+    {
+      "standard_name": "core_technology",
+      "canonical_zh": "核心技術",
+      "category": "business",
+      "value_type": "array",
+      "synonyms": ["Core Technology", "核心技術", "主要產品", "Core Products"]
+    },
+    {
+      "standard_name": "business_segments",
+      "canonical_zh": "業務分部",
+      "category": "business",
+      "value_type": "array",
+      "synonyms": ["Business Segments", "業務分部", "主要業務", "Main Business"]
     }
+  ],
+  
+  "fallback_rule": {
+    "description": "處理字典外指標與動態分類的規則",
+    "rules": [
+      "1. 【未知指標命名】：使用全小寫英文與底線，例如：new_custom_metric。絕對不要使用中文或特殊字符。",
+      "2. 【地區與業務劃分】：財報中的『地區收入 (Region)』或『業務分類 (Segment)』為公司特有資訊。絕對不要強行歸類！",
+      "   - 請直接將財報上的原文翻譯為小寫英文底線格式。",
+      "   - 例如：財報寫『大灣區』→ 請輸出 'greater_bay_area'",
+      "   - 例如：財報寫『雲端服務』→ 請輸出 'cloud_services'",
+      "   - 例如：財報寫『APAC』→ 請輸出 'apac'",
+      "3. 【數據類型判斷】：",
+      "   - 數值型（金額、百分比）→ 寫入 financial_metrics (EAV)",
+      "   - 文字型（人名、公司名）→ 寫入 companies.extra_data (JSONB)",
+      "   - 陣列型（客戶列表、產品線）→ 寫入 companies.extra_data (JSONB)"
+    ]
   }
 }

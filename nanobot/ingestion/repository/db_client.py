@@ -800,6 +800,136 @@ class DBClient:
         logger.info(f"✅ 文檔 {doc_id} 已刪除")
     
     # ===========================================
+    # JSONB Dynamic Attributes (companies.extra_data)
+    # ===========================================
+    
+    async def update_company_extra_data(
+        self,
+        company_id: int,
+        attribute_key: str,
+        attribute_value: Any
+    ) -> bool:
+        """
+        🎯 動態寫入公司屬性到 JSONB 字段
+        
+        用於存儲不隨年度變化的靜態屬性（如 CEO、核數師等），
+        避免 ALTER TABLE 風險，實現「資料驅動」架構。
+        
+        Args:
+            company_id: 公司 ID
+            attribute_key: 屬性名稱（必須使用標準化名稱）
+            attribute_value: 屬性值（可以是 string, number, dict, list）
+            
+        Returns:
+            bool: 是否成功
+            
+        Example:
+            await db.update_company_extra_data(1, "chief_executive", "張三")
+            await db.update_company_extra_data(1, "auditor", {"firm": "德勤", "opinion": "無保留"})
+        """
+        try:
+            import json
+            
+            # 將值轉換為 JSONB 格式
+            json_val = json.dumps(attribute_value, ensure_ascii=False)
+            
+            # 使用 jsonb_set 進行深度更新（支持嵌套結構）
+            await self.conn.execute(
+                """
+                UPDATE companies 
+                SET extra_data = jsonb_set(
+                    COALESCE(extra_data, '{}'::jsonb), 
+                    array[$2::text], 
+                    $3::jsonb, 
+                    true
+                ),
+                updated_at = NOW()
+                WHERE id = $1;
+                """,
+                company_id,
+                attribute_key,
+                json_val
+            )
+            
+            logger.info(f"✅ 已更新公司 {company_id} 的 extra_data.{attribute_key}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ JSONB 更新失敗: {e}")
+            return False
+    
+    async def get_company_extra_data(
+        self,
+        company_id: int,
+        attribute_key: str = None
+    ) -> Any:
+        """
+        從 JSONB 字段讀取公司屬性
+        
+        Args:
+            company_id: 公司 ID
+            attribute_key: 屬性名稱（如果為 None，返回整個 extra_data）
+            
+        Returns:
+            Any: 屬性值或整個 extra_data Dict
+        """
+        try:
+            if attribute_key:
+                # 讀取單個屬性
+                value = await self.conn.fetchval(
+                    """
+                    SELECT extra_data->>$2 
+                    FROM companies 
+                    WHERE id = $1;
+                    """,
+                    company_id,
+                    attribute_key
+                )
+                return value
+            else:
+                # 讀取整個 extra_data
+                row = await self.conn.fetchrow(
+                    """
+                    SELECT extra_data 
+                    FROM companies 
+                    WHERE id = $1;
+                    """,
+                    company_id
+                )
+                if row and row['extra_data']:
+                    import json
+                    return json.loads(row['extra_data'])
+                return {}
+                
+        except Exception as e:
+            logger.error(f"❌ JSONB 讀取失敗: {e}")
+            return None
+    
+    async def batch_update_company_extra_data(
+        self,
+        company_id: int,
+        attributes: Dict[str, Any]
+    ) -> int:
+        """
+        批量更新公司 JSONB 屬性
+        
+        Args:
+            company_id: 公司 ID
+            attributes: 屬性字典 {"key": value, ...}
+            
+        Returns:
+            int: 成功更新的屬性數量
+        """
+        updated = 0
+        for key, value in attributes.items():
+            success = await self.update_company_extra_data(company_id, key, value)
+            if success:
+                updated += 1
+        
+        logger.info(f"✅ 批量更新 {updated}/{len(attributes)} 個 JSONB 屬性")
+        return updated
+    
+    # ===========================================
     # Utility Methods
     # ===========================================
     

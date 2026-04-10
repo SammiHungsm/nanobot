@@ -5,7 +5,13 @@ Prompts Module - 集中管理所有 LLM System Prompts
 1. 快速修改同優化
 2. A/B 測試唔同嘅 Prompt 版本
 3. 避免將 Prompt 寫死喺代碼度
+
+v2.0 更新：新增「強制對齊 Taxonomy」的 Prompt
 """
+
+import json
+from pathlib import Path
+from typing import Optional
 
 # ===========================================
 # Vision Parser Prompts (PDF → Markdown)
@@ -105,6 +111,154 @@ DIRECT_REVENUE_VISION_PROMPT = """
   "Asia, Australia & Others": {"percentage": 17.0, "amount": 80214}
 }
 """
+
+
+# ===========================================
+# 🎯 v2.0: Taxonomy-Driven Metric Extraction Prompt
+# ===========================================
+
+def load_taxonomy() -> Optional[Dict]:
+    """
+    載入財務名詞 Taxonomy
+    
+    Returns:
+        Dict: Taxonomy 數據
+    """
+    taxonomy_path = Path(__file__).parent.parent / "config" / "financial_terms_mapping.json"
+    
+    try:
+        with open(taxonomy_path, 'r', encoding='utf-8') as f:
+            mapping = json.load(f)
+            return mapping.get("financial_metrics_taxonomy", [])
+    except Exception as e:
+        print(f"⚠️ 載入 Taxonomy 失敗: {e}")
+        return None
+
+
+def get_metric_extraction_prompt(target_text: str) -> str:
+    """
+    🎯 v2.0: 強制對齊 Taxonomy 的財務數據提取 Prompt
+    
+    核心改進：
+    1. 強制 LLM 將原始名稱映射到 Taxonomy 中的 standard_name
+    2. LLM 只負責「分類」和「對齊」，不負責「創造」
+    3. 完全消除自由發揮的風險
+    
+    Args:
+        target_text: 要提取的文本內容
+        
+    Returns:
+        str: 包含 Taxonomy 的完整 Prompt
+    """
+    taxonomy = load_taxonomy()
+    
+    if not taxonomy:
+        # Fallback: 使用基本 Prompt
+        return FINANCIAL_TABLE_EXTRACTION_PROMPT + f"\n\n【文本內容】\n{target_text}"
+    
+    # 將 Taxonomy 轉換為 JSON 字串（簡化版）
+    taxonomy_json = json.dumps(
+        [{"standard_name": t["standard_name"], 
+          "description": t["description"],
+          "known_synonyms": t["known_synonyms"][:5]}  # 只取前 5 個別名
+         for t in taxonomy[:10]],  # 只取前 10 個指標（避免 Token 爆炸）
+        ensure_ascii=False,
+        indent=2
+    )
+    
+    prompt = f"""
+你是一個精準的財報數據提取專家。請從以下文本中提取財務與人員指標。
+
+【強制對齊規則】
+你必須將文本中找到的指標名稱，映射到以下標準字典 (Taxonomy) 中：
+{taxonomy_json}
+
+【映射示例】
+- 如果文本中叫 "Profit for the year"，你必須在 standard_name 填入 "net_income"
+- 如果文本中叫 "營業額"，你必須在 standard_name 填入 "revenue"
+- 如果文本中叫 "Chair person"，你必須在 standard_name 填入 "chief_executive"
+
+【Fallback 規則】
+只有在字典中絕對找不到對應概念時，你才可以自創 standard_name。
+自創名稱必須遵循：小寫英文 + 底線 (例如：new_custom_metric)，不可使用中文或特殊字符。
+
+【強制輸出格式】
+請以 JSON 陣列格式回傳，不要包含任何 Markdown 標記：
+[
+  {{
+    "standard_name": "net_income",
+    "original_name": "Profit attributable to shareholders",
+    "value": 1500000,
+    "unit": "HKD"
+  }},
+  {{
+    "standard_name": "chief_executive",
+    "original_name": "Chair person",
+    "value": "張三",
+    "unit": "string"
+  }}
+]
+
+【文本內容】
+{target_text}
+"""
+    
+    return prompt
+
+
+def get_company_attribute_extraction_prompt(target_text: str) -> str:
+    """
+    🎯 v2.0: 強制對齊 Taxonomy 的公司屬性提取 Prompt
+    
+    用於提取不隨年度變化的靜態屬性（CEO、核數師等），
+    這些將寫入 companies.extra_data JSONB 字段。
+    
+    Args:
+        target_text: 要提取的文本內容
+        
+    Returns:
+        str: 包含 Taxonomy 的完整 Prompt
+    """
+    taxonomy = load_taxonomy()
+    
+    # 過濾出靜態屬性（非年度指標）
+    static_attributes = [
+        t for t in taxonomy 
+        if t["standard_name"] in ["chief_executive", "auditor", 
+                                  "ultimate_controlling_shareholder", 
+                                  "principal_banker"]
+    ]
+    
+    if not static_attributes:
+        return COMPANY_INFO_EXTRACTION_PROMPT + f"\n\n【文本內容】\n{target_text}"
+    
+    taxonomy_json = json.dumps(static_attributes, ensure_ascii=False, indent=2)
+    
+    prompt = f"""
+你是一個精準的公司信息提取專家。請從以下文本中提取公司的靜態屬性。
+
+【強制對齊規則】
+你必須將文本中找到的屬性名稱，映射到以下標準字典中：
+{taxonomy_json}
+
+【強制輸出格式】
+請以 JSON 格式回傳：
+{
+  "chief_executive": {{
+    "original_name": "Chair person",
+    "value": "張三"
+  }},
+  "auditor": {{
+    "original_name": "核數師",
+    "value": "德勤"
+  }}
+}
+
+【文本內容】
+{target_text}
+"""
+    
+    return prompt
 
 
 def get_prompt(prompt_name: str) -> str:

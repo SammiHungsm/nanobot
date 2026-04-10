@@ -9,6 +9,7 @@ Tools:
 2. search_documents - Text search for policies/commentary
 3. resolve_entity - CN/EN company name resolution
 4. parse_financial_pdf - PDF parsing with OpenDataLoader
+5. 🎯 v2.0: upsert_metric - Taxonomy-driven metric insertion (EAV + JSONB)
 """
 
 from typing import Dict, List, Any, Optional
@@ -30,6 +31,9 @@ from .entity_resolver import resolve_company, search_companies, list_all_compani
 
 # Import PDF parser
 from .pdf_parser import OpenDataLoaderPDF, ParsedPDF
+
+# Import prompts (v2.0)
+from ..ingestion.extractors.prompts import get_metric_extraction_prompt
 
 
 @dataclass
@@ -334,6 +338,182 @@ class FinancialTools:
             )
     
     # ========================================================================
+    # 🎯 v2.0: Tool 5 - Taxonomy-Driven Metric Upsert (EAV + JSONB)
+    # ========================================================================
+    
+    async def upsert_metric(
+        self,
+        company_id: int,
+        year: int,
+        standard_name: str,
+        original_name: str,
+        value: Any,
+        unit: str
+    ) -> ToolResult:
+        """
+        🎯 v2.0: 將標準化後的財務或人員指標寫入資料庫
+        
+        核心邏輯：
+        1. **年度指標** → 寫入 financial_metrics (EAV 模型)
+           - 例如：Revenue, Net Income, R&D Expenses（隨年度變化）
+        2. **靜態屬性** → 寫入 companies.extra_data (JSONB 模型)
+           - 例如：CEO, Auditor, Principal Banker（不隨年度變化）
+        
+        Args:
+            company_id: 公司 ID
+            year: 年份（靜態屬性時可忽略）
+            standard_name: 標準化名稱（必須來自 Taxonomy）
+            original_name: 原始名稱（供溯源）
+            value: 數值或字符串
+            unit: 單位
+        
+        Returns:
+            ToolResult: 成功或失敗訊息
+        """
+        try:
+            # 智能路由：判斷是年度指標還是靜態屬性
+            static_attributes = [
+                "chief_executive", "auditor", 
+                "ultimate_controlling_shareholder", 
+                "principal_banker"
+            ]
+            
+            if standard_name in static_attributes:
+                # 🔹 靜態屬性 → JSONB
+                from ..ingestion.repository.db_client import DBClient
+                
+                db = DBClient(self.pg_url)
+                await db.connect()
+                
+                success = await db.update_company_extra_data(
+                    company_id=company_id,
+                    attribute_key=standard_name,
+                    attribute_value={
+                        "original_name": original_name,
+                        "value": str(value)
+                    }
+                )
+                
+                await db.close()
+                
+                if success:
+                    return ToolResult(
+                        success=True,
+                        data={"company_id": company_id, "attribute": standard_name},
+                        message=f"✅ 成功更新公司屬性: {standard_name} (原名: {original_name})"
+                    )
+                else:
+                    return ToolResult(
+                        success=False,
+                        data=None,
+                        message=f"❌ JSONB 寫入失敗: {standard_name}"
+                    )
+            
+            else:
+                # 🔹 年度指標 → EAV
+                from ..ingestion.repository.db_client import DBClient
+                
+                db = DBClient(self.pg_url)
+                await db.connect()
+                
+                # 數值處理：如果是字符串數字，轉換為 float
+                numeric_value = value
+                if isinstance(value, str) and value.replace(',', '').replace('-', '').replace('.', '').isdigit():
+                    numeric_value = float(value.replace(',', '').replace('-', ''))
+                elif isinstance(value, (int, float)):
+                    numeric_value = float(value)
+                else:
+                    # 非數值型（可能是 CEO 名字等）→ 強制轉為 JSONB
+                    success = await db.update_company_extra_data(
+                        company_id=company_id,
+                        attribute_key=standard_name,
+                        attribute_value={
+                            "original_name": original_name,
+                            "value": str(value)
+                        }
+                    )
+                    await db.close()
+                    
+                    return ToolResult(
+                        success=True,
+                        data={"company_id": company_id, "attribute": standard_name},
+                        message=f"✅ 非數值型屬性已寫入 JSONB: {standard_name}"
+                    )
+                
+                # 寫入 EAV 表
+                success = await db.insert_financial_metric(
+                    company_id=company_id,
+                    year=year,
+                    metric_name_raw=standard_name,  # 直接使用標準名稱
+                    value=numeric_value,
+                    unit=unit
+                )
+                
+                await db.close()
+                
+                if success:
+                    return ToolResult(
+                        success=True,
+                        data={"company_id": company_id, "year": year, "metric": standard_name},
+                        message=f"✅ 成功寫入年度指標: {standard_name} = {numeric_value} {unit} (原名: {original_name})"
+                    )
+                else:
+                    return ToolResult(
+                        success=False,
+                        data=None,
+                        message=f"❌ EAV 寫入失敗: {standard_name}"
+                    )
+                    
+        except Exception as e:
+            logger.error(f"❌ upsert_metric 失敗: {e}")
+            return ToolResult(
+                success=False,
+                data=None,
+                message=f"❌ 寫入失敗: {str(e)}"
+            )
+    
+    async def upsert_metrics_batch(
+        self,
+        company_id: int,
+        year: int,
+        metrics: List[Dict[str, Any]]
+    ) -> ToolResult:
+        """
+        🎯 v2.0: 批量寫入標準化指標
+        
+        Args:
+            company_id: 公司 ID
+            year: 年份
+            metrics: 指標列表 [{"standard_name": "...", "original_name": "...", "value": ..., "unit": "..."}]
+            
+        Returns:
+            ToolResult: 成功寫入的數量
+        """
+        success_count = 0
+        failed_count = 0
+        
+        for metric in metrics:
+            result = await self.upsert_metric(
+                company_id=company_id,
+                year=year,
+                standard_name=metric.get("standard_name"),
+                original_name=metric.get("original_name"),
+                value=metric.get("value"),
+                unit=metric.get("unit", "HKD")
+            )
+            
+            if result.success:
+                success_count += 1
+            else:
+                failed_count += 1
+        
+        return ToolResult(
+            success=failed_count == 0,
+            data={"success_count": success_count, "failed_count": failed_count},
+            message=f"✅ 成功寫入 {success_count}/{len(metrics)} 個指標"
+        )
+    
+    # ========================================================================
     # Helper Methods
     # ========================================================================
     
@@ -383,6 +563,14 @@ def parse_pdf(path: str) -> ToolResult:
     return get_tools().parse_financial_pdf(path)
 
 
+async def upsert(company_id: int, year: int, standard_name: str, 
+                 original_name: str, value: Any, unit: str) -> ToolResult:
+    """Quick metric upsert (v2.0)"""
+    tools = get_tools()
+    return await tools.upsert_metric(company_id, year, standard_name, 
+                                     original_name, value, unit)
+
+
 if __name__ == "__main__":
     # Test tools
     print("Testing Financial Tools...\n")
@@ -412,6 +600,19 @@ if __name__ == "__main__":
     # Test 4: Search documents (empty DB)
     print("\n4. Search Documents:")
     result = tools.search_documents("strategy")
+    print(f"   {result.message}")
+    
+    # Test 5: Upsert metric (v2.0)
+    print("\n5. Upsert Metric (v2.0):")
+    import asyncio
+    result = asyncio.run(tools.upsert_metric(
+        company_id=1,
+        year=2023,
+        standard_name="revenue",
+        original_name="Total Revenue",
+        value=1500000,
+        unit="HKD"
+    ))
     print(f"   {result.message}")
     
     print("\n✅ Financial Tools test complete!")
