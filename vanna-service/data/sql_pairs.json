@@ -229,7 +229,7 @@
     {
       "id": "pending_review_001",
       "question": "Show documents pending human review",
-      "sql": "SELECT d.filename, rq.review_type, rq.priority, rq.notes FROM documents d JOIN data_review_queue rq ON d.id = rq.document_id WHERE rq.status = 'pending' ORDER BY rq.priority DESC;",
+      "sql": "SELECT d.filename, rq.review_type, rq.confidence, rq.reason FROM documents d JOIN review_queue rq ON d.id = rq.document_id WHERE rq.status = 'pending' ORDER BY rq.created_at DESC;",
       "tags": ["review_queue", "human_review", "pending"]
     },
     {

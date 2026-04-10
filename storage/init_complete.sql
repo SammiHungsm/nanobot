@@ -12,6 +12,7 @@
 -- 啟用必要的擴展
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pg_trgm";  -- 用於模糊搜索
+CREATE EXTENSION IF NOT EXISTS vector;     -- 用於向量嵌入 (pgvector)
 
 -- ============================================================
 -- 核心表結構
@@ -582,11 +583,11 @@ CREATE INDEX IF NOT EXISTS idx_dp_company_id ON document_pages(company_id);
 INSERT INTO vanna_training_data (question, sql_query, table_name, documentation, quality_score, is_verified) VALUES
 -- 基本查詢
 ('Show me all documents', 'SELECT * FROM documents ORDER BY created_at DESC;', 'documents', '列出所有文檔', 1.0, TRUE),
-('Find documents by filename', 'SELECT * FROM documents WHERE filename ILIKE ''%{keyword}%'', 'documents', '按檔名搜索文檔', 1.0, TRUE),
+('Find documents by filename', 'SELECT * FROM documents WHERE filename ILIKE ''%{keyword}%''', 'documents', '按檔名搜索文檔', 1.0, TRUE),
 
 -- 指數報告查詢
 ('Show all index reports', 'SELECT * FROM documents WHERE is_index_report = TRUE ORDER BY created_at DESC;', 'documents', '列出所有指數報告', 1.0, TRUE),
-('Find documents by index theme', 'SELECT * FROM documents WHERE index_theme ILIKE ''%{theme}%'', 'documents', '按指數主題搜索', 1.0, TRUE),
+('Find documents by index theme', 'SELECT * FROM documents WHERE index_theme ILIKE ''%{theme}%''', 'documents', '按指數主題搜索', 1.0, TRUE),
 
 -- 行業查詢
 ('Find companies in a specific industry', 'SELECT dc.*, d.filename FROM document_companies dc JOIN documents d ON dc.document_id = d.id WHERE dc.assigned_industry = ''{industry}'';', 'document_companies', '按行業查找公司', 1.0, TRUE),

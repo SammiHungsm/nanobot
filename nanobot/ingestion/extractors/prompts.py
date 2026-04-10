@@ -11,7 +11,7 @@ v2.0 更新：新增「強制對齊 Taxonomy」的 Prompt
 
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 # ===========================================
 # Vision Parser Prompts (PDF → Markdown)

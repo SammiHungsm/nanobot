@@ -254,49 +254,26 @@ class AgentLoop:
             )
 
     async def _connect_mcp(self) -> None:
-        """Connect to configured MCP servers (one-time, lazy).
-        
-        Fix #5: Add exponential backoff for connection retries
-        """
+        """Connect to configured MCP servers (one-time, lazy)."""
         if self._mcp_connected or self._mcp_connecting or not self._mcp_servers:
             return
         self._mcp_connecting = True
         from nanobot.agent.tools.mcp import connect_mcp_servers
-        
-        # Fix #5: Exponential backoff parameters
-        max_retries = 3
-        base_delay = 1.0  # seconds
-        max_delay = 30.0  # seconds
-        
-        for attempt in range(max_retries):
-            try:
-                self._mcp_stack = AsyncExitStack()
-                await self._mcp_stack.__aenter__()
-                await connect_mcp_servers(self._mcp_servers, self.tools, self._mcp_stack)
-                self._mcp_connected = True
-                logger.info("✅ MCP servers connected successfully")
-                break  # Success, exit retry loop
-            except BaseException as e:
-                logger.error("Failed to connect MCP servers (attempt {}/{}): {}", attempt + 1, max_retries, e)
-                if self._mcp_stack:
-                    try:
-                        await self._mcp_stack.aclose()
-                    except Exception:
-                        pass
-                    self._mcp_stack = None
-                
-                # Don't retry on last attempt
-                if attempt < max_retries - 1:
-                    # Calculate delay with exponential backoff + jitter
-                    import random
-                    delay = min(base_delay * (2 ** attempt) + random.uniform(0, 1), max_delay)
-                    logger.warning("Retrying MCP connection in {:.1f} seconds...", delay)
-                    await asyncio.sleep(delay)
+        try:
+            self._mcp_stack = AsyncExitStack()
+            await self._mcp_stack.__aenter__()
+            await connect_mcp_servers(self._mcp_servers, self.tools, self._mcp_stack)
+            self._mcp_connected = True
+        except BaseException as e:
+            logger.error("Failed to connect MCP servers (will retry next message): {}", e)
+            if self._mcp_stack:
+                try:
+                    await self._mcp_stack.aclose()
+                except Exception:
+                    pass
+                self._mcp_stack = None
         finally:
             self._mcp_connecting = False
-        
-        if not self._mcp_connected:
-            logger.error("❌ MCP connection failed after {} attempts", max_retries)
 
     def _set_tool_context(self, channel: str, chat_id: str, message_id: str | None = None) -> None:
         """Update context for all tools that need routing info."""
