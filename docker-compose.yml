@@ -119,7 +119,8 @@ services:
       - VANNA_MODEL=financial-sql
       - LOG_LEVEL=DEBUG
     depends_on:
-      - postgres-financial
+      postgres-financial:
+        condition: service_healthy  # ✅ 等待 PostgreSQL 完全启动
     restart: unless-stopped
     deploy:
       resources:

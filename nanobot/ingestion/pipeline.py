@@ -175,65 +175,21 @@ class DocumentPipeline:
     """
     Document Pipeline - 企業級文檔處理管道
     
-    Two-Stage LLM Pipeline:
-    1. Stage 1 (便宜 & 快速): PageClassifier 語義分類
-    2. Stage 2 (昂貴 & 精準): Vision Parser + Financial Agent 只處理相關頁面
+    🌟 新架構：Agentic Dynamic Ingestion
+    Stage 0 (智能預處理): Agent 分析前 1-2 頁，提取實體信息
+    Stage 1 (便宜 & 快速): PageClassifier 語義分類
+    Stage 2 (昂貴 & 精準): Vision Parser + Financial Agent 只處理相關頁面
     
     所有配置從 config.json 讀取，不硬編碼模型名稱或 API Key。
     """
-    
-    @staticmethod
-    def _get_config_credentials() -> Tuple[Optional[str], Optional[str], Optional[str]]:
-        """
-        從 nanobot config.json 讀取 API 憑證和模型
-        
-        API 憑證從 provider 讀取，模型從 agents.defaults 讀取。
-        Vision 模型使用相同的 model（不單獨配置）。
-        
-        Returns:
-            tuple: (api_key, api_base, model)
-        """
-        try:
-            from nanobot.config.loader import load_config
-            from pathlib import Path
-            
-            config_path = None
-            nanobot_config_env = os.getenv("NANOBOT_CONFIG")
-            if nanobot_config_env:
-                config_path = Path(nanobot_config_env)
-                if not config_path.exists():
-                    config_path = None
-            
-            config = load_config(config_path)
-            provider = config.get_provider()
-            
-            # 從 agents.defaults 讀取模型
-            model = None
-            try:
-                model = config.agents.defaults.model
-            except AttributeError:
-                pass
-            
-            if provider:
-                api_key = provider.api_key or None
-                api_base = provider.api_base or None
-                
-                if api_key and api_key.startswith("sk-YOUR"):
-                    api_key = None
-                
-                if api_key:
-                    logger.debug(f"✅ DocumentPipeline 從 config 讀取: model={model}")
-                    return api_key, api_base, model
-        except Exception as e:
-            logger.warning(f"⚠️ DocumentPipeline 無法從 config.json 載入配置: {e}")
-        
-        return None, None, None
     
     def __init__(
         self,
         db_url: str = None,
         data_dir: str = None,
-        use_opendataloader: bool = True
+        use_opendataloader: bool = True,
+        enable_agentic_ingestion: bool = True,
+        agent_loop = None
     ):
         """
         初始化
@@ -242,13 +198,21 @@ class DocumentPipeline:
             db_url: 數據庫連接字符串
             data_dir: 數據存儲目錄
             use_opendataloader: 是否使用 OpenDataLoader 解析（默認 True）
+            enable_agentic_ingestion: 是否啟用智能代理寫入（默認 True）
+            agent_loop: AgentLoop 實例（可選，用於 Agentic Ingestion）
         """
+        # Fix: 使用環境變數，端口改為 5432
         self.db_url = db_url or os.getenv(
             "DATABASE_URL",
-            "postgresql://postgres:postgres_password_change_me@localhost:5433/annual_reports"
+            "postgresql://postgres:postgres_password_change_me@localhost:5432/annual_reports"
         )
         self.data_dir = Path(data_dir or os.getenv("DATA_DIR", "./data/raw"))
         self.data_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 🌟 Agentic Ingestion 設置
+        self.enable_agentic_ingestion = enable_agentic_ingestion
+        self.agent_loop = agent_loop
+        self._agentic_pipeline = None
         
         # 🌟 使用統一的 LLM 客戶端
         self.llm_client = get_llm_client()
@@ -267,7 +231,14 @@ class DocumentPipeline:
         
         self.use_opendataloader = use_opendataloader
         
-        logger.info(f"📁 DocumentPipeline 初始化完成 (model={self.llm_model}, opendataloader={use_opendataloader})")
+        logger.info(f"📁 DocumentPipeline 初始化完成 (model={self.llm_model}, opendataloader={use_opendataloader}, agentic={enable_agentic_ingestion})")
+    
+    def _get_agentic_pipeline(self):
+        """獲取或創建 AgenticPipeline 實例"""
+        if self._agentic_pipeline is None and self.enable_agentic_ingestion:
+            from .agentic_ingestion import AgenticIngestionPipeline
+            self._agentic_pipeline = AgenticIngestionPipeline(agent_loop=self.agent_loop)
+        return self._agentic_pipeline
     
     async def connect(self):
         """連接數據庫"""
@@ -276,6 +247,76 @@ class DocumentPipeline:
     async def close(self):
         """關閉連接"""
         await self.db.close()
+    
+    # ===========================================
+    # 🌟 Stage 0: Agentic Dynamic Ingestion
+    # ===========================================
+    
+    async def run_agentic_ingestion(
+        self,
+        pdf_path: str,
+        filename: str,
+        task_id: str = None
+    ) -> Dict[str, Any]:
+        """
+        🌟 Stage 0: 智能代理動態寫入
+        
+        在傳統 ETL 流程之前，使用 AI Agent 分析前 1-2 頁，
+        提取實體信息（公司、行業、關係），並動態寫入數據庫。
+        
+        這個方法解決了：
+        1. 處理「無母公司」報告（如恒指報告）
+        2. 動態發現新屬性並存入 JSONB
+        3. 建立複雜的一對多公司關係
+        
+        Args:
+            pdf_path: PDF 文件路徑
+            filename: 原始文件名
+            task_id: 任務 ID (可選)
+        
+        Returns:
+            Dict: {
+                "success": bool,
+                "document_id": str,
+                "analysis": DocumentAnalysis,
+                "needs_review": bool
+            }
+        """
+        if not self.enable_agentic_ingestion:
+            logger.info("⏭️ Agentic ingestion disabled, skipping Stage 0")
+            return {"success": True, "skipped": True, "reason": "disabled"}
+        
+        pipeline = self._get_agentic_pipeline()
+        if pipeline is None:
+            logger.warning("⚠️ AgenticPipeline not available, skipping Stage 0")
+            return {"success": True, "skipped": True, "reason": "no_pipeline"}
+        
+        logger.info(f"🤖 Stage 0: Running agentic ingestion for {filename}")
+        
+        try:
+            result = await pipeline.ingest_with_agent(
+                pdf_path=pdf_path,
+                filename=filename,
+                task_id=task_id
+            )
+            
+            # 檢查是否需要人工覆核
+            analysis = result.get("analysis", {})
+            confidence_scores = analysis.get("confidence_scores", {})
+            needs_review = any(score < 0.8 for score in confidence_scores.values()) if confidence_scores else False
+            
+            result["needs_review"] = needs_review
+            
+            if needs_review:
+                logger.info(f"⚠️ Low confidence detected, creating review record")
+            
+            logger.info(f"✅ Stage 0 complete: document_id={result.get('document_id')}")
+            
+            return result
+            
+        except Exception as e:
+            logger.exception(f"❌ Stage 0 failed: {e}")
+            return {"success": False, "error": str(e)}
     
     # ===========================================
     # 主流程

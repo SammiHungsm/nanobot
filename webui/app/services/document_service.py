@@ -29,13 +29,29 @@ class DocumentService:
         self.queue_running: bool = False
         self.processing_logs: list = []
         
-        # 🌟 初始化 DocumentPipeline (統一入口)
+        # 🌟 延迟初始化 DocumentPipeline (避免在 __init__ 中连接数据库)
         db_url = os.getenv(
             "DATABASE_URL", 
             "postgresql://postgres:postgres_password_change_me@postgres-financial:5432/annual_reports"
         )
         data_dir = os.getenv("DATA_DIR", "/app/data/raw")
-        self.pipeline = DocumentPipeline(db_url=db_url, data_dir=data_dir, use_opendataloader=True)
+        self._db_url = db_url
+        self._data_dir = data_dir
+        self.pipeline = None  # 将在首次使用时初始化
+        self._pipeline_connected = False
+    
+    async def _ensure_pipeline_connected(self):
+        """确保 Pipeline 已连接数据库"""
+        if not self._pipeline_connected or self.pipeline is None:
+            logger.info("🔗 初始化 DocumentPipeline 连接...")
+            self.pipeline = DocumentPipeline(
+                db_url=self._db_url, 
+                data_dir=self._data_dir, 
+                use_opendataloader=True
+            )
+            await self.pipeline.connect()
+            self._pipeline_connected = True
+            logger.info("✅ DocumentPipeline 已连接数据库")
         
     def add_processing_log(self, message: str, log_type: str = "info"):
         """Add a processing log entry"""
@@ -171,17 +187,23 @@ class DocumentService:
                     logger.info(f"✅ Document processed: {doc_id}")
                     
                 except Exception as e:
+                    import traceback
                     doc["status"] = "failed"
                     doc["error_message"] = str(e)
+                    doc["traceback"] = traceback.format_exc()
                     doc["progress"] = 0.0
                     self.add_processing_log(f"❌ Processing failed: {doc['filename']} - {str(e)}", "error")
-                    logger.error(f"❌ Document processing failed: {doc_id} - {e}")
+                    logger.error(f"❌ Document processing failed: {doc_id} - {e}", exc_info=True)
                 
             except asyncio.TimeoutError:
                 # No documents in queue
                 continue
+            except asyncio.CancelledError:
+                # 队列被取消
+                logger.warning("Processing queue cancelled")
+                break
             except Exception as e:
-                logger.error(f"Queue processing error: {e}")
+                logger.error(f"Queue processing error: {e}", exc_info=True)
                 await asyncio.sleep(1)
     
     def get_queue_status(self) -> dict:
@@ -249,8 +271,8 @@ class DocumentService:
         """
         doc_id = doc["id"]
         
-        # 🌟 使用 DocumentPipeline (統一入口)
-        await self.pipeline.connect()
+        # 🌟 确保 Pipeline 已连接数据库
+        await self._ensure_pipeline_connected()
         
         try:
             result = await self.pipeline.process_pdf_full(
@@ -262,5 +284,6 @@ class DocumentService:
             )
             
             return result
-        finally:
-            await self.pipeline.close()
+        except Exception as e:
+            logger.error(f"Pipeline 处理失败: {e}", exc_info=True)
+            raise

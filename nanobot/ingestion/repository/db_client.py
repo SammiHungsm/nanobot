@@ -9,6 +9,7 @@ from typing import Optional, Dict, Any, List
 from pathlib import Path
 from loguru import logger
 import asyncpg
+from contextlib import asynccontextmanager
 
 
 class DBClient:
@@ -19,31 +20,106 @@ class DBClient:
     - 公司 CRUD
     - Revenue Breakdown CRUD
     - Document 狀態管理
+    
+    Fix #2: 使用連接池代替單連接
+    Fix #3: 添加事務管理
     """
     
-    def __init__(self, db_url: str = None):
+    def __init__(self, db_url: str = None, 
+                 pool_size: int = 10,
+                 max_inactive_connection_lifetime: float = 300.0):
         """
         初始化
         
         Args:
             db_url: PostgreSQL 連接字符串
+            pool_size: 連接池大小（Fix #2）
+            max_inactive_connection_lifetime: 連接最大空閒時間（秒）
         """
+        # Fix #1: 統一使用環境變數，端口改為 5432（與 ingestion 一致）
         self.db_url = db_url or os.getenv(
             "DATABASE_URL",
-            "postgresql://postgres:postgres_password_change_me@localhost:5433/annual_reports"
+            "postgresql://${POSTGRES_USER:postgres}:${POSTGRES_PASSWORD:postgres_password_change_me}@${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB:annual_reports}"
         )
-        self.conn: Optional[asyncpg.Connection] = None
+        # 解析環境變數
+        self.db_url = self._resolve_env_vars(self.db_url)
+        
+        self.pool: Optional[asyncpg.Pool] = None
+        self.pool_size = pool_size
+        self.max_inactive_connection_lifetime = max_inactive_connection_lifetime
+        
+        logger.info(f"DBClient initialized (pool_size={pool_size})")
+    
+    def _resolve_env_vars(self, url: str) -> str:
+        """解析 ${VAR} 或 ${VAR:default} 模式"""
+        import re
+        
+        def replace_var(match):
+            var_expr = match.group(1)
+            if ':' in var_expr:
+                var_name, default = var_expr.split(':', 1)
+                return os.getenv(var_name, default)
+            else:
+                return os.getenv(var_expr, match.group(0))
+        
+        return re.sub(r'\$\{([^}]+)\}', replace_var, url)
     
     async def connect(self):
-        """連接數據庫"""
-        self.conn = await asyncpg.connect(self.db_url)
-        logger.info("✅ 數據庫連接成功")
+        """
+        連接數據庫（創建連接池）
+        
+        Fix #2: 使用連接池代替單連接
+        """
+        try:
+            self.pool = await asyncpg.create_pool(
+                self.db_url,
+                min_size=2,
+                max_size=self.pool_size,
+                max_inactive_connection_lifetime=self.max_inactive_connection_lifetime,
+                command_timeout=60
+            )
+            logger.info(f"✅ 數據庫連接池創建成功 (size={self.pool_size})")
+        except Exception as e:
+            logger.error(f"❌ 創建數據庫連接池失敗：{e}")
+            raise
     
     async def close(self):
-        """關閉連接"""
-        if self.conn:
-            await self.conn.close()
-            logger.info("📴 數據庫連接已關閉")
+        """關閉連接池"""
+        if self.pool:
+            await self.pool.close()
+            logger.info("📴 數據庫連接池已關閉")
+    
+    @asynccontextmanager
+    async def transaction(self):
+        """
+        事務上下文管理器（Fix #3）
+        
+        Usage:
+            async with db.transaction():
+                await db.insert_company(...)
+                await db.insert_metrics(...)
+        """
+        if not self.pool:
+            raise RuntimeError("Database not connected. Call connect() first.")
+        
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                yield conn
+    
+    @asynccontextmanager
+    async def connection(self):
+        """
+        連接上下文管理器（從連接池獲取連接）
+        
+        Usage:
+            async with db.connection() as conn:
+                result = await conn.fetchrow(...)
+        """
+        if not self.pool:
+            raise RuntimeError("Database not connected. Call connect() first.")
+        
+        async with self.pool.acquire() as conn:
+            yield conn
     
     # ===========================================
     # Company Operations (漸進式資料充實架構)
@@ -65,11 +141,13 @@ class DBClient:
         # 標準化股票代碼（補零至 5 位）
         normalized_code = stock_code.zfill(5)
         
-        row = await self.conn.fetchrow(
-            "SELECT * FROM companies WHERE stock_code = $1",
-            normalized_code
-        )
-        return dict(row) if row else None
+        # Fix #2: 使用連接池
+        async with self.connection() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM companies WHERE stock_code = $1",
+                normalized_code
+            )
+            return dict(row) if row else None
     
     async def upsert_company(
         self,
@@ -217,8 +295,10 @@ class DBClient:
             RETURNING id
         """
         
-        company_id = await self.conn.fetchval(sql, *values)
-        return company_id
+        # Fix #2: 使用連接池
+        async with self.connection() as conn:
+            company_id = await conn.fetchval(sql, *values)
+            return company_id
     
     async def update_company(self, company_id: int, data: Dict[str, Any]) -> bool:
         """
@@ -243,7 +323,44 @@ class DBClient:
             WHERE id = $1
         """
         
-        await self.conn.execute(sql, *values)
+        # Fix #2: 使用連接池
+        async with self.connection() as conn:
+            await conn.execute(sql, *values)
+            return True
+    
+    # ===========================================
+    # 內部輔助方法（用於事務內操作）
+    # ===========================================
+    
+    async def _insert_company_conn(self, conn, data: Dict[str, Any]) -> int:
+        """內部方法：使用提供的連接插入公司（用於事務內）"""
+        columns = list(data.keys())
+        values = [data[col] for col in columns]
+        placeholders = [f"${i+1}" for i in range(len(columns))]
+        
+        sql = f"""
+            INSERT INTO companies ({', '.join(columns)})
+            VALUES ({', '.join(placeholders)})
+            RETURNING id
+        """
+        
+        return await conn.fetchval(sql, *values)
+    
+    async def _update_company_conn(self, conn, company_id: int, data: Dict[str, Any]) -> bool:
+        """內部方法：使用提供的連接更新公司（用於事務內）"""
+        if not data:
+            return True
+        
+        set_clauses = [f"{key} = ${i+2}" for i, key in enumerate(data.keys())]
+        values = [company_id] + list(data.values())
+        
+        sql = f"""
+            UPDATE companies 
+            SET {', '.join(set_clauses)}, updated_at = NOW()
+            WHERE id = $1
+        """
+        
+        await conn.execute(sql, *values)
         return True
     
     async def get_or_create_company(

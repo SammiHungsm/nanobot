@@ -17,6 +17,8 @@ Usage:
 from typing import Optional, List, Dict, Any
 from loguru import logger
 import os
+import json
+from pathlib import Path
 
 
 class VannaSQL:
@@ -37,23 +39,79 @@ class VannaSQL:
     def __init__(self, 
                  database_url: Optional[str] = None,
                  model_name: str = "financial-sql",
-                 api_key: Optional[str] = None):
+                 api_key: Optional[str] = None,
+                 persist_dir: Optional[str] = None):
         """
         Initialize Vanna AI.
         
         Args:
-            database_url: PostgreSQL connection URL
+            database_url: PostgreSQL connection URL (uses env vars if not provided)
             model_name: Vanna model name
             api_key: Vanna API key (optional, uses default if not provided)
+            persist_dir: Directory to persist training state
         """
-        self.database_url = database_url or "postgresql://postgres:postgres_password_change_me@localhost:5433/annual_reports"
+        # Fix #1: Use environment variables for database connection (unified with ingestion module)
+        self.database_url = database_url or os.getenv(
+            "DATABASE_URL",
+            "postgresql://${POSTGRES_USER:postgres}:${POSTGRES_PASSWORD:postgres_password_change_me}@${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB:annual_reports}"
+        )
+        # Resolve environment variable references
+        self.database_url = self._resolve_env_vars(self.database_url)
+        
         self.model_name = model_name
         self.api_key = api_key
+        self.persist_dir = Path(persist_dir or os.getenv("VANNA_PERSIST_DIR", "/app/data/vanna_db"))
         
         self._vn = None
         self._trained = False
+        self._training_state_file = self.persist_dir / "training_state.json"
         
-        logger.info(f"VannaSQL initialized (model={model_name})")
+        # Fix #4: Load training state from disk
+        self._load_training_state()
+        
+        logger.info(f"VannaSQL initialized (model={model_name}, database={self.database_url.split('@')[1] if '@' in self.database_url else 'unknown'})")
+    
+    def _resolve_env_vars(self, url: str) -> str:
+        """Resolve ${VAR} or ${VAR:default} patterns in URL"""
+        import re
+        
+        def replace_var(match):
+            var_expr = match.group(1)
+            if ':' in var_expr:
+                var_name, default = var_expr.split(':', 1)
+                return os.getenv(var_name, default)
+            else:
+                return os.getenv(var_expr, match.group(0))
+        
+        return re.sub(r'\$\{([^}]+)\}', replace_var, url)
+    
+    def _load_training_state(self):
+        """Load training state from disk (Fix #4: Persist training state)"""
+        if self._training_state_file.exists():
+            try:
+                with open(self._training_state_file, 'r', encoding='utf-8') as f:
+                    state = json.load(f)
+                self._trained = state.get('trained', False)
+                logger.info(f"📚 Loaded Vanna training state: trained={self._trained}")
+            except Exception as e:
+                logger.warning(f"Failed to load training state: {e}")
+                self._trained = False
+        else:
+            logger.info("📖 No existing training state found, will train on first use")
+    
+    def _save_training_state(self):
+        """Save training state to disk (Fix #4: Persist training state)"""
+        try:
+            self.persist_dir.mkdir(parents=True, exist_ok=True)
+            with open(self._training_state_file, 'w', encoding='utf-8') as f:
+                json.dump({
+                    'trained': self._trained,
+                    'model_name': self.model_name,
+                    'updated_at': Path(self._training_state_file).stat().st_mtime
+                }, f, indent=2)
+            logger.info(f"💾 Saved Vanna training state to {self._training_state_file}")
+        except Exception as e:
+            logger.error(f"Failed to save training state: {e}")
     
     @property
     def vn(self):
@@ -143,6 +201,9 @@ class VannaSQL:
             
             self._trained = True
             logger.info("Vanna training complete")
+            
+            # Fix #4: Save training state to disk
+            self._save_training_state()
             
             return {'status': 'trained', **stats}
             

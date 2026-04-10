@@ -10,8 +10,13 @@ from app.schemas.chat import ChatRequest, ChatResponse, ChatStreamRequest
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
-# Gateway URL (in docker-compose, the service name is nanobot-gateway)
-GATEWAY_URL = os.getenv("GATEWAY_URL", "http://nanobot-gateway:8081")
+# Gateway URL - 支持本地开发和 Docker 环境
+_default_gateway = (
+    "http://localhost:8081" 
+    if os.getenv("ENV") == "development" or not os.getenv("GATEWAY_URL")
+    else "http://nanobot-gateway:8081"
+)
+GATEWAY_URL = os.getenv("GATEWAY_URL", _default_gateway)
 
 
 @router.post("", response_model=ChatResponse)
