@@ -1,12 +1,12 @@
 """
 Page Classifier - LLM 智能頁面路由器
 
-使用 gpt-4o-mini 進行語義分析，自動找出含有目標數據的頁碼。
+使用 LLM 進行語義分析，自動找出含有目標數據的頁碼。
 完全不需要 hardcode keywords 或貨幣符號！
 
 架構：Two-Stage LLM Pipeline
-1. Stage 1 (便宜 & 快速): gpt-4o-mini 語義分類
-2. Stage 2 (昂貴 & 精準): gpt-4o Vision 只處理相關頁面
+1. Stage 1 (便宜 & 快速): LLM 語義分類
+2. Stage 2 (昂貴 & 精準): Vision LLM 只處理相關頁面
 """
 
 import os
@@ -15,120 +15,39 @@ import logging
 from typing import Dict, List, Optional
 from loguru import logger
 
-# OpenAI SDK
-try:
-    from openai import AsyncOpenAI
-    OPENAI_SDK_AVAILABLE = True
-except ImportError:
-    OPENAI_SDK_AVAILABLE = False
-    logger.warning("⚠️ OpenAI SDK 未安裝，PageClassifier 將無法使用")
-
-
-def _get_config_api_credentials() -> tuple[Optional[str], Optional[str], Optional[str]]:
-    """
-    從 nanobot config.json 讀取 API 憑證和模型
-    
-    Returns:
-        tuple: (api_key, api_base, model)
-    """
-    try:
-        from nanobot.config.loader import load_config
-        from pathlib import Path
-        
-        # 優先使用 NANOBOT_CONFIG 環境變數指定的路徑
-        config_path = None
-        nanobot_config_env = os.getenv("NANOBOT_CONFIG")
-        if nanobot_config_env:
-            config_path = Path(nanobot_config_env)
-            if not config_path.exists():
-                config_path = None
-        
-        config = load_config(config_path)
-        provider = config.get_provider()
-        
-        # 從 agents.defaults 讀取模型
-        model = None
-        try:
-            model = config.agents.defaults.model
-        except AttributeError:
-            pass
-        
-        if provider:
-            api_key = provider.api_key or None
-            api_base = provider.api_base or None
-            
-            # 檢查是否為佔位符
-            if api_key and api_key.startswith("sk-YOUR"):
-                api_key = None
-            
-            if api_key:
-                logger.debug(f"✅ PageClassifier 從 config 讀取: model={model}")
-                return api_key, api_base, model
-    except Exception as e:
-        logger.warning(f"⚠️ PageClassifier 無法從 config.json 載入配置: {e}")
-    
-    return None, None, None
+# 導入統一的 LLM 客戶端
+from ..utils.llm_client import get_llm_client, get_llm_model
 
 
 class PageClassifier:
     """
     LLM 智能頁面路由器
     
-    使用 gpt-4o-mini 進行語義分析，自動識別包含目標數據的頁面。
+    使用 LLM 進行語義分析，自動識別包含目標數據的頁面。
     完全消除 hardcode keywords 的需求。
     """
     
-    def __init__(
-        self,
-        api_key: str = None,
-        api_base: str = None,
-        model: str = None
-    ):
+    def __init__(self):
         """
         初始化
         
-        Args:
-            api_key: API Key (優先使用參數，其次從 config.json 讀取)
-            api_base: API Base URL
-            model: LLM 模型名稱 (優先使用參數，其次從 config.json 讀取)
+        使用統一的 LLM 客戶端，不再手動管理 API Key。
         """
-        # 優先順序：參數 > config.json
-        if not api_key or not api_base or not model:
-            config_key, config_base, config_model = _get_config_api_credentials()
-            api_key = api_key or config_key
-            api_base = api_base or config_base
-            model = model or config_model
-        
-        # 最後嘗試環境變數作為 fallback
-        self.api_key = api_key or os.getenv("CUSTOM_API_KEY") or os.getenv("MINIMAX_API_KEY") or os.getenv("OPENAI_API_KEY")
-        self.api_base = api_base or os.getenv("CUSTOM_API_BASE") or os.getenv("OPENAI_API_BASE")
-        self.model = model  # 不使用硬編碼 fallback
-        self.client = None
-        
-        if not self.api_key:
-            logger.warning("⚠️ PageClassifier: 未配置有效的 API Key")
-        if not self.model:
-            raise ValueError("❌ PageClassifier: model 未配置！請在 config.json 的 provider 中設定 model")
-        
-        logger.info(f"✅ PageClassifier 初始化: model={self.model}")
+        self._client = None
+        self._model = None
+        logger.info(f"✅ PageClassifier 初始化完成")
     
-    def _get_client(self) -> Optional[AsyncOpenAI]:
-        """獲取 OpenAI 客戶端"""
-        if not OPENAI_SDK_AVAILABLE:
-            logger.error("❌ OpenAI SDK 未安裝")
-            return None
-        
-        if not self.api_key or self.api_key.startswith("sk-YOUR"):
-            logger.error("❌ PageClassifier: 未配置有效的 API Key")
-            return None
-        
-        if not self.client:
-            self.client = AsyncOpenAI(
-                api_key=self.api_key,
-                base_url=self.api_base
-            )
-        
-        return self.client
+    def _get_client(self):
+        """獲取 OpenAI 客戶端（延遲載入）"""
+        if self._client is None:
+            self._client = get_llm_client()
+        return self._client
+    
+    def _get_model(self) -> str:
+        """獲取 LLM 模型名稱"""
+        if self._model is None:
+            self._model = get_llm_model()
+        return self._model
     
     async def find_candidate_pages(
         self,
@@ -169,7 +88,7 @@ class PageClassifier:
         
         try:
             response = await client.chat.completions.create(
-                model=self.model,
+                model=self._get_model(),
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": compressed_context}
@@ -303,17 +222,13 @@ class PageClassifier:
 # ===========================================
 
 async def find_revenue_breakdown_pages(
-    pdf_path: str,
-    api_key: str = None,
-    api_base: str = None
+    pdf_path: str
 ) -> List[int]:
     """
     便捷函數：找出包含 Revenue Breakdown 的頁面
     
     Args:
         pdf_path: PDF 路徑
-        api_key: API Key
-        api_base: API Base URL
         
     Returns:
         List[int]: 頁碼列表
@@ -329,7 +244,7 @@ async def find_revenue_breakdown_pages(
     doc.close()
     
     # 使用 PageClassifier 進行分類
-    classifier = PageClassifier(api_key=api_key, api_base=api_base)
+    classifier = PageClassifier()
     result = await classifier.find_candidate_pages(pages_text, ["revenue_breakdown"])
     
     return result.get("revenue_breakdown", [])

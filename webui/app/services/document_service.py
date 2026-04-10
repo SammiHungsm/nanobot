@@ -1,5 +1,9 @@
 """
 Document Service - Handles document management and processing queue
+
+🌟 重構後使用 DocumentPipeline (統一入口)
+- OpenDataLoaderProcessor 已廢棄
+- 使用 DocumentPipeline.process_pdf_full 作為唯一入口
 """
 import asyncio
 import hashlib
@@ -10,7 +14,7 @@ from datetime import datetime
 from typing import Dict, Optional
 from loguru import logger
 
-# 🌟 使用新的模組化 DocumentPipeline
+# 🌟 使用 DocumentPipeline (統一入口)
 from nanobot.ingestion.pipeline import DocumentPipeline
 
 
@@ -24,6 +28,14 @@ class DocumentService:
         self.processing_queue: asyncio.Queue = asyncio.Queue()
         self.queue_running: bool = False
         self.processing_logs: list = []
+        
+        # 🌟 初始化 DocumentPipeline (統一入口)
+        db_url = os.getenv(
+            "DATABASE_URL", 
+            "postgresql://postgres:postgres_password_change_me@postgres-financial:5432/annual_reports"
+        )
+        data_dir = os.getenv("DATA_DIR", "/app/data/raw")
+        self.pipeline = DocumentPipeline(db_url=db_url, data_dir=data_dir, use_opendataloader=True)
         
     def add_processing_log(self, message: str, log_type: str = "info"):
         """Add a processing log entry"""
@@ -112,6 +124,13 @@ class DocumentService:
                 try:
                     # 🎯 基於顯式宣告的絕對分流 (Update as need)
                     doc_type = doc.get("doc_type", "annual_report")
+                    
+                    # 💡 定義進度更新回調函數
+                    def update_progress(percent: float, message: str):
+                        """更新處理進度"""
+                        doc["progress"] = percent
+                        doc["status_message"] = message
+                        self.add_processing_log(f"[{doc['filename']}] {message}", "info")
                     
                     if doc_type == "index_report":
                         # 🎯 路線 A：恆指主數據更新 Pipeline
@@ -217,7 +236,9 @@ class DocumentService:
     
     async def _process_with_pipeline(self, doc: dict, update_progress) -> dict:
         """
-        使用 DocumentPipeline 處理 PDF
+        🌟 使用 DocumentPipeline 處理 PDF (統一入口)
+        
+        OpenDataLoaderProcessor 已廢棄，統一使用 DocumentPipeline.process_pdf_full
         
         Args:
             doc: 文檔記錄
@@ -228,26 +249,18 @@ class DocumentService:
         """
         doc_id = doc["id"]
         
-        # 🌟 使用新的模組化 DocumentPipeline
-        db_url = os.getenv(
-            "DATABASE_URL", 
-            "postgresql://postgres:postgres_password_change_me@postgres-financial:5432/annual_reports"
-        )
-        data_dir = os.getenv("DATA_DIR", "/app/data/raw")
+        # 🌟 使用 DocumentPipeline (統一入口)
+        await self.pipeline.connect()
         
-        processor = DocumentPipeline(db_url=db_url, data_dir=data_dir)
-        await processor.connect()
-        
-        # Run real processing (parses PDF, inserts to PostgreSQL, triggers Vanna)
-        # company_id 會由 LLM 自動從文檔中提取
-        result = await processor.process_pdf(
-            pdf_path=doc["path"], 
-            company_id=None,  # 由 LLM 自動提取
-            doc_id=doc_id,
-            progress_callback=update_progress,
-            replace=doc.get("replace", False)
-        )
-        
-        await processor.close()
-        
-        return result
+        try:
+            result = await self.pipeline.process_pdf_full(
+                pdf_path=doc["path"], 
+                company_id=None,  # 由 Vision LLM 從封面自動提取
+                doc_id=doc_id,
+                progress_callback=update_progress,
+                replace=doc.get("replace", False)
+            )
+            
+            return result
+        finally:
+            await self.pipeline.close()

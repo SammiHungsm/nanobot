@@ -816,3 +816,63 @@ class DBClient:
         """獲取多行"""
         rows = await self.conn.fetch(sql, *args)
         return [dict(row) for row in rows]
+    
+    # ===========================================
+    # Raw Artifacts Operations
+    # ===========================================
+    
+    async def insert_raw_artifact(
+        self,
+        artifact_id: str,
+        doc_id: str,
+        company_id: Optional[int],
+        file_type: str,
+        file_path: str,
+        page_num: int = None,
+        metadata: str = None,
+        file_size: int = 0
+    ) -> bool:
+        """
+        插入 Raw Artifact 記錄
+        
+        Args:
+            artifact_id: Artifact ID
+            doc_id: 文檔 ID
+            company_id: 公司 ID
+            file_type: 文件類型 (table_json, image, etc.)
+            file_path: 文件路徑
+            page_num: 頁碼
+            metadata: 元數據 JSON 字串
+            file_size: 文件大小
+            
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            await self.conn.execute(
+                """
+                INSERT INTO raw_artifacts (
+                    artifact_id, doc_id, company_id, file_type,
+                    file_path, file_size_bytes, metadata, page_num, source_file
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                ON CONFLICT (artifact_id) DO UPDATE SET
+                    file_path = $5,
+                    metadata = $7,
+                    page_num = $8
+                """,
+                artifact_id,
+                doc_id,
+                company_id,
+                file_type,
+                file_path,
+                file_size,
+                metadata,
+                page_num,
+                doc_id
+            )
+            logger.debug(f"✅ Artifact {artifact_id} 已保存")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Artifact 入庫失敗: {e}")
+            return False

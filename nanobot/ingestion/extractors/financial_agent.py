@@ -8,6 +8,7 @@ Financial Agent Module - LLM 審計師 (強制結構化版本)
 2. 使用 json-repair 作為備選修復
 3. 更健壯的 JSON 清理邏輯
 4. 重試機制
+5. 使用統一的 LLM 客戶端
 """
 
 import os
@@ -17,13 +18,8 @@ from typing import Optional, Dict, Any, List
 from pydantic import BaseModel, Field
 from loguru import logger
 
-# OpenAI SDK
-try:
-    from openai import AsyncOpenAI
-    OPENAI_SDK_AVAILABLE = True
-except ImportError:
-    OPENAI_SDK_AVAILABLE = False
-    logger.warning("⚠️ OpenAI SDK 未安裝")
+# 導入統一的 LLM 客戶端
+from ..utils.llm_client import get_llm_client, get_llm_model
 
 # JSON Repair
 try:
@@ -92,46 +88,6 @@ class KeyPersonnelResponse(BaseModel):
 # ===========================================
 # 配置讀取
 # ===========================================
-
-def _get_config_api_credentials() -> tuple[Optional[str], Optional[str], Optional[str]]:
-    """
-    從 nanobot config.json 讀取 API 憑證和模型
-    """
-    try:
-        from nanobot.config.loader import load_config
-        from pathlib import Path
-        
-        config_path = None
-        nanobot_config_env = os.getenv("NANOBOT_CONFIG")
-        if nanobot_config_env:
-            config_path = Path(nanobot_config_env)
-            if not config_path.exists():
-                config_path = None
-        
-        config = load_config(config_path)
-        provider = config.get_provider()
-        
-        model = None
-        try:
-            model = config.agents.defaults.model
-        except AttributeError:
-            pass
-        
-        if provider:
-            api_key = provider.api_key or None
-            api_base = provider.api_base or None
-            
-            if api_key and api_key.startswith("sk-YOUR"):
-                api_key = None
-            
-            if api_key:
-                logger.debug(f"✅ FinancialAgent 從 config 讀取: model={model}")
-                return api_key, api_base, model
-    except Exception as e:
-        logger.warning(f"⚠️ FinancialAgent 無法從 config.json 載入配置: {e}")
-    
-    return None, None, None
-
 
 # ===========================================
 # JSON 處理工具
@@ -263,52 +219,30 @@ class FinancialAgent:
     - 重試機制
     """
     
-    def __init__(
-        self,
-        api_key: str = None,
-        api_base: str = None,
-        model: str = None,
-        max_retries: int = 2
-    ):
+    def __init__(self, max_retries: int = 2):
         """
         初始化
         
         Args:
-            api_key: API Key
-            api_base: API Base URL
-            model: LLM 模型名稱
             max_retries: 最大重試次數
         """
-        if not api_key or not api_base or not model:
-            config_key, config_base, config_model = _get_config_api_credentials()
-            api_key = api_key or config_key
-            api_base = api_base or config_base
-            model = model or config_model
-        
-        self.api_key = api_key or os.getenv("CUSTOM_API_KEY") or os.getenv("OPENAI_API_KEY")
-        self.api_base = api_base or os.getenv("CUSTOM_API_BASE") or os.getenv("OPENAI_API_BASE")
-        self.model = model
+        # 使用統一的 LLM 客戶端
+        self._client = None
+        self._model = None
         self.max_retries = max_retries
-        self.client = None
         self.json_processor = JSONProcessor()
     
-    def _get_client(self) -> Optional[AsyncOpenAI]:
-        """獲取 OpenAI 客戶端"""
-        if not OPENAI_SDK_AVAILABLE:
-            logger.error("❌ OpenAI SDK 未安裝")
-            return None
-        
-        if not self.api_key or self.api_key.startswith("sk-YOUR"):
-            logger.error("❌ 未配置有效的 API Key")
-            return None
-        
-        if not self.client:
-            self.client = AsyncOpenAI(
-                api_key=self.api_key,
-                base_url=self.api_base
-            )
-        
-        return self.client
+    def _get_client(self):
+        """獲取 OpenAI 客戶端（延遲載入）"""
+        if self._client is None:
+            self._client = get_llm_client()
+        return self._client
+    
+    def _get_model(self) -> str:
+        """獲取 LLM 模型名稱"""
+        if self._model is None:
+            self._model = get_llm_model()
+        return self._model
     
     async def _call_llm_with_retry(
         self,
@@ -334,7 +268,7 @@ class FinancialAgent:
         for attempt in range(self.max_retries + 1):
             try:
                 kwargs = {
-                    "model": self.model,
+                    "model": self._get_model(),
                     "messages": messages,
                     "temperature": temperature
                 }
@@ -522,6 +456,14 @@ Expected JSON format:
         """
         logger.info(f"🎯 從封面精準提取核心 Metadata...")
         
+        # 🚀 添加调试：打印提取的文本长度和前 500 字符
+        text_preview = front_pages_text[:500] if front_pages_text else "EMPTY"
+        logger.debug(f"   📄 封面文本长度: {len(front_pages_text) if front_pages_text else 0}")
+        logger.debug(f"   📄 封面文本预览: {text_preview}")
+        
+        # 🚀 添加调试：打印完整文本（帮助诊断问题）
+        logger.info(f"   📄 完整封面文本:\n{front_pages_text}")
+        
         prompt = """你是一個精準的文檔解析器。請從以下港股年報封面文本中提取 4 個核心資訊。
 
 ⚠️ 嚴格規則：
@@ -531,7 +473,7 @@ Expected JSON format:
 4. name_zh: 公司中文名（找不到填 null）
 
 封面文本：
-""" + front_pages_text[:2000] + """
+""" + front_pages_text[:3000] + """
 
 只回傳 JSON，不要解釋：
 {""" 
@@ -546,8 +488,11 @@ Expected JSON format:
             response_format={"type": "json_object"}
         )
         
+        # 🚀 添加调试：打印 LLM 原始响应
+        logger.debug(f"   🤖 LLM 原始响应: {result_text[:500] if result_text else 'None'}")
+        
         if not result_text:
-            logger.warning("⚠️ 封面元數據提取失敗")
+            logger.warning("⚠️ 封面元數據提取失敗：LLM 未返回结果")
             return None
         
         result = self.json_processor.repair_and_parse(result_text)
@@ -716,6 +661,136 @@ IMPORTANT: You MUST respond with valid JSON only. Extract all visible data from 
             
         except Exception as e:
             logger.error(f"❌ Vision 提取失敗: {e}")
+            return None
+    
+    async def extract_company_metadata_with_vision(
+        self,
+        base64_image: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        🎯 專門從封面圖片提取 Metadata（Vision 版本）
+        
+        這是替代 FastParser 的核心方法：
+        - 直接將 PDF 封面轉成圖片
+        - 使用 Vision LLM 同時執行 OCR + 語義提取
+        - 適用於港股年報封面（文字常被向量化或嵌入圖片）
+        
+        Args:
+            base64_image: Base64 編碼的封面圖片
+            
+        Returns:
+            Dict: {stock_code, year, name_en, name_zh}
+        """
+        client = self._get_client()
+        if not client:
+            return None
+        
+        try:
+            # 🔧 Vision 模型映射（根據不同 provider 切換）
+            # 常見的映射規則：
+            # - qwen3.5 → qwen-vl-max 或 qwen-vl-plus
+            # - gpt-4 → gpt-4-vision-preview 或 gpt-4o
+            # - glm-4 → glm-4v
+            vision_model = self.model
+            
+            # 嘗試映射到 Vision 模型
+            if "qwen" in self.model.lower():
+                # Qwen 系列：嘗試切換到 VL 模型
+                if "qwen3" in self.model.lower():
+                    vision_model = self.model.replace("qwen3", "qwen-vl")
+                elif "qwen2" in self.model.lower():
+                    vision_model = self.model.replace("qwen2", "qwen-vl")
+                else:
+                    vision_model = "qwen-vl-max"
+            elif "gpt-4" in self.model.lower() and "vision" not in self.model.lower():
+                # OpenAI GPT-4 系列
+                if "gpt-4o-mini" in self.model.lower():
+                    vision_model = "gpt-4o"  # mini 不支持 vision，切換到 4o
+                elif "gpt-4-turbo" in self.model.lower():
+                    vision_model = "gpt-4-turbo"  # turbo 本身支持 vision
+                else:
+                    vision_model = "gpt-4-vision-preview"
+            elif "glm" in self.model.lower():
+                # GLM 系列
+                if "glm-4" in self.model.lower():
+                    vision_model = "glm-4v"
+            
+            logger.info(f"👁️ 正在使用 Vision LLM ({vision_model}) 扫描封面...")
+            
+            prompt = """你是一個精準的財報數據提取專家。請從這張港股年報封面圖片中提取 4 個核心資訊。
+
+⚠️ 嚴格規則：
+1. stock_code: 股票代碼（通常是 4-5 位純數字，例如 02359, 00001。不要包含多餘文字）
+2. year: 財報年份（如 2023, 2024）
+3. name_en: 公司英文名（找不到填 null）
+4. name_zh: 公司中文名（找不到填 null）
+
+請僅回傳 JSON 格式，不要包含任何其他解釋：
+{
+  "stock_code": "00001",
+  "year": 2023,
+  "name_en": "CK Hutchison Holdings Limited",
+  "name_zh": "長和"
+}"""
+            
+            response = await client.chat.completions.create(
+                model=vision_model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/png;base64,{base64_image}",
+                                    "detail": "high"
+                                }
+                            }
+                        ]
+                    }
+                ],
+                temperature=0.0
+            )
+            
+            result_text = response.choices[0].message.content
+            logger.debug(f"   🤖 Vision LLM 原始響應: {result_text[:300] if result_text else 'None'}...")
+            
+            result = self.json_processor.repair_and_parse(result_text)
+            
+            if result:
+                stock_code = result.get("stock_code")
+                year = result.get("year")
+                
+                # 🎯 驗證：stock_code 必須是純數字
+                if stock_code:
+                    stock_code = re.sub(r'[^\d]', '', str(stock_code))
+                    if len(stock_code) < 4:
+                        logger.warning(f"⚠️ 股票代碼格式異常: {stock_code}")
+                        result["stock_code"] = None
+                    else:
+                        result["stock_code"] = stock_code.zfill(5)
+                
+                # 🎯 驗證：year 必須是合理的年份
+                if year:
+                    try:
+                        year_int = int(year)
+                        if 2000 <= year_int <= 2030:
+                            result["year"] = year_int
+                        else:
+                            logger.warning(f"⚠️ 年份格式異常: {year}")
+                            result["year"] = None
+                    except:
+                        result["year"] = None
+                
+                logger.info(f"✅ 封面 Vision 提取成功: Stock={result.get('stock_code')}, Year={result.get('year')}")
+                return result
+            
+            logger.error("❌ 封面 Vision 提取失敗：JSON 解析失敗")
+            return None
+            
+        except Exception as e:
+            logger.error(f"❌ 封面 Vision 提取失敗: {e}")
             return None
 
 

@@ -1,22 +1,20 @@
-# Vanna AI Service
-# Text-to-SQL with RAG training for financial queries
-# Supports continuous learning (邊做邊學) via REST API
+# syntax=docker/dockerfile:1
+# Vanna AI Service - Text-to-SQL with RAG training
+# 🚀 Optimized for fast rebuilds with BuildKit cache
 
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies (rarely changes, good for caching)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install dependencies
-# 1. 鎖定 vanna 0.7.x 版本（使用經典的 chromadb 架構）
-# 2. 限制 numpy<2.0.0 避免 ChromaDB 崩潰
-# 3. vanna[chromadb,postgres] 已經包含 chromadb 和 psycopg2，但需要額外安裝 openai
-# 4. vanna[openai] 包含 openai 依賴
-RUN pip install --no-cache-dir \
+# 🚀 Step 1: Create requirements and install dependencies FIRST
+# This layer will be cached as long as requirements don't change
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install \
     "vanna[chromadb,postgres,openai]>=0.7.0,<1.0.0" \
     "numpy<2.0.0" \
     pandas \
@@ -25,10 +23,18 @@ RUN pip install --no-cache-dir \
     uvicorn
 
 # Create data directory for ChromaDB persistence
-RUN mkdir -p /app/data /app/data/raw /app/data/chromadb
+RUN mkdir -p /app/data/raw /app/data/chromadb
 
-# Copy startup script
+# 🚀 Step 2: Copy application code LAST (changes frequently)
+# This way, code changes don't invalidate the pip install cache
 COPY start.py /app/start.py
+COPY vanna_training.py /app/vanna_training.py
+
+# Copy JSON training files
+COPY data/ddl.json /app/data/ddl.json
+COPY data/ddl_whitelist.json /app/data/ddl_whitelist.json
+COPY data/documentation.json /app/data/documentation.json
+COPY data/sql_pairs.json /app/data/sql_pairs.json
 
 # Expose API port
 EXPOSE 8082

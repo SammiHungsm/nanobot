@@ -3,19 +3,25 @@ Document Pipeline - 主流程協調器
 
 這是整個 ingestion 系統的大腦，協調各個模組完成 PDF 處理流程。
 
+職責分離（Separation of Concerns）：
+1. Parser 層 (VisionParser, FastParser, OpenDataLoaderParser)：只負責「看」，輸出原始資料
+2. Agent 層 (FinancialAgent, PageClassifier)：只負責「想」，輸出結構化 JSON
+3. Pipeline 層 (DocumentPipeline)：唯一的大腦，負責資料庫和流程控制
+
 Two-Stage LLM Pipeline:
-1. Stage 1 (便宜 & 快速): PageClassifier (gpt-4o-mini) 語義分類
+1. Stage 1 (便宜 & 快速): PageClassifier 語義分類
 2. Stage 2 (昂貴 & 精準): Vision Parser + Financial Agent 只處理相關頁面
 
 流程：
-1. Parser: 解析 PDF → Markdown/文字
+1. Parser: 解析 PDF → Markdown/文字/Artifacts (使用 OpenDataLoaderParser)
 2. Classifier: LLM 智能路由 (找出目標頁面)
 3. Agent: LLM 提取結構化數據
 4. Validator: 數據驗證
 5. Repository: 數據入庫
 
-改進：
-- 跨頁表格合併：自動檢測並合併跨頁表格
+🌟 重構後統一入口：
+- WebUI 直接使用 DocumentPipeline
+- OpenDataLoaderProcessor 已廢棄
 """
 
 import os
@@ -27,10 +33,16 @@ from typing import Dict, Any, Optional, List, Tuple, Callable
 from datetime import datetime
 from loguru import logger
 
-# 導入各個模組
+# 導入各個模組（Parser 層）
 from .parsers.vision_parser import VisionParser, FastParser
+from .parsers.opendataloader_parser import OpenDataLoaderParser
+
+# 導入各個模組（Agent 層）
 from .extractors.financial_agent import FinancialAgent
 from .extractors.page_classifier import PageClassifier
+
+# 導入統一的 LLM 客戶端
+from .utils.llm_client import get_llm_client, get_llm_model, get_vision_model
 
 
 # ===========================================
@@ -221,10 +233,7 @@ class DocumentPipeline:
         self,
         db_url: str = None,
         data_dir: str = None,
-        api_key: str = None,
-        api_base: str = None,
-        vision_model: str = None,
-        llm_model: str = None
+        use_opendataloader: bool = True
     ):
         """
         初始化
@@ -232,24 +241,8 @@ class DocumentPipeline:
         Args:
             db_url: 數據庫連接字符串
             data_dir: 數據存儲目錄
-            api_key: API Key (優先使用參數，其次從 config.json 讀取)
-            api_base: API Base URL (優先使用參數，其次從 config.json 讀取)
-            vision_model: Vision 模型名稱 (優先使用參數，其次使用默認值)
-            llm_model: LLM 模型名稱 (優先使用參數，其次從 config.json 讀取)
+            use_opendataloader: 是否使用 OpenDataLoader 解析（默認 True）
         """
-        # 🌟 從 config.json 讀取配置
-        config_key, config_base, config_model = self._get_config_credentials()
-        
-        # 優先順序：參數 > config.json
-        api_key = api_key or config_key
-        api_base = api_base or config_base
-        llm_model = llm_model or config_model
-        vision_model = vision_model or llm_model  # 使用相同的 model
-        
-        # 驗證必要配置
-        if not llm_model:
-            raise ValueError("❌ LLM model 未配置！請在 config.json 的 agents.defaults.model 中設定")
-        
         self.db_url = db_url or os.getenv(
             "DATABASE_URL",
             "postgresql://postgres:postgres_password_change_me@localhost:5433/annual_reports"
@@ -257,16 +250,24 @@ class DocumentPipeline:
         self.data_dir = Path(data_dir or os.getenv("DATA_DIR", "./data/raw"))
         self.data_dir.mkdir(parents=True, exist_ok=True)
         
-        # 初始化各個組件
+        # 🌟 使用統一的 LLM 客戶端
+        self.llm_client = get_llm_client()
+        self.llm_model = get_llm_model()
+        self.vision_model = get_vision_model()
+        
+        # 初始化 Parser 層
         self.db = DBClient(self.db_url)
-        self.vision_parser = VisionParser(api_key, api_base, vision_model)
+        self.vision_parser = VisionParser()
         self.fast_parser = FastParser()
-        self.agent = FinancialAgent(api_key, api_base, llm_model)
+        self.opendataloader_parser = OpenDataLoaderParser() if use_opendataloader else None
         
-        # 🌟 LLM 智能頁面路由器 (使用相同的 LLM 模型)
-        self.page_classifier = PageClassifier(api_key=api_key, api_base=api_base, model=llm_model)
+        # 初始化 Agent 層
+        self.agent = FinancialAgent()
+        self.page_classifier = PageClassifier()
         
-        logger.info(f"📁 DocumentPipeline 初始化完成 (model={llm_model})")
+        self.use_opendataloader = use_opendataloader
+        
+        logger.info(f"📁 DocumentPipeline 初始化完成 (model={self.llm_model}, opendataloader={use_opendataloader})")
     
     async def connect(self):
         """連接數據庫"""
@@ -411,23 +412,53 @@ class DocumentPipeline:
             result["document_pages_saved"] = saved_pages
             logger.info(f"   ✅ 已保存 {saved_pages} 個頁面到 document_pages 兜底表")
             
-            # 🌟 Step 3: 使用 LLM 智能路由找出目標頁面 (取代傳統 keyword scanning)
+            # 🌟 Step 3: 混合路由 (Hybrid Routing) - 結合特徵掃描與 LLM 分類
             if progress_callback:
-                progress_callback(37.0, "LLM 智能路由分析頁面...")
+                progress_callback(37.0, "混合路由掃描目標頁面...")
             
-            # 提取所有頁面的文字（用於 LLM 分類）
-            pages_text = await self._extract_all_pages_text(pdf_path)
+            revenue_pages = set()
             
-            # 使用 PageClassifier 進行語義分類
-            classification_result = await self.page_classifier.find_candidate_pages(
-                pages_text,
-                target_data_types=["revenue_breakdown", "key_personnel"]
+            # 方法 A：企業級多維度特徵掃描 (抓出圖表、表格與關鍵字)
+            # 使用 FastParser.scan_for_keywords 的三重策略：
+            # - 正規化模糊搜尋 (Normalized Text Search)
+            # - 視覺特徵偵測 (Visual Feature Detection - 針對圖表)
+            # - 表格特徵偵測 (Table Feature Detection)
+            keyword_pages = FastParser.scan_for_keywords(
+                pdf_path,
+                keywords=[
+                    "revenue breakdown", "geographical", "geographic", 
+                    "region", "segment", "business segment",
+                    "收入分佈", "地區收入", "業務分佈", "地理分佈",
+                    "歐洲", "美洲", "中國", "亞洲", "香港",
+                    "turnover", "sales by", "income by"
+                ]
             )
+            revenue_pages.update(keyword_pages)
+            logger.info(f"   📊 特徵掃描找到 {len(keyword_pages)} 個候選頁面: {keyword_pages}")
             
-            revenue_pages = classification_result.get("revenue_breakdown", [])
+            # 方法 B：LLM 語義分類 (作為輔助補強，不當作唯一依賴)
+            # 注意：LLM 分類可能因為 FastParser 抓出空白文字而失敗
+            try:
+                pages_text = await self._extract_all_pages_text(pdf_path)
+                if pages_text:
+                    classification_result = await self.page_classifier.find_candidate_pages(
+                        pages_text,
+                        target_data_types=["revenue_breakdown", "key_personnel"]
+                    )
+                    llm_pages = classification_result.get("revenue_breakdown", [])
+                    revenue_pages.update(llm_pages)
+                    logger.info(f"   🧠 LLM 分類找到 {len(llm_pages)} 個額外候選頁面: {llm_pages}")
+            except Exception as e:
+                logger.warning(f"   ⚠️ LLM 分類失敗（跳過，不影響特徵掃描結果）: {e}")
+            
+            revenue_pages = sorted(list(revenue_pages))
             result["revenue_breakdown"]["pages"] = revenue_pages
             
-            logger.info(f"   🎯 LLM 路由找到 {len(revenue_pages)} 個 Revenue Breakdown 候選頁面: {revenue_pages}")
+            if not revenue_pages:
+                logger.warning("⚠️ 混合路由找不到任何候選頁面，放棄結構化提取（但兜底資料已保存）")
+                return result
+            
+            logger.info(f"   🎯 混合路由總共找到 {len(revenue_pages)} 個 Revenue Breakdown 候選頁面: {revenue_pages}")
             
             # Step 4: 對每個頁面進行結構化提取 (Zone 1)
             for i, page_num in enumerate(revenue_pages):
@@ -671,61 +702,115 @@ class DocumentPipeline:
         doc_id: str
     ) -> Optional[int]:
         """
-        🎯 漸進式提取與 Upsert 公司信息
+        🎯 Vision 提取公司信息（替代 FastParser）
         
         核心改進：
-        1. 只提取前 2 頁文本（封面和目錄）
-        2. 使用精準 LLM 提取 stock_code, year, names
-        3. 實現 Upsert：如果公司已存在，只更新空值
+        1. 將 PDF 封面（第 1 頁）轉成高解析度圖片
+        2. 使用 Vision LLM 同時執行 OCR + 語義提取
+        3. 解決港股年報封面文字被向量化或嵌入圖片的問題
         
         Returns:
             int: 公司 ID
         """
-        logger.info(f"🎯 正在從封面提取公司元數據...")
+        logger.info(f"🎯 正在透過 Vision 從封面提取公司元數據...")
         
-        # Step 1: 只提取前 2 頁文字（封面和目錄）
-        front_pages_text = ""
-        total_pages = FastParser.get_page_count(pdf_path)
+        stock_code = None
+        year = None
+        name_en = None
+        name_zh = None
         
-        for page_num in range(1, min(3, total_pages + 1)):  # 🎯 只取前 2 頁
-            text = FastParser.extract_text(pdf_path, page_num)
-            if text:
-                front_pages_text += text + "\n"
+        # ==========================================
+        # 🌟 方案 A: Vision 提取（優先，解決 OCR 層問題）
+        # ==========================================
         
-        if not front_pages_text:
-            logger.warning("⚠️ 無法提取封面文本")
-            return None
+        # Step 1: 將封面（第 1 頁）轉成高解析度圖片
+        cover_image_base64 = self.vision_parser.convert_page_to_image_base64(
+            pdf_path, 
+            page_num=1, 
+            zoom=2.0  # 高解析度
+        )
         
-        # Step 2: 使用精準 LLM 提取元數據
-        metadata = await self.agent.extract_company_metadata_from_cover(front_pages_text)
+        if cover_image_base64:
+            # Step 2: 使用 Vision Agent 提取
+            metadata = await self.agent.extract_company_metadata_with_vision(cover_image_base64)
+            
+            if metadata:
+                stock_code = metadata.get("stock_code")
+                year = metadata.get("year")
+                name_en = metadata.get("name_en")
+                name_zh = metadata.get("name_zh")
+                logger.info(f"✅ Vision 提取成功: Stock={stock_code}, Year={year}")
+            else:
+                logger.warning("⚠️ Vision 提取失敗，嘗試 Fallback...")
+        else:
+            logger.warning("⚠️ 無法獲取封面圖片，嘗試 Fallback...")
         
-        if not metadata:
-            logger.warning("⚠️ 封面元數據提取失敗")
-            return None
+        # ==========================================
+        # 🌟 方案 B: Fallback - 從文件名提取
+        # ==========================================
         
-        stock_code = metadata.get("stock_code")
-        year = metadata.get("year")
-        name_en = metadata.get("name_en")
-        name_zh = metadata.get("name_zh")
+        if not stock_code or not year:
+            import re
+            filename = Path(pdf_path).stem
+            logger.info(f"   📄 Vision 提取失敗，嘗試從文件名提取: {filename}")
+            
+            # 提取 stock_code (格式: stock_XXXXX)
+            stock_match = re.search(r'stock_(\d{4,5})', filename)
+            if stock_match:
+                stock_code = stock_match.group(1).zfill(5)
+                logger.info(f"   ✅ 從文件名提取 stock_code: {stock_code}")
+            
+            # 提取 year (格式: _YYYY 或 _YYYY_)
+            year_matches = re.findall(r'_(\d{4})(?:_|$)', filename)
+            for y in year_matches:
+                y_int = int(y)
+                if 2000 <= y_int <= 2030:
+                    year = y_int
+                    logger.info(f"   ✅ 從文件名提取 year: {year}")
+                    break
         
-        # Step 3: 驗證必要欄位
+        # ==========================================
+        # 🌟 方案 C: 嘗試 FastParser（最後手段）
+        # ==========================================
+        
+        if not stock_code:
+            logger.info("   📄 Vision 和文件名都失敗，嘗試 FastParser...")
+            front_pages_text = ""
+            total_pages = FastParser.get_page_count(pdf_path)
+            
+            for page_num in range(1, min(3, total_pages + 1)):
+                text = FastParser.extract_text(pdf_path, page_num)
+                if text:
+                    front_pages_text += text + "\n"
+            
+            if front_pages_text:
+                metadata = await self.agent.extract_company_metadata_from_cover(front_pages_text)
+                if metadata:
+                    stock_code = metadata.get("stock_code") or stock_code
+                    year = metadata.get("year") or year
+                    name_en = metadata.get("name_en") or name_en
+                    name_zh = metadata.get("name_zh") or name_zh
+        
+        # ==========================================
+        # 驗證必要欄位
+        # ==========================================
+        
         if not stock_code:
             logger.error(f"❌ 封面解析失敗：找不到 Stock Code！PDF: {pdf_path}")
             return None
         
-        logger.info(f"✅ 封面解析成功: Stock={stock_code}, Year={year}, Name={name_en or name_zh}")
+        logger.info(f"✅ 元數據提取成功: Stock={stock_code}, Year={year}, Name={name_en or name_zh or 'N/A'}")
         
-        # Step 4: Upsert 公司信息（Update as need）
-        # 使用 db_client 的 upsert_company 方法實現漸進式更新
+        # Upsert 公司信息
         company_id = await self.db.upsert_company(
             stock_code=stock_code,
             name_en=name_en,
             name_zh=name_zh,
-            name_source="extracted",  # 來自 PDF 提取
-            sector="BioTech"  # 預設板塊
+            name_source="extracted",  # 來自 PDF 提取（Vision 方法）
+            sector="BioTech"
         )
         
-        # Step 5: 更新文檔的 year
+        # 更新文檔的 year
         if year and company_id:
             await self.db.update_document_company_id(doc_id, company_id, year)
             logger.info(f"✅ 文檔 {doc_id} 已關聯公司 ID={company_id}, Year={year}")
@@ -755,6 +840,220 @@ class DocumentPipeline:
             logger.warning(f"⚠️ 無法從數據庫獲取年份: {e}")
         
         return None
+    
+    # ===========================================
+    # 🌟 OpenDataLoader 整合方法 (替代 OpenDataLoaderProcessor)
+    # ===========================================
+    
+    async def process_pdf_full(
+        self,
+        pdf_path: str,
+        company_id: int = None,
+        doc_id: str = None,
+        progress_callback: Callable = None,
+        replace: bool = False
+    ) -> Dict[str, Any]:
+        """
+        🌟 完整 PDF 處理流程（整合 OpenDataLoaderParser）
+        
+        此方法取代舊的 OpenDataLoaderProcessor，使用清晰的分層架構：
+        1. OpenDataLoaderParser - 解析 PDF → Artifacts
+        2. VisionParser + FinancialAgent - 結構化提取
+        3. DBClient - 數據入庫
+        
+        Args:
+            pdf_path: PDF 檔案路徑
+            company_id: 公司 ID (可選，將從封面自動提取)
+            doc_id: 文檔 ID
+            progress_callback: 進度回調
+            replace: 是否強制重新處理
+            
+        Returns:
+            Dict: 處理結果（兼容 OpenDataLoaderProcessor 返回格式）
+        """
+        logger.info(f"🚀 DocumentPipeline.process_pdf_full: {pdf_path}")
+        
+        try:
+            # Step 1: 計算 Hash & 檢查重複
+            if progress_callback:
+                progress_callback(5.0, "計算 Hash 與檢查重複...")
+            file_hash = self._compute_file_hash(pdf_path)
+            
+            if replace:
+                logger.info(f"🔄 Replace mode: 清理舊數據...")
+                await self.db.delete_document(doc_id)
+            else:
+                exists = await self.db.check_document_exists(doc_id, file_hash)
+                if exists:
+                    logger.warning(f"⚠️ 文檔已存在，跳過: {doc_id}")
+                    return {"status": "skipped", "reason": "duplicate"}
+            
+            # Step 2: 創建文檔記錄
+            await self._create_document(pdf_path, company_id, doc_id, file_hash)
+            
+            # Step 3: 🌟 使用 OpenDataLoaderParser 解析 PDF
+            if progress_callback:
+                progress_callback(15.0, "OpenDataLoader 解析 PDF...")
+            
+            if self.opendataloader_parser:
+                artifacts = await self.opendataloader_parser.parse_async(pdf_path, doc_id)
+                logger.info(f"   ✅ OpenDataLoader 解析完成: {len(artifacts)} 個 artifacts")
+                
+                # Step 3.1: 保存 Artifacts 到文件和數據庫
+                await self._save_opendataloader_artifacts(artifacts, doc_id, company_id)
+                
+                # Step 3.2: 保存 output.json 供 WebUI 預覽
+                output_json_path = self.data_dir / doc_id / "output.json"
+                output_json_path.parent.mkdir(parents=True, exist_ok=True)
+                import json as json_module
+                with open(output_json_path, "w", encoding="utf-8") as f:
+                    json_module.dump(artifacts, f, ensure_ascii=False, indent=2)
+                logger.info(f"   💾 已保存 output.json: {output_json_path}")
+            else:
+                logger.warning("⚠️ OpenDataLoaderParser 未啟用")
+                artifacts = []
+            
+            # Step 4: 提取公司信息（如果沒有 company_id）
+            if progress_callback:
+                progress_callback(55.0, "🧠 Vision 提取公司信息...")
+            
+            if not company_id:
+                company_id = await self._extract_and_create_company(pdf_path, doc_id)
+                if company_id:
+                    logger.info(f"✅ 已關聯公司: ID={company_id}")
+                else:
+                    logger.warning("⚠️ 無法提取公司信息")
+            
+            # Step 5: 智能結構化提取
+            stats = {
+                "total_chunks": len([a for a in artifacts if a.get("type") == "text_chunk"]),
+                "total_tables": len([a for a in artifacts if a.get("type") == "table"]),
+                "total_images": len([a for a in artifacts if a.get("type") == "image"]),
+                "total_artifacts": len(artifacts)
+            }
+            
+            if company_id:
+                if progress_callback:
+                    progress_callback(70.0, "智能提取結構化數據...")
+                
+                extraction_result = await self.smart_extract(
+                    pdf_path, company_id, doc_id, 
+                    lambda p, m: progress_callback(70 + p * 0.2, m) if progress_callback else None
+                )
+                stats["structured_extraction"] = extraction_result
+            else:
+                stats["structured_extraction"] = {"status": "skipped", "reason": "no company_id"}
+            
+            # Step 6: 觸發 Vanna 訓練
+            if progress_callback:
+                progress_callback(95.0, "觸發 Vanna 訓練...")
+            await self._trigger_vanna_training(doc_id)
+            
+            # Step 7: 更新文檔狀態
+            await self.db.update_document_status(doc_id, "completed", stats)
+            
+            if progress_callback:
+                progress_callback(100.0, "✅ 處理完成")
+            
+            return {
+                "status": "completed",
+                "doc_id": doc_id,
+                "company_id": company_id,
+                **stats
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ process_pdf_full 失敗: {e}")
+            import traceback
+            traceback.print_exc()
+            await self.db.update_document_status(doc_id, "failed", error=str(e))
+            return {"status": "failed", "error": str(e)}
+    
+    async def _save_opendataloader_artifacts(
+        self,
+        artifacts: List[Dict[str, Any]],
+        doc_id: str,
+        company_id: Optional[int]
+    ):
+        """
+        保存 OpenDataLoader Artifacts 到數據庫
+        
+        Args:
+            artifacts: Artifacts 列表
+            doc_id: 文檔 ID
+            company_id: 公司 ID
+        """
+        import json as json_module
+        
+        doc_dir = self.data_dir / doc_id
+        doc_dir.mkdir(parents=True, exist_ok=True)
+        
+        for idx, artifact in enumerate(artifacts):
+            artifact_type = artifact.get("type")
+            page_num = artifact.get("page_num")
+            metadata = artifact.get("metadata", {})
+            
+            try:
+                if artifact_type == "table":
+                    # 保存表格 JSON
+                    table_json_path = doc_dir / f"table_{idx:04d}.json"
+                    with open(table_json_path, 'w', encoding='utf-8') as f:
+                        json_module.dump(artifact.get("content_json", {}), f, ensure_ascii=False, indent=2)
+                    
+                    # 記錄到 raw_artifacts
+                    await self.db.insert_raw_artifact(
+                        artifact_id=f"{doc_id}_table_{idx:04d}",
+                        doc_id=doc_id,
+                        company_id=company_id,
+                        file_type="table_json",
+                        file_path=str(table_json_path.relative_to(self.data_dir)),
+                        page_num=page_num,
+                        metadata=json_module.dumps(metadata)
+                    )
+                
+                elif artifact_type == "image":
+                    # 圖片元數據記錄（二進制數據由 OpenDataLoader 保存）
+                    await self.db.insert_raw_artifact(
+                        artifact_id=f"{doc_id}_image_{idx:04d}",
+                        doc_id=doc_id,
+                        company_id=company_id,
+                        file_type="image",
+                        file_path=f"{doc_id}/images/image_{idx:04d}.png",
+                        page_num=page_num,
+                        metadata=json_module.dumps(metadata)
+                    )
+                
+                # text_chunk 已保存在 output.json 中，無需單獨入庫
+                
+            except Exception as e:
+                logger.warning(f"⚠️ Artifact {idx} 保存失敗: {e}")
+                continue
+    
+    async def _trigger_vanna_training(self, doc_id: str):
+        """
+        觸發 Vanna 訓練
+        
+        Args:
+            doc_id: 文檔 ID
+        """
+        import httpx
+        
+        vanna_url = os.getenv("VANNA_SERVICE_URL", "http://vanna-service:8082")
+        
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(
+                    f"{vanna_url}/api/train",
+                    json={"train_type": "sql", "doc_id": doc_id}
+                )
+                
+                if response.status_code == 200:
+                    logger.info(f"✅ Vanna 訓練已觸發: {doc_id}")
+                else:
+                    logger.warning(f"⚠️ Vanna 訓練失敗 (HTTP {response.status_code})")
+        
+        except Exception as e:
+            logger.warning(f"⚠️ Vanna 連線失敗: {e}")
     
     # ===========================================
 # 便捷函數

@@ -356,13 +356,26 @@ def train_vanna_with_enhanced_data() -> bool:
         logger.info("🧠 開始訓練 Vanna 增強數據...")
         
         # 🔧 載入 JSON 訓練模組（資料與代碼分離）
-        from vanna_training import VannaTrainingData
+        # 使用相對路徑確保 Docker 和本地開發都能正常工作
+        import sys
+        from pathlib import Path
+        
+        # 將當前目錄加入 Python 路徑（確保能找到 vanna_training）
+        current_dir = Path(__file__).parent
+        if str(current_dir) not in sys.path:
+            sys.path.insert(0, str(current_dir))
+        
+        try:
+            from vanna_training import VannaTrainingData
+        except ImportError:
+            # 嘗試相對導入
+            from .vanna_training import VannaTrainingData
         
         # 確定資料目錄（Docker 或本地）
         data_dir = "/app/data"
         if not Path(data_dir).exists():
             # 本地開發環境
-            data_dir = Path(__file__).parent / "data"
+            data_dir = current_dir / "data"
         
         trainer = VannaTrainingData(data_dir=str(data_dir))
         

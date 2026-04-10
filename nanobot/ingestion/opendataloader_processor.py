@@ -1,13 +1,45 @@
 """
 OpenDataLoader Integration Module
 
-功能：
+⚠️ ⚠️ ⚠️ DEPRECATED - 此文件已廢棄 ⚠️ ⚠️ ⚠️
+
+此模組已被 DocumentPipeline 取代，請使用：
+    from nanobot.ingestion.pipeline import DocumentPipeline
+    
+    pipeline = DocumentPipeline(db_url, data_dir)
+    await pipeline.connect()
+    result = await pipeline.process_pdf_full(pdf_path, doc_id=doc_id)
+    await pipeline.close()
+
+廢棄原因：
+1. 職責混雜：Parser + Agent + Repository 全包在一個類
+2. 難以維護：代碼過長 (800+ 行)
+3. 測試困難：無法單獨測試各個模組
+
+新架構（DocumentPipeline）：
+- Parser 層 (OpenDataLoaderParser)：只負責解析 PDF
+- Agent 層 (FinancialAgent)：只負責 LLM 提取
+- Repository 層 (DBClient)：只負責數據庫操作
+- Pipeline 層 (DocumentPipeline)：協調各層
+
+此文件將在下一版本中完全刪除。
+
+功能（舊版）：
 1. 解析 Annual Report PDF
 2. 提取所有 Raw Data (文字、表格、圖片)
 3. 保存檔案到 Docker Volume
 4. 將路徑和元數據寫入 PostgreSQL
 5. 使用 LLM 自動識別公司並提取關鍵信息
 """
+
+# 🚨 Runtime Deprecation Warning
+import warnings
+warnings.warn(
+    "OpenDataLoaderProcessor is DEPRECATED. "
+    "Use DocumentPipeline instead: from nanobot.ingestion.pipeline import DocumentPipeline",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 import os
 import json
@@ -43,6 +75,11 @@ except ImportError:
 class OpenDataLoaderProcessor:
     """
     OpenDataLoader 處理器
+    
+    ⚠️ DEPRECATED - 請使用 DocumentPipeline
+    
+    此類已被廢棄，將在下一版本中刪除。
+    請改用：nanobot.ingestion.pipeline.DocumentPipeline
     
     負責：
     - 解析 PDF 文檔
@@ -133,8 +170,8 @@ class OpenDataLoaderProcessor:
             # 5. 🧠 如果沒有提供 company_id，使用 LLM 從文檔中提取公司信息
             if company_id is None:
                 if progress_callback:
-                    progress_callback(55.0, "🧠 使用 LLM 提取公司信息...")
-                company_info = await self._extract_company_info_with_llm(artifacts, output_json_path)
+                    progress_callback(55.0, "🧠 使用 Vision LLM 提取公司信息...")
+                company_info = await self._extract_company_info_with_llm(pdf_path, artifacts, output_json_path)
                 if company_info:
                     company_id = await self._find_or_create_company(company_info)
                     if company_id:
@@ -713,15 +750,49 @@ class OpenDataLoaderProcessor:
             if progress_callback:
                 progress_callback(90.0, "Vanna 連線超時或失敗")
 
-    async def _extract_company_info_with_llm(self, artifacts: List[Dict], output_json_path: Path) -> Optional[Dict[str, Any]]:
+    async def _extract_company_info_with_llm(self, pdf_path: str, artifacts: List[Dict], output_json_path: Path) -> Optional[Dict[str, Any]]:
         """
-        使用 LLM 從文檔內容中提取公司信息
+        🌟 優先使用 Vision LLM 從封面提取公司信息
         
+        流程：
+        1. Vision 提取（封面圖片 → LLM）- 解決 OCR 層問題
+        2. Fallback: 從 artifacts 純文字中提取
+        3. Fallback: 從文件名正則提取
+        
+        Args:
+            pdf_path: PDF 文件路徑
+            artifacts: OpenDataLoader 解析出的結構化數據
+            output_json_path: 輸出 JSON 路徑
+            
         Returns:
             Dict with keys: stock_code, name_en, name_zh, industry, sector (all optional)
         """
+        # ==========================================
+        # 方案 A: Vision 提取（優先，解決封面文字被向量化問題）
+        # ==========================================
+        if PYMUPDF_AVAILABLE and OPENAI_SDK_AVAILABLE:
+            try:
+                logger.info("👁️ 正在使用 Vision LLM 從封面提取公司信息...")
+                
+                # 將封面轉為高解析度圖片
+                cover_image_base64 = self._convert_pdf_page_to_image_base64(pdf_path, page_num=1, zoom=2.0)
+                
+                if cover_image_base64:
+                    company_info = await self._extract_company_from_cover_image(cover_image_base64)
+                    if company_info and company_info.get("stock_code"):
+                        logger.info(f"✅ Vision 提取成功: Stock={company_info.get('stock_code')}, Name={company_info.get('name_en')}")
+                        return company_info
+                    else:
+                        logger.warning("⚠️ Vision 提取未找到 stock_code，嘗試 Fallback...")
+                else:
+                    logger.warning("⚠️ 封面圖片轉換失敗，嘗試 Fallback...")
+            except Exception as e:
+                logger.warning(f"⚠️ Vision 提取失敗: {e}，嘗試 Fallback...")
+        
+        # ==========================================
+        # 方案 B: 從 artifacts 純文字中提取（Fallback）
+        # ==========================================
         try:
-            # 1. 收集前幾頁的文字內容（通常公司信息在開頭）
             text_content = []
             for artifact in artifacts[:50]:  # 只取前 50 個 artifacts
                 if artifact.get("type") == "text_chunk":
@@ -729,44 +800,165 @@ class OpenDataLoaderProcessor:
                     if content and len(content) > 20:
                         text_content.append(content)
             
-            if not text_content:
-                logger.warning("⚠️ 沒有足夠的文字內容進行公司信息提取")
+            if text_content:
+                combined_text = "\n\n".join(text_content[:10])
+                if len(combined_text) > 5000:
+                    combined_text = combined_text[:5000]
+                
+                logger.info("📄 正在從 artifacts 文字中提取公司信息...")
+                
+                # 調用 LLM API
+                llm_api_url = os.getenv("LLM_API_URL", "http://vanna-service:8082/api/extract")
+                
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    response = await client.post(
+                        llm_api_url,
+                        json={
+                            "text": combined_text,
+                            "extract_type": "company_info"
+                        }
+                    )
+                    
+                    if response.status_code == 200:
+                        result = response.json()
+                        company_info = result.get("company_info", {})
+                        if company_info.get("stock_code"):
+                            logger.info(f"✅ Artifacts 文字提取成功: {company_info}")
+                            return company_info
+        except Exception as e:
+            logger.warning(f"⚠️ Artifacts 文字提取失敗: {e}")
+        
+        # ==========================================
+        # 方案 C: 從文件名正則提取（最後手段）
+        # ==========================================
+        logger.info("📄 正在從文件名提取公司信息...")
+        filename = Path(pdf_path).stem
+        
+        # 提取 stock_code (格式: stock_XXXXX)
+        stock_match = re.search(r'stock_(\d{4,5})', filename)
+        if stock_match:
+            stock_code = stock_match.group(1).zfill(5)
+            logger.info(f"✅ 從文件名提取 stock_code: {stock_code}")
+            return {"stock_code": stock_code}
+        
+        # 提取 year (格式: _YYYY)
+        year_matches = re.findall(r'_(\d{4})(?:_|$)', filename)
+        for y in year_matches:
+            y_int = int(y)
+            if 2000 <= y_int <= 2030:
+                logger.info(f"✅ 從文件名提取 year: {y_int}")
+                return {"year": y_int}
+        
+        logger.warning("⚠️ 所有提取方法都失敗")
+        return None
+    
+    async def _extract_company_from_cover_image(self, base64_image: str) -> Optional[Dict[str, Any]]:
+        """
+        使用 Vision LLM 從封面圖片提取公司信息
+        
+        Args:
+            base64_image: Base64 編碼的封面圖片
+            
+        Returns:
+            Dict with keys: stock_code, year, name_en, name_zh
+        """
+        if not OPENAI_SDK_AVAILABLE:
+            return None
+        
+        try:
+            api_key = os.getenv("CUSTOM_API_KEY", os.getenv("OPENAI_API_KEY"))
+            api_base = os.getenv("CUSTOM_API_BASE", os.getenv("OPENAI_API_BASE", "https://coding.dashscope.aliyuncs.com/v1"))
+            
+            if not api_key or api_key.startswith("sk-YOUR"):
+                logger.error("❌ 未配置有效的 API Key")
                 return None
             
-            combined_text = "\n\n".join(text_content[:10])  # 只取前 10 段
-            # 限制長度避免 token 過多
-            if len(combined_text) > 5000:
-                combined_text = combined_text[:5000]
+            client = AsyncOpenAI(api_key=api_key, base_url=api_base)
             
-            # 2. 調用 LLM API 提取公司信息
-            llm_api_url = os.getenv("LLM_API_URL", "http://vanna-service:8082/api/extract")
+            # Vision 模型映射
+            model = os.getenv("VISION_MODEL", "qwen-vl-max")
             
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(
-                    llm_api_url,
-                    json={
-                        "text": combined_text,
-                        "extract_type": "company_info"
+            prompt = """你是一個精準的財報數據提取專家。請從這張港股年報封面圖片中提取 4 個核心資訊。
+
+⚠️ 嚴格規則：
+1. stock_code: 股票代碼（通常是 4-5 位純數字，例如 02359, 00001。不要包含多餘文字）
+2. year: 財報年份（如 2023, 2024）
+3. name_en: 公司英文名（找不到填 null）
+4. name_zh: 公司中文名（找不到填 null）
+
+請僅回傳 JSON 格式，不要包含任何其他解釋：
+{
+  "stock_code": "00001",
+  "year": 2023,
+  "name_en": "CK Hutchison Holdings Limited",
+  "name_zh": "長和"
+}"""
+            
+            response = await client.chat.completions.create(
+                model=model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/png;base64,{base64_image}",
+                                    "detail": "high"
+                                }
+                            }
+                        ]
                     }
-                )
-                
-                if response.status_code == 200:
-                    result = response.json()
-                    company_info = result.get("company_info", {})
-                    logger.info(f"🧠 LLM 提取的公司信息: {company_info}")
-                    return company_info
-                else:
-                    logger.warning(f"⚠️ LLM API 返回錯誤: {response.status_code}")
-                    # Fallback: 嘗試從文本中用正則提取股票代碼
-                    return self._extract_stock_code_fallback(combined_text)
-        
-        except httpx.RequestError as e:
-            logger.warning(f"⚠️ 無法連接 LLM API: {e}")
-            # Fallback: 嘗試從文本中用正則提取股票代碼
-            text_content = "\n".join([a.get("content", "") for a in artifacts[:20] if a.get("type") == "text_chunk"])
-            return self._extract_stock_code_fallback(text_content)
+                ],
+                temperature=0.0
+            )
+            
+            result_text = response.choices[0].message.content
+            logger.debug(f"   🤖 Vision LLM 原始響應: {result_text[:300] if result_text else 'None'}...")
+            
+            # 清理 Markdown 標記
+            if result_text and result_text.startswith("```"):
+                result_text = result_text.strip()
+                for prefix in ["```json", "```JSON", "```"]:
+                    result_text = result_text.replace(prefix, "")
+                if result_text.endswith("```"):
+                    result_text = result_text[:-3]
+            
+            if result_text:
+                try:
+                    result = json.loads(result_text.strip())
+                    
+                    # 驗證 stock_code
+                    stock_code = result.get("stock_code")
+                    if stock_code:
+                        stock_code = re.sub(r'[^\d]', '', str(stock_code))
+                        if len(stock_code) >= 4:
+                            result["stock_code"] = stock_code.zfill(5)
+                        else:
+                            result["stock_code"] = None
+                    
+                    # 驗證 year
+                    year = result.get("year")
+                    if year:
+                        try:
+                            year_int = int(year)
+                            if 2000 <= year_int <= 2030:
+                                result["year"] = year_int
+                            else:
+                                result["year"] = None
+                        except:
+                            result["year"] = None
+                    
+                    return result
+                except json.JSONDecodeError as e:
+                    logger.error(f"❌ JSON 解析失敗: {e}")
+                    return None
+            
+            return None
+            
         except Exception as e:
-            logger.error(f"❌ LLM 提取失敗: {e}")
+            logger.error(f"❌ Vision 提取失敗: {e}")
             return None
     
     def _extract_stock_code_fallback(self, text: str) -> Optional[Dict[str, Any]]:
@@ -1527,8 +1719,8 @@ class OpenDataLoaderProcessor:
             year = self._infer_year_from_doc(doc_id, artifacts)
             logger.info(f"   推斷年份: {year}")
             
-            # Step 2: 扫描 PDF 找出可能包含 Revenue Breakdown 的頁面
-            revenue_pages = await self._find_revenue_breakdown_pages(pdf_path)
+            # Step 2: 直接在已解析的 artifacts 中搜尋目標頁面（不再重新掃描 PDF）
+            revenue_pages = await self._find_revenue_breakdown_pages(artifacts)
             extraction_stats["revenue_breakdown_pages_scanned"] = len(revenue_pages)
             
             logger.info(f"   找到 {len(revenue_pages)} 個可能包含 Revenue Breakdown 的頁面: {revenue_pages}")
@@ -1570,20 +1762,19 @@ class OpenDataLoaderProcessor:
             extraction_stats["errors"].append(str(e))
             return extraction_stats
     
-    async def _find_revenue_breakdown_pages(self, pdf_path: str) -> List[int]:
+    async def _find_revenue_breakdown_pages(self, artifacts: List[Dict[str, Any]]) -> List[int]:
         """
-        扫描 PDF 找出可能包含 Revenue Breakdown 的頁面
+        🌟 直接在 Artifacts 中搜尋關鍵字
         
-        使用 PyMuPDF 快速扫描所有頁面的文字，
-        找出包含關鍵字的頁面。
+        不再使用 PyMuPDF 重新掃描 PDF，直接遍歷 OpenDataLoader 已經解析好的 artifacts。
         
         Args:
-            pdf_path: PDF 文件路徑
+            artifacts: OpenDataLoader 解析出的結構化數據
             
         Returns:
             List[int]: 可能包含 Revenue Breakdown 的頁碼列表 (1-indexed)
         """
-        candidate_pages = []
+        candidate_pages = set()
         
         # Revenue Breakdown 關鍵字
         keywords = [
@@ -1598,41 +1789,40 @@ class OpenDataLoaderProcessor:
             "地區收入",
             "業務分佈",
             "breakdown by",
-            "segment revenue"
+            "segment revenue",
+            "turnover by",
+            "sales by region"
         ]
         
-        try:
-            doc = fitz.open(pdf_path)
+        logger.info(f"   🔍 在 {len(artifacts)} 個 artifacts 中搜尋 Revenue Breakdown...")
+        
+        for artifact in artifacts:
+            artifact_type = artifact.get("type")
+            page_num = artifact.get("page_num")
             
-            for page_num in range(1, len(doc) + 1):
-                page = doc.load_page(page_num - 1)
-                text = page.get_text("text").lower()
-                
-                # 檢查是否包含任何關鍵字
+            # 只在有文字或表格的區塊搜尋
+            if artifact_type == "text_chunk":
+                content = str(artifact.get("content", "")).lower()
                 for keyword in keywords:
-                    if keyword.lower() in text:
-                        candidate_pages.append(page_num)
-                        logger.debug(f"   Page {page_num}: 找到關鍵字 '{keyword}'")
+                    if keyword.lower() in content:
+                        candidate_pages.add(page_num)
+                        logger.debug(f"   Page {page_num}: text_chunk 命中 '{keyword}'")
                         break
-                
-                # 也檢查是否有圖表/複雜排版
-                if self._is_complex_page(page):
-                    # 如果是複雜頁面且有 "revenue" 或 "revenue" 相關字
-                    if "revenue" in text or "收入" in text:
-                        if page_num not in candidate_pages:
-                            candidate_pages.append(page_num)
-                            logger.debug(f"   Page {page_num}: 複雜排版 + revenue 關鍵字")
             
-            doc.close()
-            
-            # 去重並排序
-            candidate_pages = sorted(set(candidate_pages))
-            
-            return candidate_pages
-            
-        except Exception as e:
-            logger.error(f"❌ 扫描 Revenue Breakdown 頁面失敗: {e}")
-            return []
+            elif artifact_type == "table":
+                # 表格內容可能在 content_json 中
+                table_json = artifact.get("content_json", {})
+                content = json.dumps(table_json, ensure_ascii=False).lower()
+                for keyword in keywords:
+                    if keyword.lower() in content:
+                        candidate_pages.add(page_num)
+                        logger.debug(f"   Page {page_num}: table 命中 '{keyword}'")
+                        break
+        
+        result_pages = sorted(list(candidate_pages))
+        logger.info(f"   🎯 找到 {len(result_pages)} 個候選頁面: {result_pages}")
+        
+        return result_pages
     
     def _infer_year_from_doc(self, doc_id: str, artifacts: List[Dict[str, Any]]) -> int:
         """

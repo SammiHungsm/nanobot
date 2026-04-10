@@ -7,6 +7,7 @@ Parsers Module - PDF 解析層（優化版）
 1. 支援 Bounding Box 裁切 - 只處理表格區域，減少 VRAM 消耗
 2. 智能頁面檢測 - 判斷是否需要 Vision 解析
 3. 記憶體優化 - 避免整頁圖片傳給 VL
+4. 使用統一的 LLM 客戶端
 """
 
 import os
@@ -34,62 +35,8 @@ except ImportError:
     PILLOW_AVAILABLE = False
     logger.warning("⚠️ Pillow 未安裝，圖片裁切功能將受限")
 
-# OpenAI SDK for Vision API
-try:
-    from openai import AsyncOpenAI
-    OPENAI_SDK_AVAILABLE = True
-except ImportError:
-    OPENAI_SDK_AVAILABLE = False
-    logger.warning("⚠️ OpenAI SDK 未安裝，Vision 功能將不可用")
-
-
-def _get_config_api_credentials() -> tuple[Optional[str], Optional[str], Optional[str]]:
-    """
-    從 nanobot config.json 讀取 API 憑證和 Vision 模型
-    
-    模型配置從 provider 層級讀取，因為不同 provider 有不同的可用模型。
-    
-    Returns:
-        tuple: (api_key, api_base, vision_model)
-    """
-    try:
-        from nanobot.config.loader import load_config
-        from pathlib import Path
-        import os
-        
-        # 優先使用 NANOBOT_CONFIG 環境變數指定的路徑
-        config_path = None
-        nanobot_config_env = os.getenv("NANOBOT_CONFIG")
-        if nanobot_config_env:
-            config_path = Path(nanobot_config_env)
-            if not config_path.exists():
-                config_path = None
-        
-        config = load_config(config_path)
-        provider = config.get_provider()
-        
-        # 從 agents.defaults 讀取模型 (vision 使用相同的 model)
-        model = None
-        try:
-            model = config.agents.defaults.model
-        except AttributeError:
-            pass
-        
-        if provider:
-            api_key = provider.api_key or None
-            api_base = provider.api_base or None
-            
-            # 檢查是否為佔位符
-            if api_key and api_key.startswith("sk-YOUR"):
-                api_key = None
-            
-            if api_key:
-                logger.debug(f"✅ VisionParser 從 config 讀取: model={model}")
-                return api_key, api_base, model
-    except Exception as e:
-        logger.warning(f"⚠️ VisionParser 無法從 config.json 載入配置: {e}")
-    
-    return None, None, None
+# 導入統一的 LLM 客戶端
+from ..utils.llm_client import get_llm_client, get_vision_model
 
 
 class VisionParser:
@@ -99,55 +46,29 @@ class VisionParser:
     適用於包含圖表、複雜排版的頁面。
     """
     
-    def __init__(
-        self,
-        api_key: str = None,
-        api_base: str = None,
-        model: str = None
-    ):
+    def __init__(self):
         """
-        初始化
+        初始化 Vision Parser
         
-        Args:
-            api_key: API Key (優先使用參數，其次從 config.json 讀取)
-            api_base: API Base URL
-            model: Vision 模型名稱 (優先使用參數，其次從 config.json 讀取)
+        使用統一的 LLM 客戶端，不再手動管理 API Key。
         """
-        # 優先順序：參數 > config.json
-        if not api_key or not api_base or not model:
-            config_key, config_base, config_vision_model = _get_config_api_credentials()
-            api_key = api_key or config_key
-            api_base = api_base or config_base
-            model = model or config_vision_model
+        # 使用統一的 LLM 客戶端
+        self._client = None
+        self._model = None
         
-        # 最後嘗試環境變數作為 fallback
-        self.api_key = api_key or os.getenv("CUSTOM_API_KEY") or os.getenv("MINIMAX_API_KEY") or os.getenv("OPENAI_API_KEY")
-        self.api_base = api_base or os.getenv("CUSTOM_API_BASE") or os.getenv("OPENAI_API_BASE")
-        self.model = model  # 不使用硬編碼 fallback
-        self.client = None
-        
-        if not self.model:
-            raise ValueError("❌ VisionParser: vision_model 未配置！請在 config.json 的 provider 中設定 vision_model")
-        
-        logger.debug(f"✅ VisionParser 初始化: model={self.model}")
+        logger.debug(f"✅ VisionParser 初始化完成")
     
-    def _get_client(self) -> Optional[AsyncOpenAI]:
-        """獲取 OpenAI 客戶端"""
-        if not OPENAI_SDK_AVAILABLE:
-            logger.error("❌ OpenAI SDK 未安裝")
-            return None
-        
-        if not self.api_key or self.api_key.startswith("sk-YOUR"):
-            logger.error("❌ 未配置有效的 API Key")
-            return None
-        
-        if not self.client:
-            self.client = AsyncOpenAI(
-                api_key=self.api_key,
-                base_url=self.api_base
-            )
-        
-        return self.client
+    def _get_client(self) -> Optional["AsyncOpenAI"]:
+        """獲取 OpenAI 客戶端（延遲載入）"""
+        if self._client is None:
+            self._client = get_llm_client()
+        return self._client
+    
+    def _get_model(self) -> str:
+        """獲取 Vision 模型名稱"""
+        if self._model is None:
+            self._model = get_vision_model()
+        return self._model
     
     @staticmethod
     def is_complex_page(page: "fitz.Page") -> bool:
@@ -338,7 +259,7 @@ class VisionParser:
             logger.info(f"👁️ RAG-Anything 視覺模式：轉換圖片為 Markdown...")
             
             response = await client.chat.completions.create(
-                model=self.model,
+                model=self._get_model(),
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {
