@@ -1,7 +1,32 @@
 {
   "description": "Documentation Training Data for Vanna - Business Logic",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "items": [
+    {
+      "id": "use_new_company_view",
+      "content": "CRITICAL: When the user asks about a company's industry, sector, or name, ALWAYS query the 'v_companies_for_vanna' view. NEVER query the 'companies' table directly for industries.",
+      "category": "critical"
+    },
+    {
+      "id": "use_new_document_view",
+      "content": "CRITICAL: When querying document information, owner company, or document theme, ALWAYS query the 'v_documents_for_vanna' view.",
+      "category": "critical"
+    },
+    {
+      "id": "document_relation_type",
+      "content": "To find companies mentioned inside a document, join 'documents' with 'document_companies' using document_id, and check the 'relation_type' column (e.g., 'index_constituent', 'subsidiary', 'competitor', 'mentioned').",
+      "category": "definition"
+    },
+    {
+      "id": "v_companies_for_vanna_usage",
+      "content": "IMPORTANT: The view 'v_companies_for_vanna' contains a 'primary_industry' column. This column automatically resolves the dual-track industry logic (preferring the confirmed index report industry, and falling back to AI extracted industry). ALWAYS use 'v_companies_for_vanna' and filter by 'primary_industry' when a user asks about a company's industry.",
+      "category": "critical"
+    },
+    {
+      "id": "v_documents_for_vanna_usage",
+      "content": "IMPORTANT: The view 'v_documents_for_vanna' flattens JSONB attributes like document theme and region. It also joins the document with its owner company name and stock code. Use this view for general document queries.",
+      "category": "critical"
+    },
     {
       "id": "eav_architecture",
       "content": "CRITICAL: financial_metrics uses EAV (Entity-Attribute-Value) model. Data is stored as ROWS (metric_name = 'Revenue') not COLUMNS (revenue column).",

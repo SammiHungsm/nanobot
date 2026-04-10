@@ -1,6 +1,6 @@
 {
   "description": "DDL Training Data for Vanna - Database Schema",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "tables": [
     {
       "name": "companies",
@@ -12,6 +12,18 @@
       "ddl": "CREATE VIEW v_companies_resolved AS SELECT id, stock_code, COALESCE(name_en_index, name_en_extracted, name_en) AS display_name_en, COALESCE(name_zh_extracted, name_zh) AS display_name_zh, industry, sector, auditor, auditor_opinion, ultimate_controlling_shareholder, principal_banker, listing_status, listing_date FROM companies;",
       "enabled": true,
       "note": "Vanna 應優先查詢此視圖，它會自動選取最佳公司名稱（恆指報表 > PDF 擷取）"
+    },
+    {
+      "name": "v_documents_for_vanna",
+      "ddl": "CREATE OR REPLACE VIEW v_documents_for_vanna AS SELECT d.id, d.doc_id, d.filename, d.report_type, d.year, d.processing_status, d.uploaded_at, c.name_en AS owner_company_name_en, c.name_zh AS owner_company_name_zh, c.stock_code AS owner_stock_code, d.dynamic_attributes->>'theme' AS doc_theme, d.dynamic_attributes->>'region' AS doc_region FROM documents d LEFT JOIN companies c ON d.owner_company_id = c.id;",
+      "enabled": true,
+      "note": "Vanna 專用視圖：將 documents 的 JSONB 屬性展平，方便查詢"
+    },
+    {
+      "name": "v_companies_for_vanna",
+      "ddl": "CREATE OR REPLACE VIEW v_companies_for_vanna AS SELECT id, name_en, name_zh, stock_code, sector, is_industry_confirmed, COALESCE(confirmed_industry, ai_extracted_industries->>0) AS primary_industry, created_at FROM companies;",
+      "enabled": true,
+      "note": "🌟 雙軌制行業解決方案：如果有權威定義就用權威，沒有的話就拿 AI 預測的第一個行業"
     },
     {
       "name": "financial_metrics",

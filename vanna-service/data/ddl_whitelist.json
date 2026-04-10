@@ -1,50 +1,51 @@
 {
   "description": "DDL Whitelist for Vanna - Allowed Tables and Columns",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "allowed_tables": [
     {
+      "name": "v_companies_for_vanna",
+      "allowed_columns": ["id", "name_en", "name_zh", "stock_code", "sector", "is_industry_confirmed", "primary_industry", "created_at"],
+      "note": "⭐ CRITICAL: 永遠使用這個視圖來查詢公司的行業，它已經自動解決了行業雙軌制 (Index vs AI)。"
+    },
+    {
+      "name": "v_documents_for_vanna",
+      "allowed_columns": ["id", "doc_id", "filename", "report_type", "year", "processing_status", "uploaded_at", "owner_company_name_en", "owner_company_name_zh", "owner_stock_code", "doc_theme", "doc_region"],
+      "note": "⭐ CRITICAL: 永遠使用這個視圖來查詢文檔，它已經攤平了 JSONB 並關聯了母公司。"
+    },
+    {
       "name": "documents",
-      "allowed_columns": ["id", "filename", "report_type", "is_index_report", "parent_company", "index_theme", "confirmed_industry", "ai_extracted_industries", "dynamic_attributes", "created_at", "updated_at"],
-      "note": "Main document table for Agentic Dynamic Ingestion. Supports JSONB dynamic_attributes and Rule A/B industry assignment."
+      "allowed_columns": ["id", "doc_id", "filename", "report_type", "owner_company_id", "year", "processing_status", "dynamic_attributes", "uploaded_at", "created_at"],
+      "note": "文檔主表。report_type 区分 'annual_report' 或 'index_report'。owner_company_id 对于 Index Report 可为 NULL。"
     },
     {
       "name": "document_companies",
-      "allowed_columns": ["id", "document_id", "company_name", "stock_code", "assigned_industry", "ai_suggested_industries", "industry_source", "created_at"],
-      "note": "Companies linked to documents. industry_source = 'confirmed' (Rule A) or 'ai_extracted' (Rule B)."
+      "allowed_columns": ["id", "document_id", "company_id", "relation_type", "extracted_industries", "extraction_source", "created_at"],
+      "note": "純橋樑表，用 relation_type 區分提及類型 (如 index_constituent, subsidiary, competitor)。"
     },
     {
       "name": "document_processing_history",
-      "allowed_columns": ["id", "document_id", "stage", "status", "metadata", "created_at"],
-      "note": "Tracks document processing stages (agent_ingestion, opendataloader, etc.)"
-    },
-    {
-      "name": "document_chunks",
-      "allowed_columns": ["id", "document_id", "chunk_index", "content", "embedding", "created_at"],
-      "note": "Text chunks extracted from documents for RAG search"
-    },
-    {
-      "name": "document_tables",
-      "allowed_columns": ["id", "document_id", "table_index", "table_data", "bounding_box", "created_at"],
-      "note": "Tables extracted from documents"
+      "allowed_columns": ["id", "document_id", "stage", "status", "details", "error_message", "created_at"],
+      "note": "Tracks document processing stages"
     },
     {
       "name": "review_queue",
-      "allowed_columns": ["id", "document_id", "review_type", "ai_suggestion", "confidence", "reason", "context", "status", "reviewed_by", "reviewed_at", "final_decision", "created_at"],
+      "allowed_columns": ["id", "document_id", "company_id", "review_type", "priority", "status", "issue_description", "ai_suggestion", "human_decision", "reviewer_id", "reviewed_at", "created_at"],
       "note": "Human review queue for uncertain AI decisions"
     },
     {
       "name": "vanna_training_data",
-      "allowed_columns": ["id", "training_type", "content", "created_at"],
+      "allowed_columns": ["id", "question", "sql_query", "table_name", "documentation", "quality_score", "is_verified", "created_at"],
       "note": "Vanna training data storage"
     },
     {
       "name": "companies",
-      "allowed_columns": ["id", "stock_code", "name_en_index", "name_en_extracted", "name_zh_extracted", "name_en", "name_zh", "industry", "sector", "auditor", "auditor_opinion", "ultimate_controlling_shareholder", "principal_banker", "listing_status", "listing_date"]
+      "allowed_columns": ["id", "stock_code", "name_en", "name_zh", "sector", "auditor", "auditor_opinion", "ultimate_controlling_shareholder", "principal_banker", "extra_data", "listing_status", "listing_date", "created_at"],
+      "note": "公司主表。对于行业查询，请使用 v_companies_for_vanna 而不是直接查询此表。"
     },
     {
       "name": "v_companies_resolved",
       "allowed_columns": ["id", "stock_code", "display_name_en", "display_name_zh", "industry", "sector", "auditor", "auditor_opinion", "ultimate_controlling_shareholder", "principal_banker", "listing_status", "listing_date"],
-      "note": "Recommended view for Vanna queries - automatically selects best company name (index > extracted)"
+      "note": "Recommended view for company name queries - automatically selects best name (index > extracted)"
     },
     {
       "name": "financial_metrics",
@@ -53,7 +54,7 @@
     },
     {
       "name": "market_data",
-      "allowed_columns": ["id", "company_id", "trade_date", "closing_price", "opening_price", "high_price", "low_price", "issued_shares", "trading_volume", "market_cap"]
+      "allowed_columns": ["id", "company_id", "trade_date", "closing_price", "opening_price", "high_price", "low_price", "issued_shares", "trading_volume", "source"]
     },
     {
       "name": "key_personnel",
@@ -65,7 +66,7 @@
     },
     {
       "name": "specific_events",
-      "allowed_columns": ["id", "company_id", "doc_id", "event_category", "event_type", "event_title", "event_detail", "event_date", "effective_date", "metric_value", "metric_unit", "source_file", "source_page"]
+      "allowed_columns": ["id", "company_id", "event_category", "event_title", "event_detail", "event_date", "effective_date", "announcement_date", "metric_value", "metric_unit", "source_file", "source_page"]
     },
     {
       "name": "revenue_breakdown",
@@ -73,17 +74,21 @@
     },
     {
       "name": "debt_maturity",
-      "allowed_columns": ["id", "company_id", "year", "maturity_year", "maturity_date", "amount", "currency", "debt_type", "source_file", "source_page"]
+      "allowed_columns": ["id", "company_id", "year", "maturity_year", "amount", "currency", "debt_type", "source_file", "source_page"]
     },
     {
       "name": "listing_applications",
-      "allowed_columns": ["id", "company_id", "doc_id", "year", "application_count", "approved_count", "rejected_count", "source_file", "source_page"]
+      "allowed_columns": ["id", "company_id", "year", "application_count", "approved_count", "rejected_count", "source_file", "source_page"]
     },
     {
       "name": "document_pages",
       "allowed_columns": ["id", "company_id", "doc_id", "year", "page_num", "markdown_content", "content_type", "has_images", "has_charts", "source_file"]
+    },
+    {
+      "name": "raw_artifacts",
+      "allowed_columns": ["id", "artifact_id", "doc_id", "company_id", "artifact_type", "content", "source_file", "source_page"]
     }
   ],
-  "forbidden_keywords": ["DROP", "TRUNCATE", "DELETE FROM companies", "DELETE FROM financial_metrics", "UPDATE companies SET", "INSERT INTO companies"],
+  "forbidden_keywords": ["DROP", "TRUNCATE", "DELETE FROM companies", "DELETE FROM financial_metrics", "UPDATE companies SET", "INSERT INTO companies", "ALTER TABLE"],
   "max_result_rows": 1000
 }

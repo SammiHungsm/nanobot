@@ -731,6 +731,7 @@ class DocumentPipeline:
         await self.db.create_document(
             doc_id=doc_id,
             company_id=company_id,
+            filename=pdf_path_obj.name,     # 👈 確保這行存在！
             title=pdf_path_obj.stem,
             file_path=str(pdf_path_obj.absolute()),
             file_hash=file_hash,
@@ -1070,31 +1071,44 @@ class DocumentPipeline:
                 logger.warning(f"⚠️ Artifact {idx} 保存失敗: {e}")
                 continue
     
-    async def _trigger_vanna_training(self, doc_id: str):
+    async def _trigger_vanna_training(self, doc_id: str, max_retries: int = 3):
         """
-        觸發 Vanna 訓練
+        觸發 Vanna 訓練 (具備重試機制)
         
         Args:
             doc_id: 文檔 ID
+            max_retries: 最大重試次數
         """
         import httpx
+        import asyncio
         
         vanna_url = os.getenv("VANNA_SERVICE_URL", "http://vanna-service:8082")
         
-        try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.post(
-                    f"{vanna_url}/api/train",
-                    json={"train_type": "sql", "doc_id": doc_id}
-                )
+        for attempt in range(1, max_retries + 1):
+            try:
+                # 增加 Timeout 時間到 60 秒，並使用 async client
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    response = await client.post(
+                        f"{vanna_url}/api/train",
+                        json={"train_type": "sql", "doc_id": doc_id}
+                    )
+                    
+                    if response.status_code == 200:
+                        logger.info(f"✅ Vanna 訓練已觸發: {doc_id} (Attempt {attempt})")
+                        return  # 成功就提早結束
+                    else:
+                        logger.warning(f"⚠️ Vanna 訓練失敗 (HTTP {response.status_code}) - Attempt {attempt}")
+                        
+            except Exception as e:
+                logger.warning(f"⚠️ Vanna 連線失敗 ({e}) - Attempt {attempt}")
+            
+            # 如果不是最後一次嘗試，就等待後重試 (遞增延遲：2s, 4s, 8s...)
+            if attempt < max_retries:
+                wait_time = 2 ** attempt
+                logger.info(f"⏳ 等待 {wait_time} 秒後重試觸發 Vanna...")
+                await asyncio.sleep(wait_time)
                 
-                if response.status_code == 200:
-                    logger.info(f"✅ Vanna 訓練已觸發: {doc_id}")
-                else:
-                    logger.warning(f"⚠️ Vanna 訓練失敗 (HTTP {response.status_code})")
-        
-        except Exception as e:
-            logger.warning(f"⚠️ Vanna 連線失敗: {e}")
+        logger.error(f"❌ Vanna 訓練觸發徹底失敗，已達最大重試次數: {doc_id}")
     
     # ===========================================
 # 便捷函數

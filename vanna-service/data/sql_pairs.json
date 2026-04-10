@@ -353,6 +353,48 @@
       "question": "Find which documents contain a specific company",
       "sql": "SELECT d.filename, d.report_type, d.index_theme, dc.assigned_industry, dc.industry_source FROM documents d JOIN document_companies dc ON d.id = dc.document_id WHERE dc.company_name ILIKE '%Tencent%' OR dc.stock_code = '00700';",
       "tags": ["document_companies", "documents", "company_search", "join"]
+    },
+    {
+      "id": "vanna_documents_001",
+      "question": "Show me all documents",
+      "sql": "SELECT * FROM v_documents_for_vanna ORDER BY uploaded_at DESC;",
+      "tags": ["v_documents_for_vanna", "documents", "list"],
+      "note": "使用 Vanna 專用視圖，自動展平 JSONB 屬性"
+    },
+    {
+      "id": "vanna_industry_001",
+      "question": "Find companies in a specific industry",
+      "sql": "SELECT * FROM v_companies_for_vanna WHERE primary_industry = '{industry}';",
+      "tags": ["v_companies_for_vanna", "industry", "filter"],
+      "note": "使用 Vanna 專用視圖，已自動處理雙軌制行業邏輯 (confirmed_industry vs AI extracted)"
+    },
+    {
+      "id": "vanna_mentioned_companies_001",
+      "question": "What companies are mentioned in this document?",
+      "sql": "SELECT c.name_en, c.stock_code, dc.relation_type, dc.extracted_industries FROM document_companies dc JOIN companies c ON dc.company_id = c.id JOIN documents d ON dc.document_id = d.id WHERE d.filename ILIKE '%{filename}%';",
+      "tags": ["document_companies", "companies", "join", "filter"],
+      "note": "查詢特定文檔中提及的關聯公司"
+    },
+    {
+      "id": "find_industry_001",
+      "question": "Find all companies in the Biotech industry",
+      "sql": "SELECT name_en, stock_code FROM v_companies_for_vanna WHERE primary_industry ILIKE '%Biotech%';",
+      "tags": ["v_companies_for_vanna", "industry", "filter"],
+      "note": "⭐ 使用新視圖查詢行業，自動解決雙軌制問題"
+    },
+    {
+      "id": "index_constituent_001",
+      "question": "Show all Hang Seng Biotech Index constituent companies",
+      "sql": "SELECT c.name_en, c.stock_code, dc.extracted_industries FROM document_companies dc JOIN v_documents_for_vanna d ON dc.document_id = d.id JOIN v_companies_for_vanna c ON dc.company_id = c.id WHERE d.doc_theme ILIKE '%Biotech Index%' AND dc.relation_type = 'index_constituent';",
+      "tags": ["document_companies", "index_report", "relation_type"],
+      "note": "使用 relation_type 過濾指數成分股"
+    },
+    {
+      "id": "document_owner_001",
+      "question": "List all annual reports for Tencent Holdings",
+      "sql": "SELECT filename, year FROM v_documents_for_vanna WHERE owner_company_name_en ILIKE '%Tencent%' AND report_type = 'annual_report';",
+      "tags": ["v_documents_for_vanna", "owner_company", "filter"],
+      "note": "⭐ 使用新視圖查詢母公司的文檔"
     }
   ]
 }

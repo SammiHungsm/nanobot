@@ -19,64 +19,29 @@ CREATE EXTENSION IF NOT EXISTS vector;     -- 用於向量嵌入 (pgvector)
 -- ============================================================
 
 -- ============================================================
--- documents 表 - 文檔主表
+-- 2. 文檔主檔 (支援無母公司的 Index Report)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS documents (
-    -- 主鍵
     id SERIAL PRIMARY KEY,
-    doc_id VARCHAR(255) UNIQUE,  -- 🔧 文檔唯一標識 (字符串)
-    file_hash VARCHAR(64),       -- 🔧 文件 SHA256 hash
-    
-    -- 基本信息
+    doc_id VARCHAR(255) UNIQUE,  
     filename VARCHAR(500) NOT NULL,
-    title VARCHAR(500),          -- 🔧 標題 (通常與 filename 相同)
-    file_path VARCHAR(1000),
-    file_size BIGINT,
-    file_size_bytes BIGINT,      -- 🔧 別名
-    mime_type VARCHAR(100),
     
-    -- 報告類型識別
-    report_type VARCHAR(50) DEFAULT 'annual_report',
-    document_type VARCHAR(50) DEFAULT 'annual_report',  -- 🔧 別名
-    is_index_report BOOLEAN DEFAULT FALSE,
+    -- 🌟 核心修改：報告類型
+    report_type VARCHAR(50) DEFAULT 'annual_report', -- 'annual_report' 或是 'index_report'
     
-    -- 公司信息
-    company_id INTEGER,
+    -- 對於 Index Report (恆指報告)，這個欄位直接留空 (NULL)
+    owner_company_id INTEGER REFERENCES companies(id) ON DELETE SET NULL,
+    
     year INTEGER,
-    parent_company VARCHAR(255),
-    
-    -- 指數報告專用字段
-    index_theme VARCHAR(255),
-    confirmed_industry VARCHAR(100),
-    
-    -- AI 提取信息
-    ai_extracted_industries JSONB,
-    confidence_score DECIMAL(5, 4),
-    
-    -- JSONB 動態屬性
     dynamic_attributes JSONB DEFAULT '{}'::jsonb,
-    
-    -- 處理狀態
-    processing_status VARCHAR(50) DEFAULT 'pending',
-    processing_error TEXT,
-    status VARCHAR(50) DEFAULT 'pending',
-    total_chunks INTEGER DEFAULT 0,
-    last_processed_at TIMESTAMP,
-    uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,  -- 🔧 上傳時間
-    
-    -- 審計字段
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    
-    -- 約束
-    CONSTRAINT valid_report_type CHECK (report_type IN ('annual_report', 'index_report'))
+    uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 文檔表索引
 CREATE INDEX IF NOT EXISTS idx_documents_doc_id ON documents(doc_id);
 CREATE INDEX IF NOT EXISTS idx_documents_file_hash ON documents(file_hash);
 CREATE INDEX IF NOT EXISTS idx_documents_filename ON documents(filename);
-CREATE INDEX IF NOT EXISTS idx_documents_company_id ON documents(company_id);
+CREATE INDEX IF NOT EXISTS idx_documents_owner_id ON documents(owner_company_id);  -- ✅ 修正：owner_company_id
 CREATE INDEX IF NOT EXISTS idx_documents_processing_status ON documents(processing_status);
 CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
 CREATE INDEX IF NOT EXISTS idx_documents_uploaded_at ON documents(uploaded_at);
@@ -86,68 +51,49 @@ CREATE INDEX IF NOT EXISTS idx_documents_ai_industries ON documents USING GIN (a
 
 
 -- ============================================================
--- document_companies 表 - 文檔關聯公司
+-- 3. PDF 與 提及公司的橋樑表 (紀錄資料來源)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS document_companies (
-    -- 主鍵
     id SERIAL PRIMARY KEY,
-    
-    -- 關聯
     document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
     
-    -- 公司信息
-    company_name VARCHAR(255) NOT NULL,
-    stock_code VARCHAR(50),       -- 如 '0001.HK', '0700.HK'
-    isin_code VARCHAR(20),        -- ISIN 代碼
+    -- 標明這間公司在 PDF 裡的角色
+    -- 例如: 'owner_subsidiary', 'competitor', 或 'index_constituent' (指數成分股)
+    relation_type VARCHAR(50) DEFAULT 'mentioned', 
     
-    -- 行業分配 (核心邏輯)
-    assigned_industry VARCHAR(100),     -- 最終分配的行業 (規則 A 強制值或規則 B AI 值)
-    ai_suggested_industries JSONB,      -- AI 提取的多個候選行業 (規則 B 使用)
-    industry_source VARCHAR(50) DEFAULT 'ai_extracted',  -- 'confirmed' (規則 A) 或 'ai_extracted' (規則 B)
-    industry_confidence DECIMAL(5, 4), -- 行業分配的置信度
+    -- 🌟 核心修改：這份文件賦予這間公司的行業屬性
+    extracted_industries JSONB,      
     
-    -- JSONB 動態屬性
-    dynamic_attributes JSONB DEFAULT '{}'::jsonb,
+    -- 標示這個提取結果的來源級別
+    -- 'index_rule' (恆指權威級別) 或 'ai_predict' (AI 預測級別)
+    extraction_source VARCHAR(50) DEFAULT 'ai_predict',  
     
-    -- 審計字段
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    
-    -- 約束
-    CONSTRAINT valid_industry_source CHECK (industry_source IN ('confirmed', 'ai_extracted', 'manual', 'pending'))
+    UNIQUE(document_id, company_id)
 );
 
 -- 公司表索引
 CREATE INDEX IF NOT EXISTS idx_dc_document_id ON document_companies(document_id);
-CREATE INDEX IF NOT EXISTS idx_dc_company_name ON document_companies(company_name);
-CREATE INDEX IF NOT EXISTS idx_dc_stock_code ON document_companies(stock_code);
-CREATE INDEX IF NOT EXISTS idx_dc_assigned_industry ON document_companies(assigned_industry);
-CREATE INDEX IF NOT EXISTS idx_dc_industry_source ON document_companies(industry_source);
+CREATE INDEX IF NOT EXISTS idx_dc_company_id ON document_companies(company_id);
+CREATE INDEX IF NOT EXISTS idx_dc_relation_type ON document_companies(relation_type);
+CREATE INDEX IF NOT EXISTS idx_dc_extracted_industries ON document_companies USING GIN (extracted_industries);
 
 -- JSONB 索引
 CREATE INDEX IF NOT EXISTS idx_dc_dynamic_attributes ON document_companies USING GIN (dynamic_attributes);
-CREATE INDEX IF NOT EXISTS idx_dc_ai_suggested ON document_companies USING GIN (ai_suggested_industries);
-
 
 -- ============================================================
--- document_processing_history 表 - 處理歷史
+-- 瘦身後的 document_processing_history
 -- ============================================================
 CREATE TABLE IF NOT EXISTS document_processing_history (
-    -- 主鍵
     id SERIAL PRIMARY KEY,
-    
-    -- 關聯
     document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
     
-    -- 處理信息
-    stage VARCHAR(100),               -- 處理階段
-    action VARCHAR(100),              -- 🔧 動作 (別名)
+    stage VARCHAR(100),               -- 🗑️ 刪除了重複的 action
     status VARCHAR(50) NOT NULL,
     details JSONB DEFAULT '{}'::jsonb,
-    notes TEXT,                       -- 🔧 備註
     error_message TEXT,
     
-    -- 審計字段
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -329,309 +275,82 @@ CREATE TRIGGER update_dc_updated_at
 
 
 -- ============================================================
--- 視圖
--- ============================================================
 
--- 文檔摘要視圖
+-- ============================================================
+-- 重新建立正確的索引 (Indexes)
+-- ============================================================
+-- 文檔表索引
+CREATE INDEX IF NOT EXISTS idx_documents_doc_id ON documents(doc_id);
+CREATE INDEX IF NOT EXISTS idx_documents_filename ON documents(filename);
+CREATE INDEX IF NOT EXISTS idx_documents_owner_id ON documents(owner_company_id);
+CREATE INDEX IF NOT EXISTS idx_documents_dynamic_attributes ON documents USING GIN (dynamic_attributes);
+
+-- 橋樑表索引
+CREATE INDEX IF NOT EXISTS idx_dc_document_id ON document_companies(document_id);
+CREATE INDEX IF NOT EXISTS idx_dc_company_id ON document_companies(company_id);
+CREATE INDEX IF NOT EXISTS idx_dc_relation_type ON document_companies(relation_type);
+CREATE INDEX IF NOT EXISTS idx_dc_extracted_industries ON document_companies USING GIN (extracted_industries);
+
+-- ============================================================
+-- 給前端與後端看的視圖 (Views) - 已適配 JSONB 與新架構
+-- ============================================================
 CREATE OR REPLACE VIEW document_summary AS
 SELECT 
     d.id,
     d.filename,
     d.report_type,
-    d.is_index_report,
-    d.parent_company,
-    d.index_theme,
-    d.confirmed_industry,
+    d.year,
     d.processing_status,
-    d.created_at,
-    COUNT(dc.id) AS companies_count,
-    COALESCE(
-        json_agg(
-            json_build_object(
-                'name', dc.company_name,
-                'stock_code', dc.stock_code,
-                'industry', dc.assigned_industry
-            )
-        ) FILTER (WHERE dc.id IS NOT NULL), 
-        '[]'::json
-    ) AS companies
+    d.uploaded_at,
+    -- 從 JSONB 中提取舊有的特徵
+    d.dynamic_attributes->>'index_theme' AS index_theme,
+    -- 獲取這份文件的母公司名稱
+    c_owner.name_en AS owner_company_name,
+    -- 獲取這份文件提及的所有公司數量
+    COUNT(dc.id) AS mentioned_companies_count
 FROM documents d
+LEFT JOIN companies c_owner ON d.owner_company_id = c_owner.id
 LEFT JOIN document_companies dc ON d.id = dc.document_id
-GROUP BY d.id;
+GROUP BY d.id, c_owner.name_en;
 
--- 指數報告視圖 (規則 A 專用)
-CREATE OR REPLACE VIEW index_reports_view AS
+-- ============================================================
+-- 🎯 給 Vanna 專用的展平視圖 (Flattened Views for Text-to-SQL)
+-- ============================================================
+
+-- 1. Vanna 專用文檔視圖
+CREATE OR REPLACE VIEW v_documents_for_vanna AS
 SELECT 
     d.id,
+    d.doc_id,
     d.filename,
-    d.index_theme,
-    d.confirmed_industry,
-    d.created_at,
-    COUNT(dc.id) AS constituent_count
+    d.report_type,
+    d.year,
+    d.processing_status,
+    d.uploaded_at,
+    c.name_en AS owner_company_name_en,
+    c.name_zh AS owner_company_name_zh,
+    c.stock_code AS owner_stock_code,
+    d.dynamic_attributes->>'theme' AS doc_theme,
+    d.dynamic_attributes->>'region' AS doc_region
 FROM documents d
-LEFT JOIN document_companies dc ON d.id = dc.document_id
-WHERE d.is_index_report = TRUE
-GROUP BY d.id;
+LEFT JOIN companies c ON d.owner_company_id = c.id;
 
--- 待審核項目視圖
-CREATE OR REPLACE VIEW pending_reviews AS
+-- 2. Vanna 專用公司視圖 (🌟 這裡解決了你的雙軌制行業問題！)
+CREATE OR REPLACE VIEW v_companies_for_vanna AS
 SELECT 
-    rq.id,
-    rq.review_type,
-    rq.priority,
-    rq.issue_description,
-    rq.ai_suggestion,
-    d.filename,
-    dc.company_name,
-    rq.created_at
-FROM review_queue rq
-LEFT JOIN documents d ON rq.document_id = d.id
-LEFT JOIN document_companies dc ON rq.company_id = dc.id
-WHERE rq.status = 'pending'
-ORDER BY rq.priority ASC, rq.created_at ASC;
-
-
--- ============================================================
--- 舊版 Company-Centric Schema (Vanna 向後兼容)
--- ============================================================
--- 這些表是為了 Vanna SQL 訓練數據的向後兼容
--- 新工具應使用上面的 document-centric schema
--- ============================================================
-
--- companies 表 - 公司主表
-CREATE TABLE IF NOT EXISTS companies (
-    id SERIAL PRIMARY KEY,
-    name_en VARCHAR(255),
-    name_zh VARCHAR(255),
-    stock_code VARCHAR(50) UNIQUE,
-    industry VARCHAR(100),
-    sector VARCHAR(100),
-    auditor VARCHAR(100),
-    auditor_opinion VARCHAR(50),
-    ultimate_controlling_shareholder TEXT,
-    principal_banker TEXT,
-    extra_data JSONB DEFAULT '{}'::jsonb,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_companies_stock_code ON companies(stock_code);
-CREATE INDEX IF NOT EXISTS idx_companies_sector ON companies(sector);
-CREATE INDEX IF NOT EXISTS idx_companies_industry ON companies(industry);
-
--- financial_metrics 表 - 財務指標 (EAV 模型)
-CREATE TABLE IF NOT EXISTS financial_metrics (
-    id SERIAL PRIMARY KEY,
-    company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE,
-    year INTEGER NOT NULL,
-    fiscal_period VARCHAR(20) DEFAULT 'FY',
-    metric_name VARCHAR(255) NOT NULL,
-    metric_name_zh VARCHAR(255),
-    value DECIMAL(20, 4),
-    standardized_value DECIMAL(20, 4),
-    standardized_currency VARCHAR(10) DEFAULT 'HKD',
-    unit VARCHAR(50),
-    category VARCHAR(100),
-    original_metric_name VARCHAR(255),
-    source_file VARCHAR(255),
-    source_page INTEGER,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(company_id, year, fiscal_period, metric_name)
-);
-
-CREATE INDEX IF NOT EXISTS idx_fm_company_id ON financial_metrics(company_id);
-CREATE INDEX IF NOT EXISTS idx_fm_year ON financial_metrics(year);
-CREATE INDEX IF NOT EXISTS idx_fm_metric_name ON financial_metrics(metric_name);
-CREATE INDEX IF NOT EXISTS idx_fm_category ON financial_metrics(category);
-
--- market_data 表 - 市場數據
-CREATE TABLE IF NOT EXISTS market_data (
-    id SERIAL PRIMARY KEY,
-    company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE,
-    trade_date DATE NOT NULL,
-    closing_price DECIMAL(20, 4),
-    opening_price DECIMAL(20, 4),
-    high_price DECIMAL(20, 4),
-    low_price DECIMAL(20, 4),
-    trading_volume BIGINT,
-    issued_shares BIGINT,
-    source VARCHAR(100),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(company_id, trade_date)
-);
-
-CREATE INDEX IF NOT EXISTS idx_md_company_id ON market_data(company_id);
-CREATE INDEX IF NOT EXISTS idx_md_trade_date ON market_data(trade_date);
-
--- key_personnel 表 - 關鍵人員
-CREATE TABLE IF NOT EXISTS key_personnel (
-    id SERIAL PRIMARY KEY,
-    company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE,
-    year INTEGER,
-    person_name VARCHAR(255),
-    person_name_zh VARCHAR(255),
-    role VARCHAR(255),
-    role_zh VARCHAR(255),
-    committee VARCHAR(255),
-    biography TEXT,
-    source_file VARCHAR(255),
-    source_page INTEGER,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_kp_company_id ON key_personnel(company_id);
-
--- shareholdings 表 - 股權結構
-CREATE TABLE IF NOT EXISTS shareholdings (
-    id SERIAL PRIMARY KEY,
-    company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE,
-    year INTEGER,
-    shareholder_name VARCHAR(255),
-    shareholder_name_zh VARCHAR(255),
-    shareholder_type VARCHAR(100),
-    percentage_held DECIMAL(10, 4),
-    trust_name VARCHAR(255),
-    trustee_name VARCHAR(255),
-    source_file VARCHAR(255),
-    source_page INTEGER,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(company_id, year, shareholder_name)
-);
-
-CREATE INDEX IF NOT EXISTS idx_sh_company_id ON shareholdings(company_id);
-
--- specific_events 表 - 特定事件
-CREATE TABLE IF NOT EXISTS specific_events (
-    id SERIAL PRIMARY KEY,
-    company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE,
-    event_category VARCHAR(100),
-    event_title VARCHAR(500),
-    event_detail TEXT,
-    event_date DATE,
-    effective_date DATE,
-    announcement_date DATE,
-    metric_value DECIMAL(20, 4),
-    metric_unit VARCHAR(50),
-    source_file VARCHAR(255),
-    source_page INTEGER,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_se_company_id ON specific_events(company_id);
-CREATE INDEX IF NOT EXISTS idx_se_event_category ON specific_events(event_category);
-
--- revenue_breakdown 表 - 收入分佈
-CREATE TABLE IF NOT EXISTS revenue_breakdown (
-    id SERIAL PRIMARY KEY,
-    company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE,
-    year INTEGER,
-    category VARCHAR(255),
-    category_type VARCHAR(50),
-    percentage DECIMAL(10, 4),
-    amount DECIMAL(20, 4),
-    currency VARCHAR(10),
-    sub_category VARCHAR(255),
-    sub_percentage DECIMAL(10, 4),
-    source_file VARCHAR(255),
-    source_page INTEGER,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(company_id, year, category, category_type)
-);
-
-CREATE INDEX IF NOT EXISTS idx_rb_company_id ON revenue_breakdown(company_id);
-
--- debt_maturity 表 - 債務到期
-CREATE TABLE IF NOT EXISTS debt_maturity (
-    id SERIAL PRIMARY KEY,
-    company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE,
-    year INTEGER,
-    maturity_year INTEGER,
-    amount DECIMAL(20, 4),
-    currency VARCHAR(10),
-    debt_type VARCHAR(100),
-    source_file VARCHAR(255),
-    source_page INTEGER,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_dm_company_id ON debt_maturity(company_id);
-
--- listing_applications 表 - 上市申請統計
-CREATE TABLE IF NOT EXISTS listing_applications (
-    id SERIAL PRIMARY KEY,
-    company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE,
-    year INTEGER,
-    application_count INTEGER,
-    approved_count INTEGER,
-    rejected_count INTEGER,
-    source_file VARCHAR(255),
-    source_page INTEGER,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(year, company_id)
-);
-
--- document_pages 表 - 文檔頁面 (用於 fallback 搜索)
-CREATE TABLE IF NOT EXISTS document_pages (
-    id SERIAL PRIMARY KEY,
-    company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE,
-    doc_id VARCHAR(255),           -- 🔧 文檔 ID
-    year INTEGER,                  -- 🔧 報告年份
-    page_num INTEGER,
-    markdown_content TEXT,
-    content_type VARCHAR(50),      -- 🔧 內容類型
-    has_images BOOLEAN DEFAULT FALSE,
-    has_charts BOOLEAN DEFAULT FALSE,
-    source_file VARCHAR(255),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_dp_company_id ON document_pages(company_id);
-CREATE INDEX IF NOT EXISTS idx_dp_doc_id ON document_pages(doc_id);
-
--- ============================================================
--- raw_artifacts 表 - 原始提取結果
--- ============================================================
-CREATE TABLE IF NOT EXISTS raw_artifacts (
-    id SERIAL PRIMARY KEY,
-    artifact_id VARCHAR(255) UNIQUE,  -- 唯一標識
-    doc_id VARCHAR(255) NOT NULL,     -- 文檔 ID
-    company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE,
-    artifact_type VARCHAR(50),        -- 'text', 'table', 'image', 'metric'
-    content TEXT,                     -- 文本內容或 JSON
-    file_path VARCHAR(500),           -- 文件路徑 (圖片/表格)
-    file_type VARCHAR(50),            -- MIME 類型
-    page_num INTEGER,
-    bbox JSONB,                       -- 邊界框坐標
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_ra_doc_id ON raw_artifacts(doc_id);
-CREATE INDEX IF NOT EXISTS idx_ra_company_id ON raw_artifacts(company_id);
-CREATE INDEX IF NOT EXISTS idx_ra_type ON raw_artifacts(artifact_type);
-
-
--- ============================================================
--- 初始數據
--- ============================================================
-
--- 插入 Vanna 訓練示例
-INSERT INTO vanna_training_data (question, sql_query, table_name, documentation, quality_score, is_verified) VALUES
--- 基本查詢
-('Show me all documents', 'SELECT * FROM documents ORDER BY created_at DESC;', 'documents', '列出所有文檔', 1.0, TRUE),
-('Find documents by filename', 'SELECT * FROM documents WHERE filename ILIKE ''%{keyword}%''', 'documents', '按檔名搜索文檔', 1.0, TRUE),
-
--- 指數報告查詢
-('Show all index reports', 'SELECT * FROM documents WHERE is_index_report = TRUE ORDER BY created_at DESC;', 'documents', '列出所有指數報告', 1.0, TRUE),
-('Find documents by index theme', 'SELECT * FROM documents WHERE index_theme ILIKE ''%{theme}%''', 'documents', '按指數主題搜索', 1.0, TRUE),
-
--- 行業查詢
-('Find companies in a specific industry', 'SELECT dc.*, d.filename FROM document_companies dc JOIN documents d ON dc.document_id = d.id WHERE dc.assigned_industry = ''{industry}'';', 'document_companies', '按行業查找公司', 1.0, TRUE),
-
--- JSONB 查詢
-('Find documents by dynamic attribute', 'SELECT * FROM documents WHERE dynamic_attributes->>''{key}'' = ''{value}'';', 'documents', '按 JSONB 動態屬性搜索', 0.9, TRUE),
-('Get all dynamic attribute keys', 'SELECT DISTINCT jsonb_object_keys(dynamic_attributes) AS key FROM documents WHERE dynamic_attributes IS NOT NULL;', 'documents', '獲取所有動態屬性鍵', 0.9, TRUE)
-ON CONFLICT DO NOTHING;
-
+    id,
+    name_en,
+    name_zh,
+    stock_code,
+    sector,
+    is_industry_confirmed,
+    -- 智能判定：如果有權威定義就用權威，沒有的話就拿 AI 預測的第一個行業
+    COALESCE(
+        confirmed_industry, 
+        ai_extracted_industries->>0
+    ) AS primary_industry,
+    created_at
+FROM companies;
 
 -- ============================================================
 -- 完成
@@ -641,7 +360,7 @@ ON CONFLICT DO NOTHING;
 DO $$
 BEGIN
     RAISE NOTICE '============================================================';
-    RAISE NOTICE 'Nanobot Database Schema 初始化完成';
+    RAISE NOTICE 'Nanobot Database Schema 初始化完成 (v2.1)';
     RAISE NOTICE '============================================================';
     RAISE NOTICE '表結構:';
     RAISE NOTICE '  - documents (文檔主表)';
@@ -650,14 +369,19 @@ BEGIN
     RAISE NOTICE '  - document_chunks (切片)';
     RAISE NOTICE '  - document_tables (表格)';
     RAISE NOTICE '  - review_queue (審核隊列)';
-    RAISE NOTICE '  - vanna_training_data (Vanna 訓練)';
+    RAISE NOTICE '  - companies (公司主表)';
+    RAISE NOTICE '  - financial_metrics (財務指標 EAV)';
+    RAISE NOTICE '  - market_data (市場數據)';
     RAISE NOTICE '';
-    RAISE NOTICE '視圖:';
+    RAISE NOTICE '視圖 (Vanna 專用):';
     RAISE NOTICE '  - document_summary';
-    RAISE NOTICE '  - index_reports_view';
-    RAISE NOTICE '  - pending_reviews';
+    RAISE NOTICE '  - v_documents_for_vanna';
+    RAISE NOTICE '  - v_companies_for_vanna (雙軌制行業解決方案)';
     RAISE NOTICE '';
-    RAISE NOTICE '規則 A/B 行業分配: ✅ 已支援';
-    RAISE NOTICE 'JSONB 動態屬性: ✅ 已支援';
+    RAISE NOTICE '核心改進:';
+    RAISE NOTICE '  ✅ 文檔瘦身完成 (移除冗餘欄位)';
+    RAISE NOTICE '  ✅ JSONB 動態屬性支援';
+    RAISE NOTICE '  ✅ Vanna 查詢優化視圖已建立';
+    RAISE NOTICE '  ✅ 雙軌制行業邏輯已封裝在 View 中';
     RAISE NOTICE '============================================================';
 END $$;
