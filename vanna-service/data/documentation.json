@@ -64,23 +64,27 @@
     },
     {
       "id": "jsonb_array_query",
-      "content": "For JSONB arrays like ai_suggested_industries, use ? to check if an element exists: SELECT * FROM document_companies WHERE ai_suggested_industries ? 'Biotech';",
-      "category": "example"
+      "content": "For JSONB arrays like extracted_industries, use ? to check if an element exists: SELECT * FROM document_companies WHERE extracted_industries ? 'Biotech';",
+      "category": "example",
+      "note": "v2.3: ai_suggested_industries → extracted_industries"
     },
     {
       "id": "rule_a_industry",
-      "content": "Rule A (Index Reports): When confirmed_industry is set, all constituent companies have assigned_industry = confirmed_industry and industry_source = 'confirmed'.",
-      "category": "definition"
+      "content": "Rule A (Index Reports): When confirmed_industry is set, all constituent companies have extracted_industries = confirmed_industry and extraction_source = 'index_rule'.",
+      "category": "definition",
+      "note": "v2.3: industry_source → extraction_source"
     },
     {
       "id": "rule_b_industry",
-      "content": "Rule B (Annual Reports): When confirmed_industry is NULL, each company's industry is stored in ai_suggested_industries (JSONB array) and industry_source = 'ai_extracted'.",
-      "category": "definition"
+      "content": "Rule B (Annual Reports): When confirmed_industry is NULL, each company's industry is stored in extracted_industries (JSONB array) and extraction_source = 'ai_predict'.",
+      "category": "definition",
+      "note": "v2.3: ai_suggested_industries → extracted_industries, industry_source → extraction_source"
     },
     {
       "id": "index_report_no_parent",
-      "content": "IMPORTANT: Index reports (is_index_report = TRUE) have parent_company = NULL because they cover multiple constituent companies, not a single parent.",
-      "category": "definition"
+      "content": "IMPORTANT: Index reports (report_type = 'index_report') have owner_company_id IS NULL because they cover multiple constituent companies, not a single parent.",
+      "category": "definition",
+      "note": "v2.3: is_index_report → report_type, parent_company → owner_company_id"
     },
     {
       "id": "jsonb_query_pattern",
@@ -274,12 +278,12 @@
     },
     {
       "id": "document_pages_usage",
-      "content": "document_pages 表存儲了所有 PDF 頁面的原始 Markdown 內容。使用 ILIKE '%關鍵字%' 進行模糊搜索。返回 page_num 和 markdown_content 給用戶。可以同時搜索多個關鍵字，用 OR 連接。",
+      "content": "CRITICAL: When querying document_pages, you MUST JOIN documents to filter by company.\n\nExample:\nSELECT dp.* FROM document_pages dp\nJOIN documents d ON dp.document_id = d.id\nWHERE d.owner_company_id = (SELECT id FROM companies WHERE stock_code = '00700');\n\nDO NOT use: WHERE company_id = ... (company_id field was removed in v2.3)",
       "category": "fallback"
     },
     {
       "id": "document_pages_examples",
-      "content": "搜索單個關鍵字：SELECT page_num, markdown_content FROM document_pages WHERE markdown_content ILIKE '%關鍵字%' LIMIT 5; 搜索多個關鍵字：SELECT page_num, markdown_content FROM document_pages WHERE markdown_content ILIKE '%AI%' OR markdown_content ILIKE '%Artificial Intelligence%';",
+      "content": "CRITICAL: When querying document_pages, you MUST JOIN documents to filter by company.\n\nExample:\nSELECT dp.* FROM document_pages dp\nJOIN documents d ON dp.document_id = d.id\nWHERE d.owner_company_id = (SELECT id FROM companies WHERE stock_code = '00700');\n\nDO NOT use: WHERE company_id = ... (company_id field was removed in v2.3)",
       "category": "fallback"
     },
     {
@@ -318,29 +322,16 @@
       "category": "example"
     },
     {
-      "id": "jsonb_array_query",
-      "content": "To query values in JSONB arrays (like ai_extracted_industries), use ? operator: SELECT * FROM documents WHERE ai_extracted_industries ? 'Biotech';",
-      "category": "example"
-    },
-    {
-      "id": "rule_a_industry",
-      "content": "Rule A: When a document has confirmed_industry (e.g., 'Biotech' from 'Hang Seng Biotech Index'), ALL companies in document_companies get assigned_industry = confirmed_industry. industry_source = 'confirmed'.",
-      "category": "definition"
-    },
-    {
-      "id": "rule_b_industry",
-      "content": "Rule B: When document has no confirmed_industry, each company's assigned_industry comes from ai_suggested_industries (AI-extracted list). industry_source = 'ai_extracted'.",
-      "category": "definition"
-    },
-    {
       "id": "index_report_characteristics",
-      "content": "Index reports (is_index_report = TRUE) have: parent_company = NULL, index_theme defined (e.g., 'Hang Seng Biotech Index'), multiple companies in document_companies.",
-      "category": "definition"
+      "content": "Index reports (report_type = 'index_report') have: owner_company_id IS NULL, dynamic_attributes->>'theme' defined (e.g., 'Hang Seng Biotech Index'), multiple companies in document_companies.",
+      "category": "definition",
+      "note": "v2.3: is_index_report → report_type, parent_company → owner_company_id IS NULL"
     },
     {
       "id": "annual_report_characteristics",
-      "content": "Annual reports (report_type = 'annual_report') have: parent_company defined (single company), index_theme = NULL, usually single company or subsidiaries.",
-      "category": "definition"
+      "content": "Annual reports (report_type = 'annual_report') have: owner_company_id defined (single company), dynamic_attributes->>'theme' = NULL, usually single company or subsidiaries.",
+      "category": "definition",
+      "note": "v2.3: parent_company → owner_company_id"
     },
     {
       "id": "document_companies_join",

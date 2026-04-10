@@ -3,397 +3,641 @@
   "version": "2.0.0",
   "pairs": [
     {
-      "id": "shareholding_001",
-      "question": "What is the percentage of shareholding of Li Ka-Shing Unity Trustee Company Limited as trustee of The Li Ka-Shing Unity Trust in CK Hutchison?",
-      "sql": "SELECT shareholder_name, trust_name, trustee_name, percentage_held FROM shareholdings WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND trustee_name LIKE '%Li Ka-Shing Unity Trustee%' AND trust_name LIKE '%Li Ka-Shing Unity Trust%';",
-      "tags": ["shareholdings", "ck_hutchison", "trust", "percentage"]
-    },
-    {
       "id": "executive_directors_001",
       "question": "Can you list the executive directors?",
       "sql": "SELECT person_name, person_name_zh, role, committee FROM key_personnel WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND role ILIKE '%Executive Director%' ORDER BY person_name;",
-      "tags": ["key_personnel", "ck_hutchison", "directors", "executive"]
+      "tags": [
+        "key_personnel",
+        "ck_hutchison",
+        "directors",
+        "executive"
+      ]
     },
     {
       "id": "revenue_canada_001",
       "question": "What is the percentage of total revenue from Canada?",
       "sql": "SELECT category, percentage, amount, currency FROM revenue_breakdown WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND year = 2023 AND category = 'Canada' AND category_type = 'Region';",
-      "tags": ["revenue_breakdown", "ck_hutchison", "geographic", "canada"]
+      "tags": [
+        "revenue_breakdown",
+        "ck_hutchison",
+        "geographic",
+        "canada"
+      ]
     },
     {
       "id": "revenue_asia_australia_001",
       "question": "What is the % and amount of total revenue from Asia, Australia & Others respectively based on the chart?",
       "sql": "SELECT category, percentage, amount, currency FROM revenue_breakdown WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND year = 2023 AND category IN ('Asia, Australia & Others', 'Asia', 'Australia') AND category_type = 'Region' ORDER BY percentage DESC;",
-      "tags": ["revenue_breakdown", "ck_hutchison", "geographic", "asia"]
+      "tags": [
+        "revenue_breakdown",
+        "ck_hutchison",
+        "geographic",
+        "asia"
+      ]
     },
     {
       "id": "revenue_asia_retail_001",
       "question": "What is the % of total revenue from Asia, Australia & Others? Within Asia, Australia & Others, what is the % of revenue for Retail Sector?",
       "sql": "SELECT category, sub_category, sub_percentage, percentage FROM revenue_breakdown WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND year = 2023 AND category LIKE '%Asia%' AND (sub_category ILIKE '%Retail%' OR category ILIKE '%Retail%');",
-      "tags": ["revenue_breakdown", "ck_hutchison", "segment", "retail"]
+      "tags": [
+        "revenue_breakdown",
+        "ck_hutchison",
+        "segment",
+        "retail"
+      ]
     },
     {
       "id": "profit_loss_5years_001",
       "question": "Please provide the profit and loss figures with 5 comparative periods?",
       "sql": "SELECT year, metric_name, metric_name_zh, value, unit FROM financial_metrics WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND category IN ('revenue', 'profit', 'loss') AND fiscal_period = 'FY' AND year >= 2019 ORDER BY year DESC, metric_name;",
-      "tags": ["financial_metrics", "ck_hutchison", "multi_year", "profit_loss"]
+      "tags": [
+        "financial_metrics",
+        "ck_hutchison",
+        "multi_year",
+        "profit_loss"
+      ]
     },
     {
       "id": "profit_attributable_001",
       "question": "Please provide profit attributable to ordinary shareholders of the company from 2019 – 2023?",
       "sql": "SELECT year, value, unit FROM financial_metrics WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND metric_name ILIKE '%profit attributable%shareholder%' AND year BETWEEN 2019 AND 2023 AND fiscal_period = 'FY' ORDER BY year;",
-      "tags": ["financial_metrics", "ck_hutchison", "profit", "shareholders"]
+      "tags": [
+        "financial_metrics",
+        "ck_hutchison",
+        "profit",
+        "shareholders"
+      ]
     },
     {
       "id": "revenue_5years_001",
       "question": "Please provide revenue figures of the company from 2019 – 2023?",
       "sql": "SELECT year, value, unit FROM financial_metrics WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND metric_name ILIKE '%revenue%' AND year BETWEEN 2019 AND 2023 AND fiscal_period = 'FY' ORDER BY year;",
-      "tags": ["financial_metrics", "ck_hutchison", "revenue", "multi_year"]
+      "tags": [
+        "financial_metrics",
+        "ck_hutchison",
+        "revenue",
+        "multi_year"
+      ]
     },
     {
       "id": "fixed_assets_5years_001",
       "question": "Please provide fixed assets figures for CK Hutchison from 2019 – 2023",
       "sql": "SELECT year, value, unit FROM financial_metrics WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND metric_name ILIKE '%fixed asset%' AND year BETWEEN 2019 AND 2023 AND fiscal_period = 'FY' ORDER BY year;",
-      "tags": ["financial_metrics", "ck_hutchison", "assets", "multi_year"]
-    },
-    {
-      "id": "debt_maturity_2027_001",
-      "question": "What is the amount of total debt to be matured in 2027?",
-      "sql": "SELECT maturity_year, SUM(amount) as total_amount, currency FROM debt_maturity WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND maturity_year = 2027 GROUP BY maturity_year, currency;",
-      "tags": ["debt_maturity", "ck_hutchison", "debt", "2027"]
+      "tags": [
+        "financial_metrics",
+        "ck_hutchison",
+        "assets",
+        "multi_year"
+      ]
     },
     {
       "id": "sfc_cash_001",
       "question": "What is the amount of cash at bank and in hand for the year 2024 mentioned in SFC Annual Report?",
       "sql": "SELECT year, value, unit FROM financial_metrics WHERE company_id = (SELECT id FROM companies WHERE name_en ILIKE '%Securities and Futures Commission%' OR name_en ILIKE '%SFC%') AND metric_name ILIKE '%cash at bank%' AND year = 2024;",
-      "tags": ["financial_metrics", "sfc", "cash", "2024"]
+      "tags": [
+        "financial_metrics",
+        "sfc",
+        "cash",
+        "2024"
+      ]
     },
     {
       "id": "sfc_committee_001",
       "question": "List all members of the Securities Compensation Fund Committee",
       "sql": "SELECT person_name, person_name_zh, role, committee FROM key_personnel WHERE company_id = (SELECT id FROM companies WHERE name_en ILIKE '%Securities and Futures Commission%' OR name_en ILIKE '%SFC%') AND committee ILIKE '%Securities Compensation Fund%' ORDER BY person_name;",
-      "tags": ["key_personnel", "sfc", "committee", "members"]
-    },
-    {
-      "id": "sfc_office_floors_001",
-      "question": "How many floors did SFC purchase for the OIE office?",
-      "sql": "SELECT event_title, metric_value, metric_unit FROM specific_events WHERE company_id = (SELECT id FROM companies WHERE name_en ILIKE '%SFC%') AND event_category = 'Property Acquisition' AND event_title ILIKE '%OIE%' OR event_detail ILIKE '%floor%';",
-      "tags": ["specific_events", "sfc", "property", "office"]
-    },
-    {
-      "id": "sfc_listing_reform_001",
-      "question": "When was the effective date of the SEHK GEM listing reform?",
-      "sql": "SELECT event_title, effective_date, announcement_date FROM specific_events WHERE event_category = 'Listing Reform' AND event_title ILIKE '%GEM%' ORDER BY effective_date DESC LIMIT 5;",
-      "tags": ["specific_events", "sfc", "listing_reform", "GEM"]
-    },
-    {
-      "id": "sfc_listing_applications_001",
-      "question": "How many listing applications were processed by SFC?",
-      "sql": "SELECT year, application_count, approved_count, rejected_count FROM listing_applications WHERE company_id IS NULL ORDER BY year DESC LIMIT 5;",
-      "tags": ["listing_applications", "sfc", "statistics", "listing"]
-    },
-    {
-      "id": "sfc_share_buyback_001",
-      "question": "When was the consultation on share buy-backs conducted?",
-      "sql": "SELECT event_title, announcement_date, effective_date FROM specific_events WHERE event_category = 'Consultation' AND event_title ILIKE '%buy-back%' OR event_detail ILIKE '%share buy-back%' ORDER BY announcement_date DESC;",
-      "tags": ["specific_events", "sfc", "consultation", "buyback"]
-    },
-    {
-      "id": "sfc_rmb_counters_001",
-      "question": "How many stocks were launched for the RMB counters?",
-      "sql": "SELECT event_title, metric_value, metric_unit FROM specific_events WHERE event_category = 'Market Initiative' AND event_title ILIKE '%RMB%' OR event_detail ILIKE '%RMB counter%';",
-      "tags": ["specific_events", "sfc", "rmb", "market_initiative"]
+      "tags": [
+        "key_personnel",
+        "sfc",
+        "committee",
+        "members"
+      ]
     },
     {
       "id": "sfc_bio_001",
       "question": "Generate the bio of Lisa Chen mentioned in SFC Annual Report",
       "sql": "SELECT person_name, person_name_zh, role, committee, biography FROM key_personnel WHERE company_id = (SELECT id FROM companies WHERE name_en ILIKE '%SFC%') AND person_name ILIKE '%Lisa Chen%';",
-      "tags": ["key_personnel", "sfc", "bio", "person"]
+      "tags": [
+        "key_personnel",
+        "sfc",
+        "bio",
+        "person"
+      ]
     },
     {
       "id": "biotech_top10_marketcap_001",
       "question": "Provide the Top 10 stock codes and names of the market capital from the BioTech Sector. The result is shown in a table.",
       "sql": "SELECT c.stock_code, c.name_en as company_name, (m.closing_price * m.issued_shares) as market_capital, m.closing_price, m.issued_shares FROM companies c JOIN market_data m ON c.id = m.company_id WHERE c.sector = 'BioTech' AND m.trade_date = (SELECT MAX(trade_date) FROM market_data) ORDER BY market_capital DESC LIMIT 10;",
-      "tags": ["biotech", "market_cap", "ranking", "top10"]
+      "tags": [
+        "biotech",
+        "market_cap",
+        "ranking",
+        "top10"
+      ]
     },
     {
       "id": "biotech_top5_liabilities_001",
       "question": "Provide the Top 5 stock codes and names with the highest total liabilities in BioTech sector",
       "sql": "SELECT c.stock_code, c.name_en as company_name, fm.standardized_value as total_liabilities, fm.standardized_currency FROM companies c JOIN financial_metrics fm ON c.id = fm.company_id WHERE c.sector = 'BioTech' AND fm.metric_name ILIKE '%Total Liabilities%' AND fm.year = 2024 AND fm.fiscal_period = 'FY' ORDER BY fm.standardized_value DESC LIMIT 5;",
-      "tags": ["biotech", "liabilities", "ranking", "top5", "standardized_value"],
+      "tags": [
+        "biotech",
+        "liabilities",
+        "ranking",
+        "top5",
+        "standardized_value"
+      ],
       "note": "Uses standardized_value for correct cross-company comparison. Raw 'value' would give wrong ranking due to unit differences."
     },
     {
       "id": "biotech_same_auditor_001",
       "question": "List all BioTech stocks which has the same auditor as stock 6160 Beone Medicines",
       "sql": "SELECT c.stock_code, c.name_en, c.auditor FROM companies c WHERE c.sector = 'BioTech' AND c.auditor = (SELECT auditor FROM companies WHERE stock_code = '6160') ORDER BY c.stock_code;",
-      "tags": ["biotech", "auditor", "filter", "comparison"]
+      "tags": [
+        "biotech",
+        "auditor",
+        "filter",
+        "comparison"
+      ]
     },
     {
       "id": "biotech_shareholders_001",
       "question": "Please provide all the ultimate controlling shareholders of each BioTech stock",
       "sql": "SELECT stock_code, name_en, name_zh, ultimate_controlling_shareholder FROM companies WHERE sector = 'BioTech' AND ultimate_controlling_shareholder IS NOT NULL ORDER BY stock_code;",
-      "tags": ["biotech", "shareholders", "list", "controlling"]
+      "tags": [
+        "biotech",
+        "shareholders",
+        "list",
+        "controlling"
+      ]
     },
     {
       "id": "biotech_qualified_opinion_001",
       "question": "List all BioTech companies which has a Qualified Opinion from auditor's opinion",
       "sql": "SELECT stock_code, name_en, name_zh, auditor, auditor_opinion FROM companies WHERE sector = 'BioTech' AND auditor_opinion = 'Qualified' ORDER BY stock_code;",
-      "tags": ["biotech", "auditor_opinion", "filter", "qualified"]
+      "tags": [
+        "biotech",
+        "auditor_opinion",
+        "filter",
+        "qualified"
+      ]
     },
     {
       "id": "biotech_top2_liabilities_price_001",
       "question": "Find the Top 2 BioTech stocks with the highest total liabilities in 2024 and show their closing price in 2022",
       "sql": "SELECT c.stock_code, c.name_en, fm.standardized_value as total_liabilities_2024, fm.standardized_currency, m.trade_date, m.closing_price FROM companies c JOIN financial_metrics fm ON c.id = fm.company_id JOIN market_data m ON c.id = m.company_id WHERE c.sector = 'BioTech' AND fm.metric_name = 'Total Liabilities' AND fm.year = 2024 AND fm.fiscal_period = 'FY' AND m.trade_date BETWEEN '2022-01-01' AND '2022-12-31' ORDER BY fm.standardized_value DESC LIMIT 100;",
-      "tags": ["biotech", "liabilities", "price", "cross_year", "standardized_value"],
+      "tags": [
+        "biotech",
+        "liabilities",
+        "price",
+        "cross_year",
+        "standardized_value"
+      ],
       "note": "Uses standardized_value for ranking. Must GROUP BY standardized_currency if mixing currencies."
     },
     {
       "id": "stock_price_volume_chart_001",
       "question": "Plot the line chart of the closing price and transaction volume for stock 09969 in 2022",
       "sql": "SELECT trade_date, closing_price, trading_volume FROM market_data WHERE company_id = (SELECT id FROM companies WHERE stock_code = '09969') AND trade_date BETWEEN '2022-01-01' AND '2022-12-31' ORDER BY trade_date;",
-      "tags": ["market_data", "price", "volume", "chart", "biotech"]
+      "tags": [
+        "market_data",
+        "price",
+        "volume",
+        "chart",
+        "biotech"
+      ]
     },
     {
       "id": "stock_revenue_avg_volume_001",
       "question": "What is the total revenue of stock 09969 in 2023 & 2024 and what is the average trading volume in 2022?",
       "sql": "SELECT 'Revenue' as metric, year, value, unit FROM financial_metrics WHERE company_id = (SELECT id FROM companies WHERE stock_code = '09969') AND metric_name ILIKE '%revenue%' AND year IN (2023, 2024) AND fiscal_period = 'FY' UNION ALL SELECT 'Avg Volume' as metric, 2022 as year, AVG(trading_volume) as value, 'shares' as unit FROM market_data WHERE company_id = (SELECT id FROM companies WHERE stock_code = '09969') AND trade_date BETWEEN '2022-01-01' AND '2022-12-31';",
-      "tags": ["financial_metrics", "market_data", "revenue", "volume", "cross_year"]
+      "tags": [
+        "financial_metrics",
+        "market_data",
+        "revenue",
+        "volume",
+        "cross_year"
+      ]
     },
     {
       "id": "stock_revenue_001",
       "question": "What is the total revenue of stock 09969 in 2023 and 2024",
       "sql": "SELECT year, value as total_revenue, unit FROM financial_metrics WHERE company_id = (SELECT id FROM companies WHERE stock_code = '09969') AND metric_name ILIKE '%total revenue%' AND year IN (2023, 2024) AND fiscal_period = 'FY' ORDER BY year;",
-      "tags": ["financial_metrics", "revenue", "biotech", "09969"]
+      "tags": [
+        "financial_metrics",
+        "revenue",
+        "biotech",
+        "09969"
+      ]
     },
     {
       "id": "stock_avg_volume_001",
       "question": "What is the average trading volume for stock 09969 in 2022",
       "sql": "SELECT AVG(trading_volume) as avg_volume FROM market_data WHERE company_id = (SELECT id FROM companies WHERE stock_code = '09969') AND trade_date BETWEEN '2022-01-01' AND '2022-12-31';",
-      "tags": ["market_data", "average", "volume", "biotech"]
+      "tags": [
+        "market_data",
+        "average",
+        "volume",
+        "biotech"
+      ]
     },
     {
       "id": "biotech_hsbc_001",
       "question": "List all BioTech stocks in 2024 which principal bankers are HSBC",
       "sql": "SELECT stock_code, name_en, name_zh, principal_banker FROM companies WHERE sector = 'BioTech' AND principal_banker ILIKE '%HSBC%' ORDER BY stock_code;",
-      "tags": ["biotech", "principal_banker", "filter", "hsbc"]
+      "tags": [
+        "biotech",
+        "principal_banker",
+        "filter",
+        "hsbc"
+      ]
     },
     {
       "id": "biotech_hsbc_avg_price_001",
       "question": "Show average closing price for BioTech stocks with HSBC as principal banker in 2022",
       "sql": "SELECT c.stock_code, c.name_en, AVG(m.closing_price) as avg_closing_price FROM companies c JOIN market_data m ON c.id = m.company_id WHERE c.sector = 'BioTech' AND c.principal_banker ILIKE '%HSBC%' AND m.trade_date BETWEEN '2022-01-01' AND '2022-12-31' GROUP BY c.stock_code, c.name_en ORDER BY avg_closing_price DESC;",
-      "tags": ["biotech", "hsbc", "average", "price", "cross_year"]
+      "tags": [
+        "biotech",
+        "hsbc",
+        "average",
+        "price",
+        "cross_year"
+      ]
     },
     {
       "id": "fallback_ai_strategy_001",
       "question": "What is the company's strategy on Artificial Intelligence or AI?",
-      "sql": "SELECT page_num, markdown_content FROM document_pages WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND (markdown_content ILIKE '%Artificial Intelligence%' OR markdown_content ILIKE '% AI %' OR markdown_content ILIKE '%machine learning%' OR markdown_content ILIKE '%人工智能%') LIMIT 5;",
-      "tags": ["document_pages", "fallback", "strategy", "ai"]
+      "sql": "SELECT page_num, markdown_content FROM document_pages JOIN documents d ON document_pages.document_id = d.id WHERE d.owner_company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND (markdown_content ILIKE '%Artificial Intelligence%' OR markdown_content ILIKE '% AI %' OR markdown_content ILIKE '%machine learning%' OR markdown_content ILIKE '%人工智能%') LIMIT 5;",
+      "tags": [
+        "document_pages",
+        "fallback",
+        "strategy",
+        "ai"
+      ],
+      "note": "v2.3: 必须通过 JOIN documents 找到 owner_company_id"
     },
     {
       "id": "fallback_esg_001",
       "question": "Did the report mention anything about ESG policies?",
-      "sql": "SELECT page_num, markdown_content FROM document_pages WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND (markdown_content ILIKE '%ESG%' OR markdown_content ILIKE '%Environmental, Social, and Governance%' OR markdown_content ILIKE '%sustainability%' OR markdown_content ILIKE '%可持續%') LIMIT 5;",
-      "tags": ["document_pages", "fallback", "esg", "sustainability"]
+      "sql": "SELECT page_num, markdown_content FROM document_pages JOIN documents d ON document_pages.document_id = d.id WHERE d.owner_company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND (markdown_content ILIKE '%ESG%' OR markdown_content ILIKE '%Environmental, Social, and Governance%' OR markdown_content ILIKE '%sustainability%' OR markdown_content ILIKE '%可持續%') LIMIT 5;",
+      "tags": [
+        "document_pages",
+        "fallback",
+        "esg",
+        "sustainability"
+      ],
+      "note": "v2.3: 必须通过 JOIN documents 找到 owner_company_id"
     },
     {
       "id": "dynamic_query_001",
       "question": "Find all index reports for quarter Q3",
-      "sql": "SELECT filename, index_theme, confirmed_industry FROM documents WHERE is_index_report = TRUE AND dynamic_attributes->>'index_quarter' = 'Q3';",
-      "tags": ["dynamic_attributes", "jsonb", "index_report", "quarter"]
+      "sql": "SELECT filename, index_theme, confirmed_industry FROM documents WHERE report_type = 'index_report' AND dynamic_attributes->>'index_quarter' = 'Q3';",
+      "tags": [
+        "dynamic_attributes",
+        "jsonb",
+        "index_report",
+        "quarter"
+      ]
     },
     {
       "id": "dynamic_query_002",
       "question": "List all documents with base_date in 2024",
       "sql": "SELECT filename, dynamic_attributes->>'base_date' as base_date FROM documents WHERE dynamic_attributes ? 'base_date' AND dynamic_attributes->>'base_date' LIKE '2024%';",
-      "tags": ["dynamic_attributes", "jsonb", "date_filter"]
+      "tags": [
+        "dynamic_attributes",
+        "jsonb",
+        "date_filter"
+      ]
     },
     {
       "id": "index_report_001",
       "question": "Show all Hang Seng Biotech Index constituent companies",
-      "sql": "SELECT dc.company_name, dc.stock_code, dc.assigned_industry, d.index_theme FROM document_companies dc JOIN documents d ON dc.document_id = d.id WHERE d.index_theme ILIKE '%Biotech%' AND d.is_index_report = TRUE ORDER BY dc.stock_code;",
-      "tags": ["index_report", "biotech", "constituents", "rule_a"]
+      "sql": "SELECT dc.company_name, dc.stock_code, dc.assigned_industry, d.index_theme FROM document_companies dc JOIN documents d ON dc.document_id = d.id WHERE d.index_theme ILIKE '%Biotech%' AND d.report_type = 'index_report' ORDER BY dc.stock_code;",
+      "tags": [
+        "index_report",
+        "biotech",
+        "constituents",
+        "rule_a"
+      ]
     },
     {
       "id": "industry_assignment_001",
       "question": "Find companies with Biotech in their AI suggested industries",
-      "sql": "SELECT dc.company_name, dc.stock_code, dc.ai_suggested_industries, dc.industry_source FROM document_companies dc WHERE dc.ai_suggested_industries ? 'Biotech' AND dc.industry_source = 'ai_extracted';",
-      "tags": ["ai_industries", "jsonb", "rule_b", "biotech"]
+      "sql": "SELECT dc.company_id, dc.extracted_industries, dc.extraction_source FROM document_companies dc WHERE dc.extracted_industries ? 'Biotech' AND dc.extraction_source = 'ai_predict';",
+      "tags": [
+        "extracted_industries",
+        "jsonb",
+        "rule_b",
+        "biotech"
+      ],
+      "note": "v2.3: ai_suggested_industries → extracted_industries, industry_source → extraction_source"
     },
     {
       "id": "annual_report_001",
       "question": "List all annual reports for Tencent Holdings",
-      "sql": "SELECT filename, parent_company, dynamic_attributes->>'report_year' as year FROM documents WHERE parent_company ILIKE '%Tencent%' AND report_type = 'annual_report' ORDER BY created_at DESC;",
-      "tags": ["annual_report", "tencent", "parent_company"]
+      "sql": "SELECT d.filename, c.name_en AS owner_company_name, d.year FROM documents d JOIN companies c ON d.owner_company_id = c.id WHERE c.name_en ILIKE '%Tencent%' AND d.report_type = 'annual_report' ORDER BY d.created_at DESC;",
+      "tags": [
+        "annual_report",
+        "tencent",
+        "owner_company"
+      ],
+      "note": "v2.3: 使用 JOIN companies 查询 owner_company_id"
     },
     {
       "id": "pending_review_001",
       "question": "Show documents pending human review",
       "sql": "SELECT d.filename, rq.review_type, rq.confidence, rq.reason FROM documents d JOIN review_queue rq ON d.id = rq.document_id WHERE rq.status = 'pending' ORDER BY rq.created_at DESC;",
-      "tags": ["review_queue", "human_review", "pending"]
+      "tags": [
+        "review_queue",
+        "human_review",
+        "pending"
+      ]
     },
     {
       "id": "fallback_risk_factors_001",
       "question": "What are the risk factors mentioned in the report?",
-      "sql": "SELECT page_num, markdown_content FROM document_pages WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND (markdown_content ILIKE '%risk factor%' OR markdown_content ILIKE '%主要風險%' OR markdown_content ILIKE '%uncertainty%' OR markdown_content ILIKE '%風險因素%') LIMIT 5;",
-      "tags": ["document_pages", "fallback", "risk", "factors"]
+      "sql": "SELECT page_num, markdown_content FROM document_pages JOIN documents d ON document_pages.document_id = d.id WHERE d.owner_company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND (markdown_content ILIKE '%risk factor%' OR markdown_content ILIKE '%主要風險%' OR markdown_content ILIKE '%uncertainty%' OR markdown_content ILIKE '%風險因素%') LIMIT 5;",
+      "tags": [
+        "document_pages",
+        "fallback",
+        "risk",
+        "factors"
+      ],
+      "note": "v2.3: 必须通过 JOIN documents 找到 owner_company_id"
     },
     {
       "id": "fallback_vision_001",
       "question": "What is the company's vision or future outlook?",
-      "sql": "SELECT page_num, markdown_content FROM document_pages WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND (markdown_content ILIKE '%vision%' OR markdown_content ILIKE '%outlook%' OR markdown_content ILIKE '%future%' OR markdown_content ILIKE '%展望%' OR markdown_content ILIKE '%願景%') LIMIT 5;",
-      "tags": ["document_pages", "fallback", "vision", "outlook"]
+      "sql": "SELECT page_num, markdown_content FROM document_pages JOIN documents d ON document_pages.document_id = d.id WHERE d.owner_company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND (markdown_content ILIKE '%vision%' OR markdown_content ILIKE '%outlook%' OR markdown_content ILIKE '%future%' OR markdown_content ILIKE '%展望%' OR markdown_content ILIKE '%願景%') LIMIT 5;",
+      "tags": [
+        "document_pages",
+        "fallback",
+        "vision",
+        "outlook"
+      ],
+      "note": "v2.3: 必须通过 JOIN documents 找到 owner_company_id"
     },
     {
       "id": "fallback_carbon_001",
       "question": "Does the company have any carbon emission or climate change initiatives?",
-      "sql": "SELECT page_num, markdown_content FROM document_pages WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND (markdown_content ILIKE '%carbon%' OR markdown_content ILIKE '%emission%' OR markdown_content ILIKE '%climate change%' OR markdown_content ILIKE '%碳排放%' OR markdown_content ILIKE '%氣候變化%') LIMIT 5;",
-      "tags": ["document_pages", "fallback", "carbon", "climate"]
+      "sql": "SELECT page_num, markdown_content FROM document_pages JOIN documents d ON document_pages.document_id = d.id WHERE d.owner_company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND (markdown_content ILIKE '%carbon%' OR markdown_content ILIKE '%emission%' OR markdown_content ILIKE '%climate change%' OR markdown_content ILIKE '%碳排放%' OR markdown_content ILIKE '%氣候變化%') LIMIT 5;",
+      "tags": [
+        "document_pages",
+        "fallback",
+        "carbon",
+        "climate"
+      ],
+      "note": "v2.3: 必须通过 JOIN documents 找到 owner_company_id"
     },
     {
       "id": "fallback_digital_transformation_001",
       "question": "What digital transformation initiatives has the company undertaken?",
-      "sql": "SELECT page_num, markdown_content FROM document_pages WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND (markdown_content ILIKE '%digital transformation%' OR markdown_content ILIKE '%數碼轉型%' OR markdown_content ILIKE '%數字化%') LIMIT 5;",
-      "tags": ["document_pages", "fallback", "digital", "transformation"]
+      "sql": "SELECT page_num, markdown_content FROM document_pages JOIN documents d ON document_pages.document_id = d.id WHERE d.owner_company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND (markdown_content ILIKE '%digital transformation%' OR markdown_content ILIKE '%數碼轉型%' OR markdown_content ILIKE '%數字化%') LIMIT 5;",
+      "tags": [
+        "document_pages",
+        "fallback",
+        "digital",
+        "transformation"
+      ],
+      "note": "v2.3: 必须通过 JOIN documents 找到 owner_company_id"
     },
     {
       "id": "fallback_dividend_001",
       "question": "Find information about dividend policy",
-      "sql": "SELECT page_num, markdown_content FROM document_pages WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND (markdown_content ILIKE '%dividend%' OR markdown_content ILIKE '%股息%' OR markdown_content ILIKE '%派息%') LIMIT 5;",
-      "tags": ["document_pages", "fallback", "dividend", "policy"]
+      "sql": "SELECT page_num, markdown_content FROM document_pages JOIN documents d ON document_pages.document_id = d.id WHERE d.owner_company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND (markdown_content ILIKE '%dividend%' OR markdown_content ILIKE '%股息%' OR markdown_content ILIKE '%派息%') LIMIT 5;",
+      "tags": [
+        "document_pages",
+        "fallback",
+        "dividend",
+        "policy"
+      ],
+      "note": "v2.3: 必须通过 JOIN documents 找到 owner_company_id"
     },
     {
       "id": "fallback_cybersecurity_001",
       "question": "What is mentioned about cyber security?",
-      "sql": "SELECT page_num, markdown_content FROM document_pages WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND (markdown_content ILIKE '%cyber security%' OR markdown_content ILIKE '%cybersecurity%' OR markdown_content ILIKE '%網絡安全%' OR markdown_content ILIKE '%信息安全%') LIMIT 5;",
-      "tags": ["document_pages", "fallback", "cybersecurity", "security"]
+      "sql": "SELECT page_num, markdown_content FROM document_pages JOIN documents d ON document_pages.document_id = d.id WHERE d.owner_company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND (markdown_content ILIKE '%cyber security%' OR markdown_content ILIKE '%cybersecurity%' OR markdown_content ILIKE '%網絡安全%' OR markdown_content ILIKE '%信息安全%') LIMIT 5;",
+      "tags": [
+        "document_pages",
+        "fallback",
+        "cybersecurity",
+        "security"
+      ],
+      "note": "v2.3: 必须通过 JOIN documents 找到 owner_company_id"
     },
     {
       "id": "fallback_merger_001",
       "question": "Does the report discuss any merger and acquisition activities?",
-      "sql": "SELECT page_num, markdown_content FROM document_pages WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND (markdown_content ILIKE '%merger%' OR markdown_content ILIKE '%acquisition%' OR markdown_content ILIKE '%M&A%' OR markdown_content ILIKE '%收購%' OR markdown_content ILIKE '%合併%') LIMIT 5;",
-      "tags": ["document_pages", "fallback", "merger", "acquisition"]
+      "sql": "SELECT page_num, markdown_content FROM document_pages JOIN documents d ON document_pages.document_id = d.id WHERE d.owner_company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND (markdown_content ILIKE '%merger%' OR markdown_content ILIKE '%acquisition%' OR markdown_content ILIKE '%M&A%' OR markdown_content ILIKE '%收購%' OR markdown_content ILIKE '%合併%') LIMIT 5;",
+      "tags": [
+        "document_pages",
+        "fallback",
+        "merger",
+        "acquisition"
+      ],
+      "note": "v2.3: 必须通过 JOIN documents 找到 owner_company_id"
     },
     {
       "id": "fallback_governance_001",
       "question": "What is the company's approach to corporate governance?",
-      "sql": "SELECT page_num, markdown_content FROM document_pages WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND (markdown_content ILIKE '%corporate governance%' OR markdown_content ILIKE '%企業管治%' OR markdown_content ILIKE '%公司治理%') LIMIT 5;",
-      "tags": ["document_pages", "fallback", "governance", "corporate"]
+      "sql": "SELECT page_num, markdown_content FROM document_pages JOIN documents d ON document_pages.document_id = d.id WHERE d.owner_company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND (markdown_content ILIKE '%corporate governance%' OR markdown_content ILIKE '%企業管治%' OR markdown_content ILIKE '%公司治理%') LIMIT 5;",
+      "tags": [
+        "document_pages",
+        "fallback",
+        "governance",
+        "corporate"
+      ],
+      "note": "v2.3: 必须通过 JOIN documents 找到 owner_company_id"
     },
     {
       "id": "dynamic_query_001",
       "question": "Find all index reports for quarter Q3",
-      "sql": "SELECT filename, index_theme, confirmed_industry FROM documents WHERE is_index_report = TRUE AND dynamic_attributes->>'index_quarter' = 'Q3';",
-      "tags": ["dynamic_attributes", "jsonb", "index_report"],
+      "sql": "SELECT filename, index_theme, confirmed_industry FROM documents WHERE report_type = 'index_report' AND dynamic_attributes->>'index_quarter' = 'Q3';",
+      "tags": [
+        "dynamic_attributes",
+        "jsonb",
+        "index_report"
+      ],
       "note": "Uses JSONB -> operator to query dynamic attribute 'index_quarter'"
     },
     {
       "id": "dynamic_query_002",
       "question": "List all documents with a specific dynamic attribute key",
       "sql": "SELECT filename, dynamic_attributes->>'index_quarter' as quarter FROM documents WHERE dynamic_attributes ? 'index_quarter';",
-      "tags": ["dynamic_attributes", "jsonb", "key_exists"],
+      "tags": [
+        "dynamic_attributes",
+        "jsonb",
+        "key_exists"
+      ],
       "note": "Uses JSONB ? operator to check if key exists"
     },
     {
       "id": "dynamic_query_003",
       "question": "Find documents that mention Biotech in their AI-extracted industries",
-      "sql": "SELECT filename, ai_extracted_industries FROM documents WHERE ai_extracted_industries ? 'Biotech';",
-      "tags": ["ai_extracted_industries", "jsonb", "array_query"],
-      "note": "Uses JSONB ? operator to query array values"
+      "sql": "SELECT d.filename, dc.extracted_industries FROM documents d JOIN document_companies dc ON d.id = dc.document_id WHERE dc.extracted_industries ? 'Biotech';",
+      "tags": [
+        "extracted_industries",
+        "jsonb",
+        "array_query"
+      ],
+      "note": "v2.3: documents.ai_extracted_industries 已删除，查询 document_companies.extracted_industries"
     },
     {
       "id": "document_companies_001",
       "question": "List all companies from the Hang Seng Biotech Index report",
       "sql": "SELECT dc.company_name, dc.stock_code, dc.assigned_industry, dc.industry_source FROM document_companies dc JOIN documents d ON dc.document_id = d.id WHERE d.index_theme = 'Hang Seng Biotech Index';",
-      "tags": ["document_companies", "documents", "index_report", "rule_a"],
+      "tags": [
+        "document_companies",
+        "documents",
+        "index_report",
+        "rule_a"
+      ],
       "note": "Rule A: all companies have assigned_industry = 'Biotech' with industry_source = 'confirmed'"
     },
     {
       "id": "document_companies_002",
       "question": "Show documents where industry was confirmed (Rule A applied)",
       "sql": "SELECT d.filename, d.confirmed_industry, d.index_theme, COUNT(dc.id) as company_count FROM documents d JOIN document_companies dc ON d.id = dc.document_id WHERE dc.industry_source = 'confirmed' GROUP BY d.id, d.filename, d.confirmed_industry, d.index_theme;",
-      "tags": ["document_companies", "documents", "rule_a", "confirmed"],
+      "tags": [
+        "document_companies",
+        "documents",
+        "rule_a",
+        "confirmed"
+      ],
       "note": "Rule A: industry_source = 'confirmed' means forced industry assignment"
     },
     {
       "id": "document_companies_003",
       "question": "Show documents where industry was AI-extracted (Rule B applied)",
       "sql": "SELECT d.filename, dc.company_name, dc.ai_suggested_industries, dc.assigned_industry FROM documents d JOIN document_companies dc ON d.id = dc.document_id WHERE dc.industry_source = 'ai_extracted';",
-      "tags": ["document_companies", "documents", "rule_b", "ai_extracted"],
+      "tags": [
+        "document_companies",
+        "documents",
+        "rule_b",
+        "ai_extracted"
+      ],
       "note": "Rule B: industry_source = 'ai_extracted' means AI suggested industries"
     },
     {
       "id": "review_queue_001",
       "question": "Show all pending reviews for uncertain AI decisions",
       "sql": "SELECT rq.id, d.filename, rq.review_type, rq.ai_suggestion, rq.confidence, rq.reason FROM review_queue rq JOIN documents d ON rq.document_id = d.id WHERE rq.status = 'pending' ORDER BY rq.confidence ASC;",
-      "tags": ["review_queue", "documents", "pending", "human_review"]
+      "tags": [
+        "review_queue",
+        "documents",
+        "pending",
+        "human_review"
+      ]
     },
     {
       "id": "processing_history_001",
       "question": "Check the processing status of a document",
       "sql": "SELECT d.filename, dph.stage, dph.status, dph.metadata, dph.created_at FROM document_processing_history dph JOIN documents d ON dph.document_id = d.id WHERE d.filename = 'hsi_biotech_q3_2024.pdf' ORDER BY dph.created_at DESC;",
-      "tags": ["document_processing_history", "documents", "processing", "status"]
+      "tags": [
+        "document_processing_history",
+        "documents",
+        "processing",
+        "status"
+      ]
     },
     {
       "id": "get_dynamic_keys_001",
       "question": "What dynamic attribute keys are available in documents?",
       "sql": "SELECT DISTINCT jsonb_object_keys(dynamic_attributes) AS key, COUNT(*) as usage_count FROM documents WHERE dynamic_attributes IS NOT NULL GROUP BY jsonb_object_keys(dynamic_attributes) ORDER BY usage_count DESC;",
-      "tags": ["dynamic_attributes", "jsonb", "keys", "discovery"],
+      "tags": [
+        "dynamic_attributes",
+        "jsonb",
+        "keys",
+        "discovery"
+      ],
       "note": "Discover all available dynamic attribute keys for Just-in-Time Schema Injection"
     },
     {
       "id": "index_report_summary_001",
       "question": "Summarize all index reports by theme and quarter",
-      "sql": "SELECT index_theme, dynamic_attributes->>'index_quarter' as quarter, COUNT(*) as document_count, confirmed_industry FROM documents WHERE is_index_report = TRUE GROUP BY index_theme, dynamic_attributes->>'index_quarter', confirmed_industry ORDER BY document_count DESC;",
-      "tags": ["documents", "index_report", "dynamic_attributes", "summary"],
+      "sql": "SELECT index_theme, dynamic_attributes->>'index_quarter' as quarter, COUNT(*) as document_count, confirmed_industry FROM documents WHERE report_type = 'index_report' GROUP BY index_theme, dynamic_attributes->>'index_quarter', confirmed_industry ORDER BY document_count DESC;",
+      "tags": [
+        "documents",
+        "index_report",
+        "dynamic_attributes",
+        "summary"
+      ],
       "note": "Uses JSONB -> operator to extract quarter for grouping"
     },
     {
       "id": "company_by_document_001",
       "question": "Find which documents contain a specific company",
       "sql": "SELECT d.filename, d.report_type, d.index_theme, dc.assigned_industry, dc.industry_source FROM documents d JOIN document_companies dc ON d.id = dc.document_id WHERE dc.company_name ILIKE '%Tencent%' OR dc.stock_code = '00700';",
-      "tags": ["document_companies", "documents", "company_search", "join"]
+      "tags": [
+        "document_companies",
+        "documents",
+        "company_search",
+        "join"
+      ]
     },
     {
       "id": "vanna_documents_001",
       "question": "Show me all documents",
       "sql": "SELECT * FROM v_documents_for_vanna ORDER BY uploaded_at DESC;",
-      "tags": ["v_documents_for_vanna", "documents", "list"],
+      "tags": [
+        "v_documents_for_vanna",
+        "documents",
+        "list"
+      ],
       "note": "使用 Vanna 專用視圖，自動展平 JSONB 屬性"
     },
     {
       "id": "vanna_industry_001",
       "question": "Find companies in a specific industry",
       "sql": "SELECT * FROM v_companies_for_vanna WHERE primary_industry = '{industry}';",
-      "tags": ["v_companies_for_vanna", "industry", "filter"],
+      "tags": [
+        "v_companies_for_vanna",
+        "industry",
+        "filter"
+      ],
       "note": "使用 Vanna 專用視圖，已自動處理雙軌制行業邏輯 (confirmed_industry vs AI extracted)"
     },
     {
       "id": "vanna_mentioned_companies_001",
       "question": "What companies are mentioned in this document?",
       "sql": "SELECT c.name_en, c.stock_code, dc.relation_type, dc.extracted_industries FROM document_companies dc JOIN companies c ON dc.company_id = c.id JOIN documents d ON dc.document_id = d.id WHERE d.filename ILIKE '%{filename}%';",
-      "tags": ["document_companies", "companies", "join", "filter"],
+      "tags": [
+        "document_companies",
+        "companies",
+        "join",
+        "filter"
+      ],
       "note": "查詢特定文檔中提及的關聯公司"
     },
     {
       "id": "find_industry_001",
       "question": "Find all companies in the Biotech industry",
       "sql": "SELECT name_en, stock_code FROM v_companies_for_vanna WHERE primary_industry ILIKE '%Biotech%';",
-      "tags": ["v_companies_for_vanna", "industry", "filter"],
+      "tags": [
+        "v_companies_for_vanna",
+        "industry",
+        "filter"
+      ],
       "note": "⭐ 使用新視圖查詢行業，自動解決雙軌制問題"
     },
     {
       "id": "index_constituent_001",
       "question": "Show all Hang Seng Biotech Index constituent companies",
       "sql": "SELECT c.name_en, c.stock_code, dc.extracted_industries FROM document_companies dc JOIN v_documents_for_vanna d ON dc.document_id = d.id JOIN v_companies_for_vanna c ON dc.company_id = c.id WHERE d.doc_theme ILIKE '%Biotech Index%' AND dc.relation_type = 'index_constituent';",
-      "tags": ["document_companies", "index_report", "relation_type"],
+      "tags": [
+        "document_companies",
+        "index_report",
+        "relation_type"
+      ],
       "note": "使用 relation_type 過濾指數成分股"
     },
     {
       "id": "document_owner_001",
       "question": "List all annual reports for Tencent Holdings",
       "sql": "SELECT filename, year FROM v_documents_for_vanna WHERE owner_company_name_en ILIKE '%Tencent%' AND report_type = 'annual_report';",
-      "tags": ["v_documents_for_vanna", "owner_company", "filter"],
+      "tags": [
+        "v_documents_for_vanna",
+        "owner_company",
+        "filter"
+      ],
       "note": "⭐ 使用新視圖查詢母公司的文檔"
     }
   ]

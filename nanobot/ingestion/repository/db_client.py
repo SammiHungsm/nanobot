@@ -290,6 +290,55 @@ class DBClient:
             logger.error(f"❌ Upsert 公司失敗: {e}")
             return None
     
+    async def add_mentioned_company(
+        self,
+        document_id: int,
+        company_id: int,
+        relation_type: str = "mentioned",
+        extracted_industries: list = None,
+        extraction_source: str = "ai_predict"
+    ) -> bool:
+        """
+        🎯 記錄 PDF 中提及的公司 (寫入橋樑表)
+        
+        Args:
+            document_id: documents 表的 ID (不是 doc_id 字串，是 Integer ID)
+            company_id: companies 表的 ID
+            relation_type: 關係類型 (如 'subsidiary', 'competitor', 'index_constituent', 'mentioned')
+            extracted_industries: 提取到的行業列表 (例如 ["Gaming", "Cloud"])
+            extraction_source: 來源 ('ai_predict' 或 'index_rule')
+            
+        Returns:
+            bool: 是否成功
+        """
+        import json
+        
+        industries_json = json.dumps(extracted_industries) if extracted_industries else None
+        
+        try:
+            await self.conn.execute(
+                """
+                INSERT INTO document_companies (
+                    document_id, company_id, relation_type, 
+                    extracted_industries, extraction_source
+                ) VALUES ($1, $2, $3, $4::jsonb, $5)
+                ON CONFLICT (document_id, company_id) DO UPDATE SET
+                    relation_type = $3,
+                    extracted_industries = $4::jsonb,
+                    extraction_source = $5
+                """,
+                document_id,
+                company_id,
+                relation_type,
+                industries_json,
+                extraction_source
+            )
+            logger.info(f"✅ 已記錄提及公司: doc_id={document_id}, company_id={company_id}, relation={relation_type}")
+            return True
+        except Exception as e:
+            logger.error(f"❌ 寫入 document_companies 失敗: {e}")
+            return False
+    
     async def insert_company(self, data: Dict[str, Any]) -> int:
         """
         插入新公司記錄
@@ -814,38 +863,34 @@ class DBClient:
     async def create_document(
         self,
         doc_id: str,
-        company_id: Optional[int],
-        title: str,
+        company_id: Optional[int],  # 這裡傳入的其實是母公司 ID
+        title: str,  # 保留參數以防其他地方報錯，但不寫入 DB
         file_path: str,
         file_hash: str,
         file_size: int,
-        document_type: str = "annual_report"
+        document_type: str = "annual_report"  # 保持參數名不變以防其他地方報錯
     ):
-        """創建文檔記錄"""
+        """創建文檔記錄 (適配新 Schema)"""
         # 從 file_path 提取 filename
         filename = Path(file_path).name
         
         await self.conn.execute(
             """
             INSERT INTO documents (
-                doc_id, company_id, filename, title, document_type, 
-                file_path, file_hash, file_size_bytes,
-                processing_status, status, uploaded_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+                doc_id, owner_company_id, filename, file_path, file_hash, 
+                file_size_bytes, report_type, processing_status, uploaded_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
             ON CONFLICT (doc_id) DO UPDATE SET
                 processing_status = 'pending',
-                status = 'pending',
                 updated_at = NOW()
             """,
             doc_id,
-            company_id,
+            company_id,  # 寫入 owner_company_id
             filename,
-            title,
-            document_type,
             file_path,
             file_hash,
-            file_size,
-            "pending",
+            file_size,  # 寫入 file_size_bytes
+            document_type,  # 寫入 report_type
             "pending"
         )
     
@@ -900,12 +945,12 @@ class DBClient:
             )
     
     async def update_document_company_id(self, doc_id: str, company_id: int, year: int = None):
-        """更新文檔的公司 ID 和年份"""
+        """更新文檔的母公司 ID 和年份"""
         if year:
             await self.conn.execute(
                 """
                 UPDATE documents SET
-                    company_id = $1,
+                    owner_company_id = $1,
                     year = $2,
                     updated_at = NOW()
                 WHERE doc_id = $3
@@ -914,19 +959,19 @@ class DBClient:
                 year,
                 doc_id
             )
-            logger.info(f"✅ 已更新文檔 {doc_id} 的 company_id={company_id}, year={year}")
+            logger.info(f"✅ 已更新文檔 {doc_id} 的 owner_company_id={company_id}, year={year}")
         else:
             await self.conn.execute(
                 """
                 UPDATE documents SET
-                    company_id = $1,
+                    owner_company_id = $1,
                     updated_at = NOW()
                 WHERE doc_id = $2
                 """,
                 company_id,
                 doc_id
             )
-            logger.info(f"✅ 已更新文檔 {doc_id} 的 company_id={company_id}")
+            logger.info(f"✅ 已更新文檔 {doc_id} 的 owner_company_id={company_id}")
     
     async def check_document_exists(self, doc_id: str, file_hash: str) -> bool:
         """檢查文檔是否已存在"""

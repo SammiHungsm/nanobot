@@ -413,11 +413,12 @@ def train_vanna_on_document(doc_id: str) -> bool:
         conn = get_db_connection()
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         
-        # 1. 獲取文件的表格
+        # 1. 獲取文件的表格 (使用 document_id 字段)
         cursor.execute("""
             SELECT file_path, metadata
             FROM raw_artifacts
-            WHERE doc_id = %s AND file_type = 'table_json'
+            WHERE document_id = (SELECT id FROM documents WHERE doc_id = %s)
+            AND artifact_type = 'table'
             LIMIT 10
         """, (doc_id,))
         
@@ -447,11 +448,11 @@ def train_vanna_on_document(doc_id: str) -> bool:
                 logger.warning(f"   ⚠️ Failed to train table: {e}")
                 continue
         
-        # 2. 獲取文件的 chunks
+        # 2. 獲取文件的 chunks (使用 document_id 字段)
         cursor.execute("""
             SELECT COUNT(*) as chunk_count
             FROM document_chunks
-            WHERE doc_id = %s
+            WHERE document_id = (SELECT id FROM documents WHERE doc_id = %s)
         """, (doc_id,))
         
         result = cursor.fetchone()
