@@ -4,6 +4,11 @@ Vanna AI Text-to-SQL Integration
 Provides RAG-powered text-to-SQL generation with schema training.
 Replaces manual SQL generation with AI-powered accurate queries.
 
+Key Features:
+- Just-in-Time Schema Injection for JSONB attributes
+- Dynamic key discovery before query generation
+- PostgreSQL JSONB query syntax support
+
 Usage:
     from nanobot.agent.tools.vanna_tool import VannaSQL
     
@@ -12,6 +17,9 @@ Usage:
     
     sql = vanna.generate_sql("Show Tencent's revenue for 2020-2023")
     result = vanna.execute(sql)
+    
+    # With dynamic schema injection
+    sql = vanna.generate_sql_with_dynamic_schema("Find Q3 biotech reports")
 """
 
 from typing import Optional, List, Dict, Any
@@ -212,78 +220,335 @@ class VannaSQL:
             return {'status': 'failed', 'error': str(e)}
     
     def _get_table_ddl(self) -> List[str]:
-        """Get DDL statements for all tables"""
-        return [
-            """
-            CREATE TABLE companies (
-                id SERIAL PRIMARY KEY,
-                name_en VARCHAR(255) NOT NULL,
-                name_zh VARCHAR(255),
-                stock_code VARCHAR(20) UNIQUE,
-                industry VARCHAR(100),
-                sector VARCHAR(100)
-            )
-            """,
-            """
-            CREATE TABLE metric_records (
-                id SERIAL PRIMARY KEY,
-                company_id INTEGER REFERENCES companies(id),
-                year INTEGER NOT NULL,
-                fiscal_period VARCHAR(10) NOT NULL,
-                metric_name VARCHAR(100) NOT NULL,
-                metric_name_zh VARCHAR(100) NOT NULL,
-                value DOUBLE PRECISION NOT NULL,
-                unit VARCHAR(20) NOT NULL,
-                category VARCHAR(50),
-                source_file VARCHAR(500),
-                source_page INTEGER,
-                source_table_id VARCHAR(100)
-            )
-            """,
-            """
-            CREATE TABLE documents (
-                id SERIAL PRIMARY KEY,
-                company_id INTEGER REFERENCES companies(id),
-                title VARCHAR(500) NOT NULL,
-                document_type VARCHAR(50),
-                year INTEGER,
-                parsed_text TEXT,
-                metadata_json JSONB
-            )
-            """
-        ]
+        """Get DDL statements for all tables (updated for new schema)"""
+        # Use training_data.py for comprehensive DDL
+        try:
+            from vanna_backend.training_data import ddl_statements
+            return ddl_statements
+        except ImportError:
+            # Fallback to basic schema
+            return [
+                """
+                CREATE TABLE documents (
+                    id SERIAL PRIMARY KEY,
+                    filename VARCHAR(500) NOT NULL,
+                    report_type VARCHAR(50) DEFAULT 'annual_report',
+                    is_index_report BOOLEAN DEFAULT FALSE,
+                    parent_company VARCHAR(255),
+                    index_theme VARCHAR(255),
+                    confirmed_industry VARCHAR(100),
+                    dynamic_attributes JSONB DEFAULT '{}',
+                    ai_extracted_industries JSONB DEFAULT '[]',
+                    status VARCHAR(50) DEFAULT 'pending',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX idx_documents_dynamic_attributes ON documents USING GIN (dynamic_attributes);
+                """,
+                """
+                CREATE TABLE document_companies (
+                    id SERIAL PRIMARY KEY,
+                    document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                    company_name VARCHAR(255) NOT NULL,
+                    stock_code VARCHAR(50),
+                    assigned_industry VARCHAR(100),
+                    ai_suggested_industries JSONB DEFAULT '[]',
+                    industry_source VARCHAR(50) DEFAULT 'ai_extracted',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                """,
+            ]
     
     def _get_schema_docs(self) -> List[str]:
-        """Get schema documentation"""
-        return [
-            "The 'companies' table stores master data for companies covered in annual reports",
-            "The 'metric_records' table stores financial metrics extracted from annual reports with exact values",
-            "The 'documents' table stores parsed text and metadata from annual report PDFs",
-            "fiscal_period can be 'FY' (full year), 'H1' (half year), 'Q1' (quarterly), etc.",
-            "unit can be 'CNY' (Chinese Yuan), 'USD', 'percentage', etc.",
-            "category includes 'revenue', 'profit', 'asset', 'liability', 'equity', etc."
-        ]
+        """Get schema documentation (updated for JSONB support)"""
+        try:
+            from vanna_backend.training_data import get_all_documentation
+            return get_all_documentation()
+        except ImportError:
+            # Fallback to basic documentation
+            return [
+                """
+                CRITICAL: The 'documents' table contains a JSONB column 'dynamic_attributes'.
+                This column stores dynamic metadata extracted by AI (e.g., 'index_quarter', 'is_audited').
+                
+                To query JSONB values, use PostgreSQL JSONB operators:
+                - SELECT dynamic_attributes->>'key_name' FROM documents;
+                - WHERE dynamic_attributes->>'index_quarter' = 'Q3';
+                - WHERE dynamic_attributes ? 'key_name';
+                """,
+                """
+                Industry Assignment Rules:
+                - Rule A (Index Reports): All companies get the same confirmed_industry
+                - Rule B (Annual Reports): AI extracts industries per company
+                
+                For index reports, parent_company is NULL, and index_theme defines the index name.
+                """
+            ]
     
     def _get_example_queries(self) -> List[tuple]:
-        """Get example SQL queries for training"""
-        return [
-            (
-                "SELECT year, value FROM metric_records WHERE company_id = (SELECT id FROM companies WHERE name_en = 'Tencent Holdings') AND metric_name = 'Revenue' ORDER BY year DESC",
-                "Show Tencent's revenue for the most recent years"
-            ),
-            (
-                "SELECT c.name_en, m.value, m.unit FROM metric_records m JOIN companies c ON m.company_id = c.id WHERE m.metric_name = 'Revenue' AND m.year = 2023 ORDER BY m.value DESC LIMIT 10",
-                "What are the top 10 companies by revenue in 2023?"
-            ),
-            (
-                "SELECT AVG(m.value) FROM metric_records m JOIN companies c ON m.company_id = c.id WHERE m.metric_name = 'Net Margin' AND m.year = 2023 AND c.industry = 'Technology'",
-                "What is the average net margin for technology companies in 2023?"
-            ),
-            (
-                "SELECT c.name_en, m.value FROM metric_records m JOIN companies c ON m.company_id = c.id WHERE m.metric_name = 'Revenue' AND m.year IN (2022, 2023) AND c.name_en LIKE '%Tencent%' ORDER BY m.year",
-                "Show Tencent's revenue growth from 2022 to 2023"
+        """Get example SQL queries for training (updated for JSONB)"""
+        try:
+            from vanna_backend.training_data import get_all_question_sql_pairs
+            return get_all_question_sql_pairs()
+        except ImportError:
+            # Fallback examples with JSONB queries
+            return [
+                # Basic queries
+                (
+                    "SELECT id, filename, report_type, created_at FROM documents ORDER BY created_at DESC",
+                    "List all documents in the database"
+                ),
+                # Index reports
+                (
+                    "SELECT id, filename, index_theme, confirmed_industry FROM documents WHERE is_index_report = TRUE",
+                    "Show all index reports"
+                ),
+                # JSONB queries (critical for Vanna to learn JSONB syntax)
+                (
+                    "SELECT id, filename, dynamic_attributes->>'index_quarter' AS quarter FROM documents WHERE dynamic_attributes->>'index_quarter' = 'Q3'",
+                    "Find all reports for quarter Q3"
+                ),
+                (
+                    "SELECT id, filename FROM documents WHERE dynamic_attributes->>'is_audited' = 'true'",
+                    "Find all audited reports"
+                ),
+                (
+                    "SELECT dc.company_name, dc.stock_code, dc.assigned_industry FROM document_companies dc JOIN documents d ON dc.document_id = d.id WHERE d.index_theme = 'Hang Seng Biotech Index'",
+                    "List all companies in the Hang Seng Biotech Index"
+                ),
+                (
+                    "SELECT id, filename, ai_extracted_industries FROM documents WHERE ai_extracted_industries ? 'Biotech'",
+                    "Find documents where AI extracted 'Biotech' as a potential industry"
+                ),
+            ]
+    
+    # ============================================================
+    # Dynamic Schema Injection Methods
+    # ============================================================
+    
+    async def discover_dynamic_keys(self) -> Dict[str, Any]:
+        """
+        Discover all dynamic keys stored in JSONB columns.
+        
+        This is the "Just-in-Time Schema Injection" step:
+        - Scan documents.dynamic_attributes for all keys
+        - Scan document_companies.ai_suggested_industries for values
+        - Return discovered keys for prompt enhancement
+        
+        Returns:
+            Dictionary with discovered keys, sample values, and frequency
+        """
+        import asyncpg
+        
+        try:
+            # Connect to PostgreSQL
+            conn = await asyncpg.connect(self.database_url)
+            
+            # Get all dynamic keys from documents
+            keys_rows = await conn.fetch(
+                """
+                SELECT DISTINCT jsonb_object_keys(dynamic_attributes) AS key
+                FROM documents
+                WHERE dynamic_attributes IS NOT NULL 
+                AND dynamic_attributes != '{}'::jsonb
+                ORDER BY key
+                """
             )
-        ]
+            
+            discovered_keys = [row["key"] for row in keys_rows]
+            
+            # Get sample values for each key
+            sample_values = {}
+            for key in discovered_keys[:10]:
+                sample = await conn.fetchrow(
+                    f"""
+                    SELECT dynamic_attributes->>'{key}' AS sample_value
+                    FROM documents
+                    WHERE dynamic_attributes->>'{key}' IS NOT NULL
+                    LIMIT 1
+                    """
+                )
+                if sample:
+                    sample_values[key] = sample["sample_value"]
+            
+            # Get frequency count
+            frequency_rows = await conn.fetch(
+                """
+                SELECT jsonb_object_keys(dynamic_attributes) AS key, COUNT(*) as count
+                FROM documents
+                WHERE dynamic_attributes IS NOT NULL
+                GROUP BY jsonb_object_keys(dynamic_attributes)
+                ORDER BY count DESC
+                LIMIT 20
+                """
+            )
+            
+            key_frequency = {row["key"]: row["count"] for row in frequency_rows}
+            
+            # Get AI extracted industries
+            industry_rows = await conn.fetch(
+                """
+                SELECT DISTINCT jsonb_array_elements_text(ai_extracted_industries) AS industry
+                FROM documents
+                WHERE ai_extracted_industries IS NOT NULL
+                LIMIT 20
+                """
+            )
+            
+            discovered_industries = [row["industry"] for row in industry_rows]
+            
+            await conn.close()
+            
+            result = {
+                "discovered_keys": discovered_keys,
+                "total_keys": len(discovered_keys),
+                "sample_values": sample_values,
+                "key_frequency": key_frequency,
+                "discovered_industries": discovered_industries,
+                "status": "success"
+            }
+            
+            logger.info(f"🔍 Discovered {len(discovered_keys)} dynamic keys")
+            return result
+            
+        except Exception as e:
+            logger.error(f"❌ Dynamic key discovery failed: {e}")
+            return {
+                "discovered_keys": [],
+                "status": "error",
+                "error": str(e)
+            }
+    
+    def build_enhanced_prompt(self, question: str, dynamic_info: Dict[str, Any]) -> str:
+        """
+        Build enhanced prompt with dynamic schema information.
+        
+        Args:
+            question: User's natural language question
+            dynamic_info: Discovered keys and values
+            
+        Returns:
+            Enhanced prompt for Vanna
+        """
+        discovered_keys = dynamic_info.get("discovered_keys", [])
+        sample_values = dynamic_info.get("sample_values", {})
+        discovered_industries = dynamic_info.get("discovered_industries", [])
+        
+        prompt = f"""
+用戶問題: {question}
+
+📌 重要提示：資料庫包含以下動態屬性 (存儲在 JSONB 欄位中):
+
+**documents.dynamic_attributes 可用的 Keys:**
+{json.dumps(discovered_keys, indent=2, ensure_ascii=False)}
+
+**樣本值:**
+{json.dumps(sample_values, indent=2, ensure_ascii=False)}
+
+**已發現的 AI 提取行業:**
+{json.dumps(discovered_industries, indent=2, ensure_ascii=False)}
+
+**PostgreSQL JSONB 查詢語法 (必須使用):**
+```sql
+-- 提取單一值 (返回 text)
+SELECT dynamic_attributes->>'key_name' FROM documents;
+
+-- 條件查詢 JSONB 值
+SELECT * FROM documents WHERE dynamic_attributes->>'index_quarter' = 'Q3';
+
+-- 檢查 Key 是否存在
+SELECT * FROM documents WHERE dynamic_attributes ? 'key_name';
+
+-- 查詢 JSON 數組
+SELECT * FROM documents WHERE ai_extracted_industries ? 'Biotech';
+```
+
+請根據以上信息生成正確的 SQL 查詢。如果問題涉及動態屬性，務必使用 JSONB 語法。
+"""
+        
+        return prompt
+    
+    async def generate_sql_with_dynamic_schema(self, question: str) -> Optional[str]:
+        """
+        Generate SQL with Just-in-Time Schema Injection.
+        
+        This method:
+        1. First discovers all dynamic keys in the database
+        2. Builds an enhanced prompt with JSONB query hints
+        3. Passes the enhanced prompt to Vanna
+        
+        Args:
+            question: User's natural language question
+            
+        Returns:
+            SQL query string or None if generation fails
+        """
+        try:
+            # Step 1: Discover dynamic keys
+            dynamic_info = await self.discover_dynamic_keys()
+            
+            # Step 2: Build enhanced prompt
+            if dynamic_info.get("discovered_keys"):
+                enhanced_question = self.build_enhanced_prompt(question, dynamic_info)
+                logger.debug(f"Enhanced prompt built with {len(dynamic_info['discovered_keys'])} dynamic keys")
+            else:
+                enhanced_question = question
+                logger.info("No dynamic keys found, using original question")
+            
+            # Step 3: Generate SQL with enhanced prompt
+            if not self._trained:
+                self.train_schema()
+            
+            sql = self.vn.generate_sql(question=enhanced_question)
+            
+            # Validate JSONB syntax if question involves dynamic attributes
+            if "dynamic_attributes" in str(dynamic_info.get("discovered_keys", [])):
+                if "->>" not in sql and "?" not in sql:
+                    logger.warning("Generated SQL may not have correct JSONB syntax")
+            
+            logger.info(f"Generated SQL with dynamic schema: {sql[:200]}...")
+            return sql
+            
+        except Exception as e:
+            logger.error(f"SQL generation with dynamic schema failed: {e}")
+            # Fallback to regular generation
+            return self.generate_sql(question)
+    
+    async def query_with_dynamic_schema(self, question: str) -> Dict[str, Any]:
+        """
+        Complete pipeline with dynamic schema injection.
+        
+        Args:
+            question: Natural language query
+            
+        Returns:
+            Dictionary with SQL, results, dynamic keys, and metadata
+        """
+        # Discover dynamic keys first
+        dynamic_info = await self.discover_dynamic_keys()
+        
+        # Generate SQL with enhanced prompt
+        sql = await self.generate_sql_with_dynamic_schema(question)
+        
+        if not sql:
+            return {
+                'success': False,
+                'error': 'Failed to generate SQL',
+                'question': question,
+                'dynamic_keys': dynamic_info.get('discovered_keys', [])
+            }
+        
+        # Execute SQL
+        results = self.execute(sql)
+        
+        return {
+            'success': True,
+            'question': question,
+            'sql': sql,
+            'results': results,
+            'row_count': len(results),
+            'dynamic_keys_discovered': dynamic_info.get('discovered_keys', []),
+            'dynamic_keys_count': dynamic_info.get('total_keys', 0)
+        }
     
     def generate_sql(self, question: str) -> Optional[str]:
         """

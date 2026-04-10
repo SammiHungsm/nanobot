@@ -1,478 +1,385 @@
 """
-Agentic Ingestion Module - 智能代理動態寫入
+Agentic Ingestion Module - 智能代理攝入模組
 
-這個模塊實現了「Agentic Dynamic Ingestion」架構：
-1. 首頁掃描與實體識別 (First 1-2 Pages Scan)
-2. Schema 動態反射與評估
-3. 動態資料寫入
+此模組實現了「Agentic Dynamic Ingestion」架構，使用 AI Agent 動態處理資料庫寫入。
 
-設計理念：
-- AI 只做「Schema 決策」與「Metadata 提取」
-- 大量數據寫入仍由 Python 批次處理
-- 保留人工覆核機制確保數據準確度
-
-🌟 支持指數報告特殊處理：
-- 規則 A：報告明確定義行業主題 → 所有成分股強制指派該行業
-- 規則 B：一般綜合報告 → 各公司各自 AI 提取行業
+核心特性：
+1. 動態 Metadata 提取
+2. 規則 A/B 行業分配
+3. JSONB 動態屬性支援
+4. Two-Phase Pipeline 整合
 """
 
 from __future__ import annotations
 
 import json
-import time
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
-
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 from loguru import logger
 
-if TYPE_CHECKING:
-    from nanobot.agent.loop import AgentLoop
 
+# ============================================================
+# 核心系統提示 (System Prompt)
+# ============================================================
 
-@dataclass
-class DocumentAnalysis:
-    """文檔分析結果"""
-    document_type: Optional[str] = None
-    parent_company: Optional[str] = None
-    parent_stock_code: Optional[str] = None
-    is_index_report: bool = False
-    index_theme: Optional[str] = None
-    confirmed_doc_industry: Optional[str] = None
-    subsidiaries: List[Dict[str, Any]] = field(default_factory=list)
-    fiscal_year: Optional[int] = None
-    ai_industries: Optional[List[str]] = None
-    dynamic_attributes: Dict[str, Any] = field(default_factory=dict)
-    confidence_scores: Dict[str, float] = field(default_factory=dict)
-
-
-class AgenticIngestionPipeline:
-    """
-    智能代理動態寫入管道
-    
-    流程：
-    1. 解析 PDF 前 1-2 頁
-    2. 呼叫 Agent 分析實體信息
-    3. 動態寫入數據庫
-    4. 創建待覆核記錄
-    """
-    
-    # Agent 系統提示詞 (支持指數報告特殊處理)
-    INGESTION_SYSTEM_PROMPT = """你是 Nanobot 專業金融資料提取代理。我會提供給你一份金融文件的前 1-2 頁內容。
+INGESTION_SYSTEM_PROMPT = """
+你是 Nanobot 專業金融資料提取代理。我會提供給你一份金融文件的前 1-2 頁內容。
 你的任務是提取核心 Metadata，並準備寫入資料庫。
 
-請嚴格遵守以下邏輯判斷：
+## 📋 你的職責
 
-## 1. 報告類型識別
+1. **報告類型識別**
+   - Annual Report (年報): 單一公司的財務報告
+   - Index Report (指數報告): 市場/指數報告，涵蓋多間成分股
 
-判斷這是一般公司的財報 (annual_report)，還是市場/指數報告 (index_report)。
+2. **母公司提取規則**
+   - Annual Report → 提取母公司名稱
+   - Index Report → parent_company = null
 
-**識別特徵**：
-- 年報 (annual_report)：有單一母公司名稱、股票代碼
-- 指數報告 (index_report)：如 "Hang Seng Index"、"恒生指數"、"HSI Biotech Index" 等，包含多間成分股
+3. **行業分配規則 ⭐ 核心邏輯**
 
-## 2. 母公司 (Parent Company) 提取
+### 規則 A - 明確定義的行業主題
+**觸發條件:**
+- 報告名稱包含行業關鍵字 (如 "Biotech Index", "Healthcare Index")
+- 或前言明確說明主題
 
-- **如果是一般財報**：提取母公司名稱和股票代碼
-- **如果是指數報告**：因為它涵蓋多間公司，請將 `parent_company` 設為 null，並將 `is_index_report` 設為 true
+**執行步驟:**
+1. 設定 `confirmed_doc_industry` = 該行業 (如 "Biotech")
+2. 設定 `index_theme` = 報告主題 (如 "Hang Seng Biotech Index")
+3. **所有成分股的 assigned_industry 都強制設為這個行業**
+4. **絕對不要**再為各公司產生 AI Industry 預測
 
-## 3. 行業 (Industry) 提取與傳遞原則 🌟 核心邏輯
+**範例輸入:**
+```
+Hang Seng Biotech Index
+Quarterly Review Q3 2024
 
-仔細閱讀前 1-2 頁。判斷這份報告是否**明確定義了一個單一的行業主題**：
+This report covers the 50 constituents of the Hang Seng Biotech Index...
+Companies: Company A (0001.HK), Company B (0002.HK)...
+```
 
-### 規則 A：明確定義的行業主題
-
-**條件**：報告標題或前言明確定義了行業主題
-- 例如："Hang Seng Biotech Index" → 全部都是 Biotech
-- 例如："恒生科技指數" → 全部都是 Technology
-
-**執行**：
-1. 將該行業設為 `confirmed_doc_industry`（如 "Biotech"）
-2. 設置 `index_theme` 為指數名稱（如 "Hang Seng Biotech Index"）
-3. **重要**：報告中列出的**所有成分股**，都必須強制指派這個 Industry
-4. **絕對不要**再為各成分股各自產生多重 (Multiple) 的 AI Industry 預測
-
-### 規則 B：無明確單一主題
-
-**條件**：一般綜合報告，沒有定義單一 Industry
-- 例如：綜合年報、跨行業集團報告
-
-**執行**：
-1. `confirmed_doc_industry` 設為 null
-2. 為每一間子公司/成分股各自提取可能的 `ai_industries`（可以是 List）
-
-## 4. 成分股/子公司提取
-
-對於指數報告，提取所有成分股：
-- 公司名稱 (中英文)
-- 股票代碼
-- 關係類型：`index_constituent`（指數報告）或 `subsidiary`（一般年報）
-
-## 5. 動態屬性 (Dynamic Attributes)
-
-如果你發現重要但不在實體 Schema 的資訊：
-- 報告發布季度
-- 指數編制規則版本
-- 審計師
-- 特殊事項
-
-請放入 `dynamic_attributes` 中（JSON 格式）。
-
-## 6. 執行寫入
-
-完成分析後，呼叫 `smart_insert_document` 工具寫入數據庫。
-
----
-
-## 輸出格式
-
-請以 JSON 格式返回分析結果：
-
+**範例輸出:**
 ```json
 {
-    "document_type": "index_report",
+    "report_type": "index_report",
     "parent_company": null,
-    "parent_stock_code": null,
-    "is_index_report": true,
     "index_theme": "Hang Seng Biotech Index",
     "confirmed_doc_industry": "Biotech",
-    "fiscal_year": 2024,
-    "ai_industries": null,
-    "subsidiaries": [
-        {
-            "name": "Sino Biopharmaceutical",
-            "stock_code": "01177",
-            "relation_type": "index_constituent",
-            "ai_industries": null
-        }
-    ],
-    "dynamic_attributes": {
-        "index_quarter": "Q3",
-        "constituent_count": 50
-    },
-    "confidence_scores": {
-        "document_type": 0.95,
-        "confirmed_doc_industry": 0.98
-    }
+    "industry_assignment_rule": "A",
+    "sub_companies": [
+        {"name": "Company A", "stock_code": "0001.HK"},
+        {"name": "Company B", "stock_code": "0002.HK"}
+    ]
 }
 ```
 
-**注意**：當 `confirmed_doc_industry` 有值時，`subsidiaries` 中的 `ai_industries` 應為 null（規則 A）。
+### 規則 B - 無明確單一主題
+**觸發條件:**
+- 綜合指數報告 (如恆生指數，涵蓋多行業)
+- 一般年報
+
+**執行步驟:**
+1. `confirmed_doc_industry` = null
+2. 為每間公司提取 `ai_industries` (可能是多個行業的 List)
+
+**範例輸入:**
+```
+ABC Corporation Limited
+Annual Report 2024
+
+ABC Corporation is a leading technology company...
+Business segments: Software, Hardware, Cloud Services...
+```
+
+**範例輸出:**
+```json
+{
+    "report_type": "annual_report",
+    "parent_company": "ABC Corporation Limited",
+    "index_theme": null,
+    "confirmed_doc_industry": null,
+    "industry_assignment_rule": "B",
+    "sub_companies": [],
+    "ai_extracted_industries": ["Technology", "Software", "Hardware"]
+}
+```
+
+4. **動態屬性 (Dynamic Attributes)**
+如果發現重要但不在實體 Schema 的資訊，請放入 JSONB 格式的 `dynamic_data` 中：
+
+```json
+{
+    "report_quarter": "Q3",
+    "report_year": "2024",
+    "index_version": "v2.1",
+    "constituent_count": 50,
+    "base_date": "2024-01-01",
+    "is_audited": true,
+    "currency": "HKD",
+    "reporting_standard": "IFRS"
+}
+```
+
+## 📤 輸出格式
+
+完成分析後，呼叫 `smart_insert_document_tool`，傳入以下參數：
+
+```json
+{
+    "filename": "report.pdf",
+    "report_type": "index_report",
+    "parent_company": null,
+    "index_theme": "Hang Seng Biotech Index",
+    "confirmed_doc_industry": "Biotech",
+    "dynamic_data": {
+        "report_quarter": "Q3",
+        "report_year": "2024"
+    },
+    "sub_companies": [
+        {"name": "Company A", "stock_code": "0001.HK"},
+        {"name": "Company B", "stock_code": "0002.HK"}
+    ],
+    "industry_assignment_rule": "A"
+}
+```
+
+## ⚠️ 重要提醒
+
+1. **嚴格遵守規則 A/B** - 不要混淆兩種情況
+2. **股票代碼格式** - 使用標準格式如 `0001.HK`, `0700.HK`
+3. **行業命名一致性** - 使用標準行業分類 (Technology, Healthcare, Finance, etc.)
+4. **null 值處理** - Index Report 的 parent_company 必須是 null
+5. **動態屬性靈活性** - 可以添加任何有意義的額外屬性
+
+請開始分析文件內容。
 """
+
+
+# ============================================================
+# Agentic Ingestion Orchestrator
+# ============================================================
+
+class AgenticIngestionOrchestrator:
+    """
+    智能攝入協調器
     
-    def __init__(self, agent_loop: AgentLoop = None):
+    協調 Agent、Tools 和 Pipeline 之間的交互
+    """
+    
+    def __init__(self, agent_runner=None, tools_registry=None):
         """
-        初始化
+        初始化協調器
         
         Args:
-            agent_loop: AgentLoop 實例 (如果為 None，會創建新的)
+            agent_runner: Agent Runner 實例
+            tools_registry: Tools 註冊表
         """
-        self.agent_loop = agent_loop
-        self._tools_registered = False
-    
-    def _ensure_tools_registered(self):
-        """確保 Ingestion Tools 已註冊"""
-        if self._tools_registered:
-            return
+        self.agent_runner = agent_runner
+        self.tools_registry = tools_registry
         
-        if self.agent_loop:
+        # 註冊必要的 Tools
+        self._register_tools()
+        
+        logger.info("🤖 Agentic Ingestion Orchestrator 初始化完成")
+    
+    def _register_tools(self):
+        """註冊必要的 Tools"""
+        if self.tools_registry:
             from nanobot.agent.tools.db_ingestion_tools import register_ingestion_tools
-            register_ingestion_tools(self.agent_loop.tools)
-            self._tools_registered = True
+            from nanobot.agent.tools.dynamic_schema_tools import register_dynamic_schema_tools
+            
+            register_ingestion_tools(self.tools_registry)
+            register_dynamic_schema_tools(self.tools_registry)
     
-    async def analyze_document(
+    async def process_document(
         self,
-        pdf_path: str,
-        pages_to_scan: int = 2
-    ) -> DocumentAnalysis:
-        """
-        分析文檔前幾頁，提取實體信息
-        
-        Args:
-            pdf_path: PDF 文件路徑
-            pages_to_scan: 掃描頁數 (默認前 2 頁)
-        
-        Returns:
-            DocumentAnalysis: 分析結果
-        """
-        self._ensure_tools_registered()
-        
-        logger.info(f"🔍 Analyzing document: {pdf_path} (first {pages_to_scan} pages)")
-        
-        # 1. 提取前幾頁文本
-        intro_text = await self._extract_first_pages(pdf_path, pages_to_scan)
-        
-        if not intro_text:
-            logger.warning(f"⚠️ No text extracted from {pdf_path}")
-            return DocumentAnalysis()
-        
-        # 2. 調用 Agent 分析
-        prompt = f"""請分析以下金融文件的前 {pages_to_scan} 頁內容，提取關鍵實體信息。
-
-文件路徑: {pdf_path}
-
-=== 文件內容 ===
-{intro_text[:8000]}
-
-請按照系統提示中指定的 JSON 格式返回分析結果。記住：
-- 如果是指數報告且有明確行業主題，使用規則 A
-- 如果是一般綜合報告，使用規則 B
-"""
-        
-        try:
-            # 調用 Agent
-            response = await self.agent_loop.process_direct(
-                content=prompt,
-                session_key="ingestion:analysis"
-            )
-            
-            # 解析結果
-            content = response.content if response else ""
-            analysis = self._parse_analysis_result(content)
-            
-            logger.info(f"✅ Analysis complete: "
-                       f"type={analysis.document_type}, "
-                       f"is_index={analysis.is_index_report}, "
-                       f"parent={analysis.parent_company}, "
-                       f"subsidiaries={len(analysis.subsidiaries)}, "
-                       f"confirmed_industry={analysis.confirmed_doc_industry}")
-            
-            return analysis
-            
-        except Exception as e:
-            logger.exception(f"❌ Failed to analyze document: {e}")
-            return DocumentAnalysis()
-    
-    async def _extract_first_pages(
-        self,
-        pdf_path: str,
-        pages: int
-    ) -> str:
-        """
-        提取 PDF 前幾頁文本
-        
-        Args:
-            pdf_path: PDF 文件路徑
-            pages: 頁數
-        
-        Returns:
-            str: 提取的文本內容
-        """
-        try:
-            import fitz  # PyMuPDF
-        except ImportError:
-            logger.error("PyMuPDF not installed. Install with: pip install pymupdf")
-            return ""
-        
-        text_parts = []
-        
-        try:
-            with fitz.open(pdf_path) as doc:
-                for page_num in range(min(pages, len(doc))):
-                    page = doc[page_num]
-                    page_text = page.get_text()
-                    text_parts.append(f"=== Page {page_num + 1} ===\n{page_text}")
-            
-            return "\n\n".join(text_parts)
-            
-        except Exception as e:
-            logger.exception(f"Failed to extract text from PDF: {e}")
-            return ""
-    
-    def _parse_analysis_result(self, content: str) -> DocumentAnalysis:
-        """
-        解析 Agent 返回的分析結果
-        
-        Args:
-            content: Agent 返回的文本
-        
-        Returns:
-            DocumentAnalysis: 結構化的分析結果
-        """
-        # 嘗試從內容中提取 JSON
-        try:
-            # 找到 JSON 塊
-            json_start = content.find('{')
-            json_end = content.rfind('}') + 1
-            
-            if json_start >= 0 and json_end > json_start:
-                json_str = content[json_start:json_end]
-                data = json.loads(json_str)
-                
-                return DocumentAnalysis(
-                    document_type=data.get('document_type'),
-                    parent_company=data.get('parent_company'),
-                    parent_stock_code=data.get('parent_stock_code'),
-                    is_index_report=data.get('is_index_report', False),
-                    index_theme=data.get('index_theme'),
-                    confirmed_doc_industry=data.get('confirmed_doc_industry'),
-                    subsidiaries=data.get('subsidiaries', []),
-                    fiscal_year=data.get('fiscal_year'),
-                    ai_industries=data.get('ai_industries'),
-                    dynamic_attributes=data.get('dynamic_attributes', {}),
-                    confidence_scores=data.get('confidence_scores', {})
-                )
-        except json.JSONDecodeError as e:
-            logger.warning(f"Failed to parse JSON from agent response: {e}")
-        except Exception as e:
-            logger.exception(f"Unexpected error parsing analysis result: {e}")
-        
-        return DocumentAnalysis()
-    
-    async def ingest_with_agent(
-        self,
-        pdf_path: str,
+        document_content: str,
         filename: str,
-        task_id: str = None,
-        **kwargs
+        user_hints: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
-        使用 Agent 執行完整的智能寫入流程
+        處理單個文檔
         
         Args:
-            pdf_path: PDF 文件路徑
-            filename: 原始文件名
-            task_id: 任務 ID (可選)
-            **kwargs: 其他參數 (company_id, year 等)
+            document_content: PDF 前 1-2 頁內容
+            filename: 檔案名稱
+            user_hints: 用戶提供的提示
         
         Returns:
-            Dict: 包含 document_id 和處理結果
+            處理結果
         """
-        self._ensure_tools_registered()
+        logger.info(f"📄 開始處理文檔: {filename}")
         
-        start_time = time.time()
+        # 構建完整 Prompt
+        prompt = self._build_prompt(document_content, filename, user_hints)
         
-        logger.info(f"🚀 Starting agentic ingestion for: {filename}")
+        # 如果有 Agent，使用 Agent 處理
+        if self.agent_runner:
+            return await self._process_with_agent(prompt)
         
-        # 1. 分析文檔
-        analysis = await self.analyze_document(pdf_path)
+        # 否則使用規則處理
+        return await self._process_with_rules(document_content, filename, user_hints)
+    
+    def _build_prompt(
+        self,
+        document_content: str,
+        filename: str,
+        user_hints: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """構建完整的 Agent Prompt"""
+        prompt = f"""
+{INGESTION_SYSTEM_PROMPT}
+
+---
+
+📄 **文件名稱**: {filename}
+"""
+
+        if user_hints:
+            prompt += f"""
+📌 **用戶提供的提示信息**:
+"""
+            for key, value in user_hints.items():
+                prompt += f"- {key}: {value}\n"
         
-        # 2. 調用智能寫入 Tool
-        insert_prompt = f"""請使用 smart_insert_document 工具將以下分析結果寫入數據庫：
+        prompt += f"""
+📄 **文件內容 (前 1-2 頁)**:
+```
+{document_content[:8000]}  # 限制長度避免超過 Token 限制
+```
 
-文件名: {filename}
-文件路徑: {pdf_path}
+---
 
-分析結果:
-{json.dumps(analysis.__dict__, indent=2, ensure_ascii=False, default=str)}
-
-重要提醒：
-- 如果 confirmed_doc_industry 有值，表示使用規則 A（所有成分股強制指派該行業）
-- 如果 confirmed_doc_industry 為 null，表示使用規則 B（各公司各自 AI 提取行業）
-
-請執行寫入操作並返回結果。
+請分析以上內容，提取 Metadata 並呼叫 smart_insert_document_tool。
 """
         
-        try:
-            response = await self.agent_loop.process_direct(
-                content=insert_prompt,
-                session_key="ingestion:insert"
-            )
-            
-            # 解析結果
-            content = response.content if response else ""
-            
-            # 嘗試提取 document_id
-            document_id = None
-            try:
-                json_start = content.find('{')
-                json_end = content.rfind('}') + 1
-                if json_start >= 0 and json_end > json_start:
-                    result = json.loads(content[json_start:json_end])
-                    document_id = result.get('document_id')
-            except:
-                pass
-            
-            elapsed = time.time() - start_time
-            
-            logger.info(f"✅ Agentic ingestion completed in {elapsed:.2f}s")
-            
-            return {
-                "success": True,
-                "document_id": document_id,
-                "analysis": {
-                    "document_type": analysis.document_type,
-                    "is_index_report": analysis.is_index_report,
-                    "index_theme": analysis.index_theme,
-                    "confirmed_doc_industry": analysis.confirmed_doc_industry,
-                    "parent_company": analysis.parent_company,
-                    "subsidiaries_count": len(analysis.subsidiaries),
-                    "industry_rule": "A (report_defined)" if analysis.confirmed_doc_industry else "B (ai_extracted)"
-                },
-                "elapsed_seconds": elapsed,
-                "task_id": task_id
-            }
-            
-        except Exception as e:
-            logger.exception(f"❌ Agentic ingestion failed: {e}")
-            return {
-                "success": False,
-                "error": str(e),
-                "task_id": task_id
-            }
-
-
-# ============================================================
-# 便捷函數
-# ============================================================
-
-async def run_agentic_ingestion(
-    pdf_path: str,
-    filename: str,
-    agent_loop: AgentLoop = None,
-    task_id: str = None
-) -> Dict[str, Any]:
-    """
-    執行智能代理動態寫入
+        return prompt
     
-    這是主要的入口函數，用於在 Pipeline 中調用
+    async def _process_with_agent(self, prompt: str) -> Dict[str, Any]:
+        """使用 Agent 處理"""
+        try:
+            result = await self.agent_runner.run(prompt)
+            return result
+        except Exception as e:
+            logger.error(f"❌ Agent 處理失敗: {e}")
+            return {"success": False, "error": str(e)}
+    
+    async def _process_with_rules(
+        self,
+        document_content: str,
+        filename: str,
+        user_hints: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """使用規則處理 (無 Agent 時的 fallback)"""
+        from nanobot.agent.tools.db_ingestion_tools import SmartInsertDocumentTool
+        
+        logger.info("📋 使用規則模式處理")
+        
+        # 如果用戶提供了提示，優先使用
+        if user_hints:
+            report_type = user_hints.get("doc_type", "annual_report")
+            index_theme = user_hints.get("index_theme")
+            confirmed_industry = user_hints.get("confirmed_doc_industry")
+            
+            params = {
+                "filename": filename,
+                "report_type": report_type,
+                "parent_company": None if report_type == "index_report" else "待提取",
+                "index_theme": index_theme,
+                "confirmed_doc_industry": confirmed_industry,
+                "dynamic_data": user_hints.get("dynamic_data", {}),
+                "sub_companies": user_hints.get("sub_companies", []),
+                "industry_assignment_rule": "A" if confirmed_industry else "B"
+            }
+            
+            tool = SmartInsertDocumentTool()
+            return await tool.execute(**params)
+        
+        # 嘗試從內容識別
+        content_lower = document_content.lower()
+        
+        # 偵測報告類型
+        is_index_report = any(kw in content_lower for kw in [
+            "index", "指數", "constituent", "成分股",
+            "hang seng", "恆生"
+        ])
+        
+        # 提取指數主題
+        index_theme = None
+        confirmed_industry = None
+        
+        if is_index_report:
+            # 嘗試提取指數主題
+            import re
+            patterns = [
+                (r"Hang\s+Seng\s+Biotech\s+Index", "Biotech"),
+                (r"Hang\s+Seng\s+Tech\s+Index", "Technology"),
+                (r"Hang\s+Seng\s+Healthcare\s+Index", "Healthcare"),
+                (r"Hang\s+Seng\s+(\w+)\s+Index", None),
+                (r"恒生生物科技指數", "Biotech"),
+                (r"恒生科技指數", "Technology"),
+            ]
+            
+            for pattern, industry in patterns:
+                match = re.search(pattern, document_content, re.IGNORECASE)
+                if match:
+                    index_theme = match.group(0)
+                    confirmed_industry = industry
+                    break
+        
+        params = {
+            "filename": filename,
+            "report_type": "index_report" if is_index_report else "annual_report",
+            "parent_company": None if is_index_report else "待提取",
+            "index_theme": index_theme,
+            "confirmed_doc_industry": confirmed_industry,
+            "dynamic_data": {},
+            "sub_companies": [],
+            "industry_assignment_rule": "A" if confirmed_industry else "B"
+        }
+        
+        tool = SmartInsertDocumentTool()
+        return await tool.execute(**params)
+
+
+# ============================================================
+# 便利函數
+# ============================================================
+
+def get_ingestion_system_prompt() -> str:
+    """獲取攝入系統提示"""
+    return INGESTION_SYSTEM_PROMPT
+
+
+def create_extraction_prompt(document_content: str, filename: str) -> str:
+    """
+    創建提取 Prompt
     
     Args:
-        pdf_path: PDF 文件路徑
-        filename: 原始文件名
-        agent_loop: AgentLoop 實例 (可選，會自動創建)
-        task_id: 任務 ID (可選)
+        document_content: 文檔內容
+        filename: 檔案名稱
     
     Returns:
-        Dict: 包含 document_id 和處理結果
-    
-    Usage:
-        from nanobot.ingestion.agentic_ingestion import run_agentic_ingestion
-        
-        result = await run_agentic_ingestion(
-            pdf_path="/path/to/report.pdf",
-            filename="Annual Report 2024.pdf"
-        )
-        
-        print(f"Document ID: {result['document_id']}")
-        print(f"Industry Rule: {result['analysis']['industry_rule']}")
+        完整的 Agent Prompt
     """
-    if agent_loop is None:
-        # 創建默認 AgentLoop
-        from nanobot.agent.loop import AgentLoop
-        from nanobot.bus.queue import MessageBus
-        from nanobot.config.loader import load_config, resolve_config_env_vars
-        
-        config = resolve_config_env_vars(load_config())
-        bus = MessageBus()
-        
-        # 創建 provider (簡化版)
-        from nanobot.providers.openai_compat_provider import OpenAICompatProvider
-        provider = OpenAICompatProvider(
-            api_key=config.get_provider(config.agents.defaults.model).api_key,
-            default_model=config.agents.defaults.model
-        )
-        
-        agent_loop = AgentLoop(
-            bus=bus,
-            provider=provider,
-            workspace=config.workspace_path,
-            model=config.agents.defaults.model
-        )
-    
-    pipeline = AgenticIngestionPipeline(agent_loop=agent_loop)
-    return await pipeline.ingest_with_agent(
-        pdf_path=pdf_path,
-        filename=filename,
-        task_id=task_id
-    )
+    return f"""
+{INGESTION_SYSTEM_PROMPT}
+
+---
+
+📄 **文件名稱**: {filename}
+
+📄 **文件內容**:
+```
+{document_content[:8000]}
+```
+
+請分析以上內容並提取 Metadata。
+"""
+
+
+# ============================================================
+# 日誌
+# ============================================================
+
+logger.info("✅ Agentic Ingestion 模組已載入")

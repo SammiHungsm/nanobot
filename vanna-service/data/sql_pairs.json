@@ -197,6 +197,42 @@
       "tags": ["document_pages", "fallback", "esg", "sustainability"]
     },
     {
+      "id": "dynamic_query_001",
+      "question": "Find all index reports for quarter Q3",
+      "sql": "SELECT filename, index_theme, confirmed_industry FROM documents WHERE is_index_report = TRUE AND dynamic_attributes->>'index_quarter' = 'Q3';",
+      "tags": ["dynamic_attributes", "jsonb", "index_report", "quarter"]
+    },
+    {
+      "id": "dynamic_query_002",
+      "question": "List all documents with base_date in 2024",
+      "sql": "SELECT filename, dynamic_attributes->>'base_date' as base_date FROM documents WHERE dynamic_attributes ? 'base_date' AND dynamic_attributes->>'base_date' LIKE '2024%';",
+      "tags": ["dynamic_attributes", "jsonb", "date_filter"]
+    },
+    {
+      "id": "index_report_001",
+      "question": "Show all Hang Seng Biotech Index constituent companies",
+      "sql": "SELECT dc.company_name, dc.stock_code, dc.assigned_industry, d.index_theme FROM document_companies dc JOIN documents d ON dc.document_id = d.id WHERE d.index_theme ILIKE '%Biotech%' AND d.is_index_report = TRUE ORDER BY dc.stock_code;",
+      "tags": ["index_report", "biotech", "constituents", "rule_a"]
+    },
+    {
+      "id": "industry_assignment_001",
+      "question": "Find companies with Biotech in their AI suggested industries",
+      "sql": "SELECT dc.company_name, dc.stock_code, dc.ai_suggested_industries, dc.industry_source FROM document_companies dc WHERE dc.ai_suggested_industries ? 'Biotech' AND dc.industry_source = 'ai_extracted';",
+      "tags": ["ai_industries", "jsonb", "rule_b", "biotech"]
+    },
+    {
+      "id": "annual_report_001",
+      "question": "List all annual reports for Tencent Holdings",
+      "sql": "SELECT filename, parent_company, dynamic_attributes->>'report_year' as year FROM documents WHERE parent_company ILIKE '%Tencent%' AND report_type = 'annual_report' ORDER BY created_at DESC;",
+      "tags": ["annual_report", "tencent", "parent_company"]
+    },
+    {
+      "id": "pending_review_001",
+      "question": "Show documents pending human review",
+      "sql": "SELECT d.filename, rq.review_type, rq.priority, rq.notes FROM documents d JOIN data_review_queue rq ON d.id = rq.document_id WHERE rq.status = 'pending' ORDER BY rq.priority DESC;",
+      "tags": ["review_queue", "human_review", "pending"]
+    },
+    {
       "id": "fallback_risk_factors_001",
       "question": "What are the risk factors mentioned in the report?",
       "sql": "SELECT page_num, markdown_content FROM document_pages WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND (markdown_content ILIKE '%risk factor%' OR markdown_content ILIKE '%主要風險%' OR markdown_content ILIKE '%uncertainty%' OR markdown_content ILIKE '%風險因素%') LIMIT 5;",
@@ -243,6 +279,80 @@
       "question": "What is the company's approach to corporate governance?",
       "sql": "SELECT page_num, markdown_content FROM document_pages WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND (markdown_content ILIKE '%corporate governance%' OR markdown_content ILIKE '%企業管治%' OR markdown_content ILIKE '%公司治理%') LIMIT 5;",
       "tags": ["document_pages", "fallback", "governance", "corporate"]
+    },
+    {
+      "id": "dynamic_query_001",
+      "question": "Find all index reports for quarter Q3",
+      "sql": "SELECT filename, index_theme, confirmed_industry FROM documents WHERE is_index_report = TRUE AND dynamic_attributes->>'index_quarter' = 'Q3';",
+      "tags": ["dynamic_attributes", "jsonb", "index_report"],
+      "note": "Uses JSONB -> operator to query dynamic attribute 'index_quarter'"
+    },
+    {
+      "id": "dynamic_query_002",
+      "question": "List all documents with a specific dynamic attribute key",
+      "sql": "SELECT filename, dynamic_attributes->>'index_quarter' as quarter FROM documents WHERE dynamic_attributes ? 'index_quarter';",
+      "tags": ["dynamic_attributes", "jsonb", "key_exists"],
+      "note": "Uses JSONB ? operator to check if key exists"
+    },
+    {
+      "id": "dynamic_query_003",
+      "question": "Find documents that mention Biotech in their AI-extracted industries",
+      "sql": "SELECT filename, ai_extracted_industries FROM documents WHERE ai_extracted_industries ? 'Biotech';",
+      "tags": ["ai_extracted_industries", "jsonb", "array_query"],
+      "note": "Uses JSONB ? operator to query array values"
+    },
+    {
+      "id": "document_companies_001",
+      "question": "List all companies from the Hang Seng Biotech Index report",
+      "sql": "SELECT dc.company_name, dc.stock_code, dc.assigned_industry, dc.industry_source FROM document_companies dc JOIN documents d ON dc.document_id = d.id WHERE d.index_theme = 'Hang Seng Biotech Index';",
+      "tags": ["document_companies", "documents", "index_report", "rule_a"],
+      "note": "Rule A: all companies have assigned_industry = 'Biotech' with industry_source = 'confirmed'"
+    },
+    {
+      "id": "document_companies_002",
+      "question": "Show documents where industry was confirmed (Rule A applied)",
+      "sql": "SELECT d.filename, d.confirmed_industry, d.index_theme, COUNT(dc.id) as company_count FROM documents d JOIN document_companies dc ON d.id = dc.document_id WHERE dc.industry_source = 'confirmed' GROUP BY d.id, d.filename, d.confirmed_industry, d.index_theme;",
+      "tags": ["document_companies", "documents", "rule_a", "confirmed"],
+      "note": "Rule A: industry_source = 'confirmed' means forced industry assignment"
+    },
+    {
+      "id": "document_companies_003",
+      "question": "Show documents where industry was AI-extracted (Rule B applied)",
+      "sql": "SELECT d.filename, dc.company_name, dc.ai_suggested_industries, dc.assigned_industry FROM documents d JOIN document_companies dc ON d.id = dc.document_id WHERE dc.industry_source = 'ai_extracted';",
+      "tags": ["document_companies", "documents", "rule_b", "ai_extracted"],
+      "note": "Rule B: industry_source = 'ai_extracted' means AI suggested industries"
+    },
+    {
+      "id": "review_queue_001",
+      "question": "Show all pending reviews for uncertain AI decisions",
+      "sql": "SELECT rq.id, d.filename, rq.review_type, rq.ai_suggestion, rq.confidence, rq.reason FROM review_queue rq JOIN documents d ON rq.document_id = d.id WHERE rq.status = 'pending' ORDER BY rq.confidence ASC;",
+      "tags": ["review_queue", "documents", "pending", "human_review"]
+    },
+    {
+      "id": "processing_history_001",
+      "question": "Check the processing status of a document",
+      "sql": "SELECT d.filename, dph.stage, dph.status, dph.metadata, dph.created_at FROM document_processing_history dph JOIN documents d ON dph.document_id = d.id WHERE d.filename = 'hsi_biotech_q3_2024.pdf' ORDER BY dph.created_at DESC;",
+      "tags": ["document_processing_history", "documents", "processing", "status"]
+    },
+    {
+      "id": "get_dynamic_keys_001",
+      "question": "What dynamic attribute keys are available in documents?",
+      "sql": "SELECT DISTINCT jsonb_object_keys(dynamic_attributes) AS key, COUNT(*) as usage_count FROM documents WHERE dynamic_attributes IS NOT NULL GROUP BY jsonb_object_keys(dynamic_attributes) ORDER BY usage_count DESC;",
+      "tags": ["dynamic_attributes", "jsonb", "keys", "discovery"],
+      "note": "Discover all available dynamic attribute keys for Just-in-Time Schema Injection"
+    },
+    {
+      "id": "index_report_summary_001",
+      "question": "Summarize all index reports by theme and quarter",
+      "sql": "SELECT index_theme, dynamic_attributes->>'index_quarter' as quarter, COUNT(*) as document_count, confirmed_industry FROM documents WHERE is_index_report = TRUE GROUP BY index_theme, dynamic_attributes->>'index_quarter', confirmed_industry ORDER BY document_count DESC;",
+      "tags": ["documents", "index_report", "dynamic_attributes", "summary"],
+      "note": "Uses JSONB -> operator to extract quarter for grouping"
+    },
+    {
+      "id": "company_by_document_001",
+      "question": "Find which documents contain a specific company",
+      "sql": "SELECT d.filename, d.report_type, d.index_theme, dc.assigned_industry, dc.industry_source FROM documents d JOIN document_companies dc ON d.id = dc.document_id WHERE dc.company_name ILIKE '%Tencent%' OR dc.stock_code = '00700';",
+      "tags": ["document_companies", "documents", "company_search", "join"]
     }
   ]
 }

@@ -1,7 +1,42 @@
 {
   "description": "DDL Whitelist for Vanna - Allowed Tables and Columns",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "allowed_tables": [
+    {
+      "name": "documents",
+      "allowed_columns": ["id", "filename", "report_type", "is_index_report", "parent_company", "index_theme", "confirmed_industry", "ai_extracted_industries", "dynamic_attributes", "created_at", "updated_at"],
+      "note": "Main document table for Agentic Dynamic Ingestion. Supports JSONB dynamic_attributes and Rule A/B industry assignment."
+    },
+    {
+      "name": "document_companies",
+      "allowed_columns": ["id", "document_id", "company_name", "stock_code", "assigned_industry", "ai_suggested_industries", "industry_source", "created_at"],
+      "note": "Companies linked to documents. industry_source = 'confirmed' (Rule A) or 'ai_extracted' (Rule B)."
+    },
+    {
+      "name": "document_processing_history",
+      "allowed_columns": ["id", "document_id", "stage", "status", "metadata", "created_at"],
+      "note": "Tracks document processing stages (agent_ingestion, opendataloader, etc.)"
+    },
+    {
+      "name": "document_chunks",
+      "allowed_columns": ["id", "document_id", "chunk_index", "content", "embedding", "created_at"],
+      "note": "Text chunks extracted from documents for RAG search"
+    },
+    {
+      "name": "document_tables",
+      "allowed_columns": ["id", "document_id", "table_index", "table_data", "bounding_box", "created_at"],
+      "note": "Tables extracted from documents"
+    },
+    {
+      "name": "review_queue",
+      "allowed_columns": ["id", "document_id", "review_type", "ai_suggestion", "confidence", "reason", "context", "status", "reviewed_by", "reviewed_at", "final_decision", "created_at"],
+      "note": "Human review queue for uncertain AI decisions"
+    },
+    {
+      "name": "vanna_training_data",
+      "allowed_columns": ["id", "training_type", "content", "created_at"],
+      "note": "Vanna training data storage"
+    },
     {
       "name": "companies",
       "allowed_columns": ["id", "stock_code", "name_en_index", "name_en_extracted", "name_zh_extracted", "name_en", "name_zh", "industry", "sector", "auditor", "auditor_opinion", "ultimate_controlling_shareholder", "principal_banker", "listing_status", "listing_date"]

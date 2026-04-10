@@ -23,6 +23,41 @@
       "category": "critical"
     },
     {
+      "id": "jsonb_dynamic_attributes",
+      "content": "CRITICAL: The 'documents' and 'document_companies' tables contain JSONB columns named 'dynamic_attributes' and 'ai_suggested_industries'. These columns store dynamic metadata extracted by AI (e.g., 'index_quarter', 'report_version', 'base_date').",
+      "category": "critical"
+    },
+    {
+      "id": "jsonb_dynamic_query",
+      "content": "To query values inside dynamic_attributes, MUST use the PostgreSQL JSONB operator ->>. Example: SELECT filename FROM documents WHERE dynamic_attributes->>'index_quarter' = 'Q3';",
+      "category": "critical"
+    },
+    {
+      "id": "jsonb_key_exists",
+      "content": "To check if a key exists in JSONB, use the ? operator: SELECT * FROM documents WHERE dynamic_attributes ? 'base_date';",
+      "category": "example"
+    },
+    {
+      "id": "jsonb_array_query",
+      "content": "For JSONB arrays like ai_suggested_industries, use ? to check if an element exists: SELECT * FROM document_companies WHERE ai_suggested_industries ? 'Biotech';",
+      "category": "example"
+    },
+    {
+      "id": "rule_a_industry",
+      "content": "Rule A (Index Reports): When confirmed_industry is set, all constituent companies have assigned_industry = confirmed_industry and industry_source = 'confirmed'.",
+      "category": "definition"
+    },
+    {
+      "id": "rule_b_industry",
+      "content": "Rule B (Annual Reports): When confirmed_industry is NULL, each company's industry is stored in ai_suggested_industries (JSONB array) and industry_source = 'ai_extracted'.",
+      "category": "definition"
+    },
+    {
+      "id": "index_report_no_parent",
+      "content": "IMPORTANT: Index reports (is_index_report = TRUE) have parent_company = NULL because they cover multiple constituent companies, not a single parent.",
+      "category": "definition"
+    },
+    {
       "id": "jsonb_query_pattern",
       "content": "To query JSONB attributes, use the -> operator: SELECT stock_code FROM companies WHERE extra_data->>'chief_executive' = '張三';",
       "category": "critical"
@@ -241,6 +276,66 @@
       "id": "specialized_tables",
       "content": "當用戶詢問具體的財務數字時，請優先查詢對應的專用表：revenue_breakdown（收入分佈）、key_personnel（高管）、shareholdings（股東）、specific_events（特定事件）、market_data（股價）、debt_maturity（債務）、v_companies_resolved（公司信息）。",
       "category": "system"
+    },
+    {
+      "id": "jsonb_dynamic_attributes",
+      "content": "CRITICAL: The 'documents' and 'document_companies' tables contain a JSONB column named 'dynamic_attributes'. This column stores dynamic metadata extracted by AI (e.g., 'index_quarter', 'report_version', 'is_audited').",
+      "category": "critical"
+    },
+    {
+      "id": "jsonb_dynamic_query",
+      "content": "To query values inside dynamic_attributes, MUST use the PostgreSQL JSONB operator ->>. Example: SELECT filename FROM documents WHERE dynamic_attributes->>'index_quarter' = 'Q3';",
+      "category": "example"
+    },
+    {
+      "id": "jsonb_key_exists",
+      "content": "To check if a key exists in JSONB, use the ? operator: SELECT * FROM documents WHERE dynamic_attributes ? 'index_quarter';",
+      "category": "example"
+    },
+    {
+      "id": "jsonb_array_query",
+      "content": "To query values in JSONB arrays (like ai_extracted_industries), use ? operator: SELECT * FROM documents WHERE ai_extracted_industries ? 'Biotech';",
+      "category": "example"
+    },
+    {
+      "id": "rule_a_industry",
+      "content": "Rule A: When a document has confirmed_industry (e.g., 'Biotech' from 'Hang Seng Biotech Index'), ALL companies in document_companies get assigned_industry = confirmed_industry. industry_source = 'confirmed'.",
+      "category": "definition"
+    },
+    {
+      "id": "rule_b_industry",
+      "content": "Rule B: When document has no confirmed_industry, each company's assigned_industry comes from ai_suggested_industries (AI-extracted list). industry_source = 'ai_extracted'.",
+      "category": "definition"
+    },
+    {
+      "id": "index_report_characteristics",
+      "content": "Index reports (is_index_report = TRUE) have: parent_company = NULL, index_theme defined (e.g., 'Hang Seng Biotech Index'), multiple companies in document_companies.",
+      "category": "definition"
+    },
+    {
+      "id": "annual_report_characteristics",
+      "content": "Annual reports (report_type = 'annual_report') have: parent_company defined (single company), index_theme = NULL, usually single company or subsidiaries.",
+      "category": "definition"
+    },
+    {
+      "id": "document_companies_join",
+      "content": "To get all companies from a document with their industries: SELECT dc.company_name, dc.stock_code, dc.assigned_industry, dc.industry_source, d.index_theme FROM document_companies dc JOIN documents d ON dc.document_id = d.id;",
+      "category": "example"
+    },
+    {
+      "id": "get_dynamic_keys",
+      "content": "To discover all available dynamic attribute keys: SELECT DISTINCT jsonb_object_keys(dynamic_attributes) AS key FROM documents WHERE dynamic_attributes IS NOT NULL;",
+      "category": "example"
+    },
+    {
+      "id": "review_queue_types",
+      "content": "review_queue review_type options: 'industry' (uncertain industry), 'company' (uncertain company name), 'classification' (uncertain report type), 'other'.",
+      "category": "definition"
+    },
+    {
+      "id": "just_in_time_schema_injection",
+      "content": "When user asks about dynamic attributes (like 'Q3 reports'), Agent should first call get_dynamic_keys tool to discover available keys, then inject into Vanna prompt with JSONB query syntax.",
+      "category": "best_practice"
     }
   ]
 }
