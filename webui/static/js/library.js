@@ -64,6 +64,7 @@ const Library = {
     
     /**
      * Show document type selection modal
+     * 🌟 支持指數報告的 index_theme 和 confirmed_industry 字段
      */
     showDocTypeModal(files) {
         if (!files || files.length === 0) return;
@@ -75,28 +76,43 @@ const Library = {
         const radioBtns = document.querySelectorAll('input[name="doc-type"]');
         radioBtns.forEach(btn => btn.checked = btn.value === 'annual_report');
         
+        // 🌟 重置指數報告選項
+        const indexOptions = document.getElementById('index-report-options');
+        if (indexOptions) {
+            indexOptions.classList.add('hidden');
+        }
+        
+        // 🌟 清空指數報告字段
+        const indexThemeInput = document.getElementById('index-theme-input');
+        const confirmedIndustryInput = document.getElementById('confirmed-industry-input');
+        if (indexThemeInput) indexThemeInput.value = '';
+        if (confirmedIndustryInput) confirmedIndustryInput.value = '';
+        
+        // 🌟 添加文檔類型切換事件
+        radioBtns.forEach(btn => {
+            btn.addEventListener('change', (e) => {
+                const indexOptions = document.getElementById('index-report-options');
+                if (e.target.value === 'index_report') {
+                    indexOptions.classList.remove('hidden');
+                    this.log('📊 選擇了指數報告，請填寫 Index Theme 和 Confirmed Industry', 'warning');
+                } else {
+                    indexOptions.classList.add('hidden');
+                }
+            });
+        });
+        
         // Show modal
         const modal = document.getElementById('doc-type-modal');
         if (modal) {
             modal.classList.remove('hidden');
         }
         
-        this.log(`准备上传 ${files.length} 个文件，请选择文档类型...`);
-    },
-    
-    /**
-     * Close document type selection modal
-     */
-    closeDocTypeModal() {
-        const modal = document.getElementById('doc-type-modal');
-        if (modal) {
-            modal.classList.add('hidden');
-        }
-        this.pendingFiles = [];
+        this.log(`準備上傳 ${files.length} 個文件，請選擇文檔類型...`);
     },
     
     /**
      * Confirm upload with selected document type
+     * 🌟 收集指數報告的額外字段
      */
     async confirmUpload() {
         // Get selected document type
@@ -105,13 +121,37 @@ const Library = {
         
         this.selectedDocType = docType;
         
+        // 🌟 收集指數報告的額外字段
+        let indexTheme = null;
+        let confirmedIndustry = null;
+        
+        if (docType === 'index_report') {
+            indexTheme = document.getElementById('index-theme-input')?.value?.trim() || null;
+            confirmedIndustry = document.getElementById('confirmed-industry-input')?.value?.trim() || null;
+            
+            // 驗證必填字段
+            if (!confirmedIndustry) {
+                alert('請填寫 Confirmed Industry（確認行業），這是指數報告的必填字段！');
+                return;
+            }
+            
+            this.log(`📊 指數報告設定: theme="${indexTheme}", industry="${confirmedIndustry}"`, 'warning');
+        }
+        
         // Close modal
         this.closeDocTypeModal();
         
         // Proceed with upload
         if (this.pendingFiles.length > 0) {
-            this.log(`🚀 开始上传 ${this.pendingFiles.length} 个文件 (类型: ${docType})`, 'warning');
-            await this.handleFileUpload(this.pendingFiles, docType);
+            this.log(`🚀 開始上傳 ${this.pendingFiles.length} 個文件 (類型: ${docType})`, 'warning');
+            
+            // 🌟 傳遞額外的指數報告參數
+            await this.handleFileUpload(
+                this.pendingFiles, 
+                docType,
+                indexTheme,
+                confirmedIndustry
+            );
             this.pendingFiles = [];
         }
     },
@@ -235,10 +275,13 @@ const Library = {
     
     /**
      * Handle file upload with size check and progress
+     * 🌟 支持指數報告的額外參數
      * @param {File[]} files - Files to upload
      * @param {string} docType - Document type ('annual_report' or 'index_report')
+     * @param {string} indexTheme - Index theme (for index_report only)
+     * @param {string} confirmedIndustry - Confirmed industry (for index_report only)
      */
-    async handleFileUpload(files, docType = 'annual_report') {
+    async handleFileUpload(files, docType = 'annual_report', indexTheme = null, confirmedIndustry = null) {
         if (!files || files.length === 0) return;
         
         const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
@@ -251,11 +294,16 @@ const Library = {
             return;
         }
         
-        // 🚀 移除前端重複檢查，改為讓後端返回 409 時再詢問用戶
-        // 這樣可以確保後端是 Single Source of Truth
+        // 🌟 記錄上傳參數
+        console.log('[DEBUG] handleFileUpload called with:');
+        console.log(`  - files: ${files.length} files`);
+        console.log(`  - docType: ${docType}`);
+        console.log(`  - indexTheme: ${indexTheme}`);
+        console.log(`  - confirmedIndustry: ${confirmedIndustry}`);
         
         // Show upload progress modal
-        this.showUploadProgress(files[0].name, 0, `Starting upload (${docType})...`);
+        const typeLabel = docType === 'index_report' ? `Index Report (${confirmedIndustry})` : 'Annual Report';
+        this.showUploadProgress(files[0].name, 0, `Starting upload (${typeLabel})...`);
         
         try {
             const formData = new FormData();
@@ -265,11 +313,21 @@ const Library = {
             
             // 🎯 添加文档类型参数 (显式声明)
             formData.append('doc_type', docType);
+            formData.append('is_index_report', docType === 'index_report');
             
-            this.log(`📤 上传文件类型: ${docType}`, 'info');
+            // 🌟 添加指數報告參數
+            if (docType === 'index_report') {
+                if (indexTheme) formData.append('index_theme', indexTheme);
+                if (confirmedIndustry) formData.append('confirmed_doc_industry', confirmedIndustry);
+                
+                this.log(`📊 指數報告設定: theme="${indexTheme}", industry="${confirmedIndustry}"`, 'warning');
+            } else {
+                this.log(`📤 上傳文件類型: ${docType}`, 'info');
+            }
             
             // Use XMLHttpRequest for progress tracking with retry logic
-            await this.uploadWithProgress(formData, files, docType);
+            // 🌟 傳遞指數報告參數
+            await this.uploadWithProgress(formData, files, docType, indexTheme, confirmedIndustry, false);
             
         } catch (error) {
             this.closeUploadModal();
@@ -282,14 +340,26 @@ const Library = {
      * Upload with progress tracking using XMLHttpRequest
      * 🚀 支援 409 錯誤處理：當檔案已存在時詢問用戶是否覆蓋
      * 🎯 支援 doc_type 顯式宣告
+     * 🌟 支援指數報告參數
      */
-    uploadWithProgress(formData, files, docType = 'annual_report', replace = false) {
+    uploadWithProgress(formData, files, docType = 'annual_report', indexTheme = null, confirmedIndustry = null, replace = false) {
         return new Promise((resolve, reject) => {
             const xhr = new XMLHttpRequest();
             this.uploadXHR = xhr;
             
-            // 🎯 URL 包含 doc_type 和 replace 參數
-            xhr.open('POST', `/api/upload?doc_type=${encodeURIComponent(docType)}&replace=${replace}`, true);
+            // 🌟 構建 URL 包含所有參數
+            let url = `/api/upload?doc_type=${encodeURIComponent(docType)}&replace=${replace}`;
+            
+            // 添加指數報告參數
+            if (docType === 'index_report') {
+                url += `&is_index_report=true`;
+                if (indexTheme) url += `&index_theme=${encodeURIComponent(indexTheme)}`;
+                if (confirmedIndustry) url += `&confirmed_doc_industry=${encodeURIComponent(confirmedIndustry)}`;
+            }
+            
+            console.log(`[DEBUG] Upload URL: ${url}`);
+            
+            xhr.open('POST', url, true);
             
             // Track upload progress
             xhr.upload.addEventListener('progress', (e) => {
@@ -328,7 +398,7 @@ const Library = {
                             // 用戶選擇覆蓋，重新上傳並帶入 replace=true
                             this.log(`User chose to replace: ${fileName}`, 'info');
                             this.showUploadProgress(fileName, 0, 'Replacing...');
-                            return this.uploadWithProgress(formData, files, docType, true)
+                            return this.uploadWithProgress(formData, files, docType, indexTheme, confirmedIndustry, true)
                                 .then(resolve)
                                 .catch(reject);
                         } else {

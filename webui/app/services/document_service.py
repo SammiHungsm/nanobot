@@ -74,8 +74,12 @@ class DocumentService:
         file_path: str,
         uploader: str = "System",
         file_size: int = 0,
-        replace: bool = False,  # 👈 新增 replace 參數
-        doc_type: str = "annual_report"  # 🎯 顯式宣告文件類型
+        replace: bool = False,  # 是否強制重新處理 (覆蓋已存在的文檔)
+        doc_type: str = "annual_report",  # 文件類型
+        # 🌟 新增：指數報告專用參數
+        is_index_report: bool = False,
+        index_theme: str = None,
+        confirmed_doc_industry: str = None
     ) -> str:
         """
         Add a document to the database and queue for processing.
@@ -87,6 +91,10 @@ class DocumentService:
             file_size: 檔案大小
             replace: 是否強制重新處理 (覆蓋已存在的文檔)
             doc_type: 文件類型 ('annual_report' 或 'index_report')
+            is_index_report: 是否為指數報告
+            index_theme: 指數主題 (如 "Hang Seng Biotech Index")
+            confirmed_doc_industry: 報告定義的行業 (如 "Biotech")
+                - 規則 A: 所有成分股都會被強制指派此行業
             
         Returns:
             document_id: Unique identifier for the document
@@ -95,8 +103,13 @@ class DocumentService:
         doc_hash = hashlib.md5(filename.encode()).hexdigest()[:8]
         doc_id = f"{Path(filename).stem}_{doc_hash}"
         
-        # 🎯 根據文件類型決定處理方式
-        type_label = "恆指報表" if doc_type == "index_report" else "年報"
+        # 🌟 根據文件類型決定處理方式
+        if is_index_report or doc_type == "index_report":
+            type_label = f"指數報告 ({confirmed_doc_industry or 'Unknown'})"
+            logger.info(f"📊 規則 A 啟用: 所有成分股將被指派行業 '{confirmed_doc_industry}'")
+        else:
+            type_label = "年報 (規則 B: AI 提取行業)"
+        
         logger.info(f"📥 新增文檔: {filename} (類型: {type_label})")
         
         # Add to database
@@ -110,8 +123,12 @@ class DocumentService:
             "progress": 0.0,
             "error_message": None,
             "created_at": datetime.now().isoformat(),
-            "replace": replace,  # 👈 存儲 replace 標記
-            "doc_type": doc_type,  # 🎯 存儲顯式文件類型
+            "replace": replace,
+            "doc_type": doc_type,
+            # 🌟 新增指數報告字段
+            "is_index_report": is_index_report or doc_type == "index_report",
+            "index_theme": index_theme,
+            "confirmed_doc_industry": confirmed_doc_industry,
         }
         
         # Add to processing queue

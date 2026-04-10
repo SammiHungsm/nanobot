@@ -89,7 +89,11 @@ async def upload_document(
     files: list[UploadFile] = File(...),
     username: str = "anonymous",
     replace: bool = False,  # 👈 接收前端傳來的 replace 參數
-    doc_type: str = "annual_report"  # 🎯 顯式宣告文件類型
+    doc_type: str = "annual_report",  # 🎯 顯式宣告文件類型
+    # 🌟 新增指數報告參數
+    is_index_report: bool = False,
+    index_theme: str = None,
+    confirmed_doc_industry: str = None
 ):
     """
     Upload one or more PDF documents
@@ -98,12 +102,33 @@ async def upload_document(
     - doc_type="annual_report": 單一公司年報，走標準 Pipeline
     - doc_type="index_report": 恆指生技主數據，更新公司主檔
     
+    🌟 指數報告特殊處理 (Index Report Handling):
+    - is_index_report: 是否為指數報告
+    - index_theme: 指數主題 (如 "Hang Seng Biotech Index")
+    - confirmed_doc_industry: 報告定義的行業 (如 "Biotech")
+      * 規則 A: 所有成分股都會被強制指派此行業，不再各自 AI 預測
+    
     這種設計避免了後端猜測文件類型的風險，100% 準確分流。
     """
     if document_service is None:
         raise HTTPException(status_code=500, detail="Document service not initialized")
     
-    logger.info(f"📥 收到上傳請求: {len(files)} 個文件, 類型={doc_type}, replace={replace}")
+    # 🌟 詳細日誌
+    logger.info(f"📥 收到上傳請求:")
+    logger.info(f"   - 文件數量: {len(files)}")
+    logger.info(f"   - 文檔類型: {doc_type}")
+    logger.info(f"   - 是否為指數報告: {is_index_report}")
+    logger.info(f"   - 指數主題: {index_theme}")
+    logger.info(f"   - 確認行業: {confirmed_doc_industry}")
+    logger.info(f"   - 替換模式: {replace}")
+    
+    # 🌟 驗證指數報告參數
+    if is_index_report or doc_type == "index_report":
+        if not confirmed_doc_industry:
+            logger.warning("⚠️ 指數報告缺少 confirmed_doc_industry 參數")
+            # 不強制報錯，因為可以讓 AI 自動提取
+        else:
+            logger.info(f"📊 規則 A 啟用: 所有成分股將被指派行業 '{confirmed_doc_industry}'")
     
     try:
         uploaded_files = []
@@ -183,7 +208,11 @@ async def upload_document(
                 uploader=username,
                 file_size=actual_size,
                 replace=replace,  # 👈 傳遞 replace 參數
-                doc_type=doc_type  # 🎯 傳遞顯式文件類型
+                doc_type=doc_type,  # 🎯 傳遞顯式文件類型
+                # 🌟 新增指數報告參數
+                is_index_report=is_index_report,
+                index_theme=index_theme,
+                confirmed_doc_industry=confirmed_doc_industry
             )
             
             uploaded_files.append({

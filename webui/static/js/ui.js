@@ -1,6 +1,10 @@
 /**
  * Nanobot WebUI - UI Rendering Module
  * Handles all UI rendering and updates
+ * 
+ * 🌟 Version 2.0: Support for Agentic Dynamic Ingestion
+ * - Added document type selection (annual_report vs index_report)
+ * - Added index_theme and confirmed_doc_industry fields
  */
 
 const UI = {
@@ -9,6 +13,14 @@ const UI = {
     selectedDocument: null,
     currentTab: 'chat',
     chatSessionId: null, // 存儲聊天 Session ID
+    
+    // 🌟 上傳選項
+    uploadOptions: {
+        doc_type: 'annual_report',
+        is_index_report: false,
+        index_theme: '',
+        confirmed_industry: ''
+    },
     
     // DOM elements
     elements: {
@@ -55,6 +67,153 @@ const UI = {
                 e.preventDefault();
                 this.elements.chatForm.dispatchEvent(new Event('submit'));
             }
+        });
+        
+        console.log('[UI] ✅ UI module initialized');
+    },
+    
+    /**
+     * 🌟 顯示文檔類型選擇對話框
+     * @returns {Promise<Object|null>} 選擇結果或 null (取消)
+     */
+    showDocTypeDialog() {
+        return new Promise((resolve) => {
+            // 創建對話框
+            const dialog = document.createElement('div');
+            dialog.id = 'doc-type-dialog';
+            dialog.className = 'fixed inset-0 bg-black/50 z-50 flex items-center justify-center';
+            dialog.innerHTML = `
+                <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden animate-fade-in-up">
+                    <div class="bg-gradient-to-r from-blue-600 to-indigo-600 p-4">
+                        <h3 class="text-lg font-semibold text-white">
+                            <i class="fas fa-file-upload mr-2"></i>選擇文檔類型
+                        </h3>
+                        <p class="text-blue-100 text-sm mt-1">請選擇您要上傳的文檔類型</p>
+                    </div>
+                    
+                    <div class="p-5 space-y-4">
+                        <!-- 文檔類型選擇 -->
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 mb-2">文檔類型</label>
+                            <div class="grid grid-cols-2 gap-2">
+                                <button type="button" class="doc-type-btn active flex flex-col items-center p-4 border-2 border-blue-500 bg-blue-50 rounded-xl text-blue-700" data-type="annual_report">
+                                    <i class="fas fa-file-invoice-dollar text-2xl mb-2"></i>
+                                    <span class="font-medium">年報</span>
+                                    <span class="text-xs text-slate-500">Annual Report</span>
+                                </button>
+                                <button type="button" class="doc-type-btn flex flex-col items-center p-4 border-2 border-slate-200 hover:border-blue-300 rounded-xl text-slate-600 hover:bg-blue-50" data-type="index_report">
+                                    <i class="fas fa-chart-line text-2xl mb-2"></i>
+                                    <span class="font-medium">指數報告</span>
+                                    <span class="text-xs text-slate-500">Index Report</span>
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <!-- 指數報告選項 (默認隱藏) -->
+                        <div id="index-options-container" class="hidden space-y-3 p-4 bg-slate-50 rounded-lg border border-slate-200">
+                            <div class="flex items-center text-sm text-amber-700 bg-amber-50 p-2 rounded-lg">
+                                <i class="fas fa-info-circle mr-2"></i>
+                                <span>指數報告會自動將所有成分股指派到指定的行業</span>
+                            </div>
+                            
+                            <div>
+                                <label class="block text-sm font-medium text-slate-700 mb-1">指數主題</label>
+                                <input type="text" id="dialog-index-theme" placeholder="例如: Hang Seng Biotech Index" 
+                                    class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm">
+                            </div>
+                            
+                            <div>
+                                <label class="block text-sm font-medium text-slate-700 mb-1">確認行業</label>
+                                <input type="text" id="dialog-confirmed-industry" placeholder="例如: Biotech" 
+                                    class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm">
+                                <p class="text-xs text-slate-500 mt-1">所有成分股都會被指派這個行業 (規則 A)</p>
+                            </div>
+                        </div>
+                        
+                        <!-- 說明 -->
+                        <div class="text-xs text-slate-500 bg-slate-50 p-3 rounded-lg">
+                            <p id="doc-type-description">
+                                <i class="fas fa-info-circle mr-1"></i>
+                                年報：AI 會自動提取公司信息和行業
+                            </p>
+                        </div>
+                    </div>
+                    
+                    <div class="flex border-t border-slate-200">
+                        <button type="button" id="dialog-cancel" class="flex-1 py-3 text-slate-600 hover:bg-slate-50 font-medium transition-colors">
+                            取消
+                        </button>
+                        <button type="button" id="dialog-confirm" class="flex-1 py-3 bg-blue-600 text-white hover:bg-blue-700 font-medium transition-colors">
+                            確認上傳
+                        </button>
+                    </div>
+                </div>
+            `;
+            
+            document.body.appendChild(dialog);
+            
+            // 選中的類型
+            let selectedType = 'annual_report';
+            
+            // 類型按鈕點擊
+            dialog.querySelectorAll('.doc-type-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    // 更新樣式
+                    dialog.querySelectorAll('.doc-type-btn').forEach(b => {
+                        b.classList.remove('active', 'border-blue-500', 'bg-blue-50', 'text-blue-700');
+                        b.classList.add('border-slate-200', 'text-slate-600');
+                    });
+                    btn.classList.add('active', 'border-blue-500', 'bg-blue-50', 'text-blue-700');
+                    btn.classList.remove('border-slate-200', 'text-slate-600');
+                    
+                    selectedType = btn.dataset.type;
+                    console.log(`[DEBUG] 選擇文檔類型: ${selectedType}`);
+                    
+                    // 顯示/隱藏指數選項
+                    const indexOptions = dialog.querySelector('#index-options-container');
+                    const description = dialog.querySelector('#doc-type-description');
+                    
+                    if (selectedType === 'index_report') {
+                        indexOptions.classList.remove('hidden');
+                        description.innerHTML = '<i class="fas fa-info-circle mr-1"></i>指數報告：所有成分股會被指派到指定行業 (規則 A)';
+                    } else {
+                        indexOptions.classList.add('hidden');
+                        description.innerHTML = '<i class="fas fa-info-circle mr-1"></i>年報：AI 會自動提取公司信息和行業 (規則 B)';
+                    }
+                });
+            });
+            
+            // 取消按鈕
+            dialog.querySelector('#dialog-cancel').addEventListener('click', () => {
+                dialog.remove();
+                resolve(null);
+            });
+            
+            // 確認按鈕
+            dialog.querySelector('#dialog-confirm').addEventListener('click', () => {
+                const indexTheme = dialog.querySelector('#dialog-index-theme')?.value || '';
+                const confirmedIndustry = dialog.querySelector('#dialog-confirmed-industry')?.value || '';
+                
+                const result = {
+                    type: selectedType,
+                    is_index_report: selectedType === 'index_report',
+                    index_theme: indexTheme,
+                    confirmed_industry: confirmedIndustry
+                };
+                
+                console.log('[DEBUG] 確認上傳選項:', result);
+                
+                dialog.remove();
+                resolve(result);
+            });
+            
+            // 點擊背景關閉
+            dialog.addEventListener('click', (e) => {
+                if (e.target === dialog) {
+                    dialog.remove();
+                    resolve(null);
+                }
+            });
         });
     },
     
@@ -250,9 +409,24 @@ const UI = {
     
     /**
      * Handle multiple file uploads
+     * 🌟 支援指數報告和財務報告的選擇
      */
     async handleMultipleFileUpload(files, showChatNotification) {
         if (!files || files.length === 0) return;
+        
+        // 🌟 顯示文檔類型選擇對話框
+        const docType = await this.showDocTypeDialog();
+        if (!docType) {
+            console.log('使用者取消上傳');
+            return;
+        }
+        
+        console.log(`[DEBUG] 選擇的文檔類型: ${docType.type}`);
+        console.log(`[DEBUG] 是否為指數報告: ${docType.is_index_report}`);
+        if (docType.is_index_report) {
+            console.log(`[DEBUG] 指數主題: ${docType.index_theme}`);
+            console.log(`[DEBUG] 確認行業: ${docType.confirmed_industry}`);
+        }
         
         const filesToUpload = [];
         
@@ -292,6 +466,18 @@ const UI = {
         for (const file of filesToUpload) {
             formData.append('files', file);
         }
+        
+        // 🌟 添加文檔類型參數
+        formData.append('doc_type', docType.type);
+        formData.append('is_index_report', docType.is_index_report);
+        
+        if (docType.is_index_report) {
+            formData.append('index_theme', docType.index_theme || '');
+            formData.append('confirmed_doc_industry', docType.confirmed_industry || '');
+        }
+        
+        console.log('[DEBUG] 準備上傳文檔...');
+        console.log('[DEBUG] formData:', Object.fromEntries(formData.entries()));
         
         try {
             const response = await fetch('/api/upload', {

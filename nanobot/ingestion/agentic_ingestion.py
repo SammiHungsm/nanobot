@@ -10,6 +10,10 @@ Agentic Ingestion Module - 智能代理動態寫入
 - AI 只做「Schema 決策」與「Metadata 提取」
 - 大量數據寫入仍由 Python 批次處理
 - 保留人工覆核機制確保數據準確度
+
+🌟 支持指數報告特殊處理：
+- 規則 A：報告明確定義行業主題 → 所有成分股強制指派該行業
+- 規則 B：一般綜合報告 → 各公司各自 AI 提取行業
 """
 
 from __future__ import annotations
@@ -29,12 +33,15 @@ if TYPE_CHECKING:
 @dataclass
 class DocumentAnalysis:
     """文檔分析結果"""
-    parent_company: Optional[Dict[str, Any]] = None
-    subsidiaries: List[Dict[str, Any]] = field(default_factory=list)
-    industries: List[str] = field(default_factory=list)
     document_type: Optional[str] = None
-    fiscal_year: Optional[int] = None
+    parent_company: Optional[str] = None
+    parent_stock_code: Optional[str] = None
     is_index_report: bool = False
+    index_theme: Optional[str] = None
+    confirmed_doc_industry: Optional[str] = None
+    subsidiaries: List[Dict[str, Any]] = field(default_factory=list)
+    fiscal_year: Optional[int] = None
+    ai_industries: Optional[List[str]] = None
     dynamic_attributes: Dict[str, Any] = field(default_factory=dict)
     confidence_scores: Dict[str, float] = field(default_factory=dict)
 
@@ -50,69 +57,109 @@ class AgenticIngestionPipeline:
     4. 創建待覆核記錄
     """
     
-    # Agent 系統提示詞
-    INGESTION_SYSTEM_PROMPT = """你是 Nanobot 數據庫寫入代理，專門負責分析金融文件並提取關鍵實體信息。
+    # Agent 系統提示詞 (支持指數報告特殊處理)
+    INGESTION_SYSTEM_PROMPT = """你是 Nanobot 專業金融資料提取代理。我會提供給你一份金融文件的前 1-2 頁內容。
+你的任務是提取核心 Metadata，並準備寫入資料庫。
 
-你的任務是從文件的前幾頁內容中提取：
+請嚴格遵守以下邏輯判斷：
 
-1. **母公司信息** (Parent Company)
-   - 公司名稱 (中英文)
-   - 股票代碼
-   - 注意：如果是「恒指報告」或「指數報告」，可能沒有單一母公司，請設為 null
+## 1. 報告類型識別
 
-2. **相關公司** (Subsidiaries / Index Constituents)
-   - 一份文檔可能包含多間公司
-   - 提取公司名稱、股票代碼
-   - 標註關係類型：subsidiary, index_constituent, associate
+判斷這是一般公司的財報 (annual_report)，還是市場/指數報告 (index_report)。
 
-3. **行業信息** (Industries)
-   - 可能有多個行業
-   - AI 提取的行業放入 ai_industries 列表
+**識別特徵**：
+- 年報 (annual_report)：有單一母公司名稱、股票代碼
+- 指數報告 (index_report)：如 "Hang Seng Index"、"恒生指數"、"HSI Biotech Index" 等，包含多間成分股
 
-4. **文檔類型** (Document Type)
-   - annual_report, quarterly_report, index_report, etc.
+## 2. 母公司 (Parent Company) 提取
 
-5. **財政年度** (Fiscal Year)
-   - 從文檔中識別年份
+- **如果是一般財報**：提取母公司名稱和股票代碼
+- **如果是指數報告**：因為它涵蓋多間公司，請將 `parent_company` 設為 null，並將 `is_index_report` 設為 true
 
-6. **動態屬性** (Dynamic Attributes)
-   - 如果你發現了值得記錮但不在 Schema 實體欄位中的屬性
-   - 例如：報告季度、審計師、特殊事項等
-   - 這些會被存入 JSONB 欄位
+## 3. 行業 (Industry) 提取與傳遞原則 🌟 核心邏輯
 
-**重要決策原則**：
-- 如果是恒指/指數報告，parent_company = null，但會有多個 constituents
-- 如果無法確定某個值，將其放入 dynamic_attributes 而非實體欄位
-- 對於置信度較低的提取，在 confidence_scores 中標註
+仔細閱讀前 1-2 頁。判斷這份報告是否**明確定義了一個單一的行業主題**：
 
-**輸出格式**：
-請以 JSON 格式返回分析結果，格式如下：
+### 規則 A：明確定義的行業主題
+
+**條件**：報告標題或前言明確定義了行業主題
+- 例如："Hang Seng Biotech Index" → 全部都是 Biotech
+- 例如："恒生科技指數" → 全部都是 Technology
+
+**執行**：
+1. 將該行業設為 `confirmed_doc_industry`（如 "Biotech"）
+2. 設置 `index_theme` 為指數名稱（如 "Hang Seng Biotech Index"）
+3. **重要**：報告中列出的**所有成分股**，都必須強制指派這個 Industry
+4. **絕對不要**再為各成分股各自產生多重 (Multiple) 的 AI Industry 預測
+
+### 規則 B：無明確單一主題
+
+**條件**：一般綜合報告，沒有定義單一 Industry
+- 例如：綜合年報、跨行業集團報告
+
+**執行**：
+1. `confirmed_doc_industry` 設為 null
+2. 為每一間子公司/成分股各自提取可能的 `ai_industries`（可以是 List）
+
+## 4. 成分股/子公司提取
+
+對於指數報告，提取所有成分股：
+- 公司名稱 (中英文)
+- 股票代碼
+- 關係類型：`index_constituent`（指數報告）或 `subsidiary`（一般年報）
+
+## 5. 動態屬性 (Dynamic Attributes)
+
+如果你發現重要但不在實體 Schema 的資訊：
+- 報告發布季度
+- 指數編制規則版本
+- 審計師
+- 特殊事項
+
+請放入 `dynamic_attributes` 中（JSON 格式）。
+
+## 6. 執行寫入
+
+完成分析後，呼叫 `smart_insert_document` 工具寫入數據庫。
+
+---
+
+## 輸出格式
+
+請以 JSON 格式返回分析結果：
+
 ```json
 {
-    "parent_company": {
-        "name_en": "...",
-        "name_zh": "...",
-        "stock_code": "..."
-    },
-    "subsidiaries": [
-        {"name": "...", "stock_code": "...", "relation_type": "subsidiary"}
-    ],
-    "industries": ["Finance", "Technology"],
-    "document_type": "annual_report",
+    "document_type": "index_report",
+    "parent_company": null,
+    "parent_stock_code": null,
+    "is_index_report": true,
+    "index_theme": "Hang Seng Biotech Index",
+    "confirmed_doc_industry": "Biotech",
     "fiscal_year": 2024,
-    "is_index_report": false,
+    "ai_industries": null,
+    "subsidiaries": [
+        {
+            "name": "Sino Biopharmaceutical",
+            "stock_code": "01177",
+            "relation_type": "index_constituent",
+            "ai_industries": null
+        }
+    ],
     "dynamic_attributes": {
-        "auditor": "...",
-        "reporting_currency": "HKD"
+        "index_quarter": "Q3",
+        "constituent_count": 50
     },
     "confidence_scores": {
-        "parent_company": 0.95,
-        "industries": 0.85
+        "document_type": 0.95,
+        "confirmed_doc_industry": 0.98
     }
 }
 ```
-"""
 
+**注意**：當 `confirmed_doc_industry` 有值時，`subsidiaries` 中的 `ai_industries` 應為 null（規則 A）。
+"""
+    
     def __init__(self, agent_loop: AgentLoop = None):
         """
         初始化
@@ -165,9 +212,11 @@ class AgenticIngestionPipeline:
 文件路徑: {pdf_path}
 
 === 文件內容 ===
-{intro_text[:8000]}  # 限制長度避免超過 token 限制
+{intro_text[:8000]}
 
-請按照系統提示中指定的 JSON 格式返回分析結果。
+請按照系統提示中指定的 JSON 格式返回分析結果。記住：
+- 如果是指數報告且有明確行業主題，使用規則 A
+- 如果是一般綜合報告，使用規則 B
 """
         
         try:
@@ -181,9 +230,12 @@ class AgenticIngestionPipeline:
             content = response.content if response else ""
             analysis = self._parse_analysis_result(content)
             
-            logger.info(f"✅ Analysis complete: parent_company={analysis.parent_company}, "
+            logger.info(f"✅ Analysis complete: "
+                       f"type={analysis.document_type}, "
+                       f"is_index={analysis.is_index_report}, "
+                       f"parent={analysis.parent_company}, "
                        f"subsidiaries={len(analysis.subsidiaries)}, "
-                       f"industries={analysis.industries}")
+                       f"confirmed_industry={analysis.confirmed_doc_industry}")
             
             return analysis
             
@@ -248,12 +300,15 @@ class AgenticIngestionPipeline:
                 data = json.loads(json_str)
                 
                 return DocumentAnalysis(
-                    parent_company=data.get('parent_company'),
-                    subsidiaries=data.get('subsidiaries', []),
-                    industries=data.get('industries', []),
                     document_type=data.get('document_type'),
-                    fiscal_year=data.get('fiscal_year'),
+                    parent_company=data.get('parent_company'),
+                    parent_stock_code=data.get('parent_stock_code'),
                     is_index_report=data.get('is_index_report', False),
+                    index_theme=data.get('index_theme'),
+                    confirmed_doc_industry=data.get('confirmed_doc_industry'),
+                    subsidiaries=data.get('subsidiaries', []),
+                    fiscal_year=data.get('fiscal_year'),
+                    ai_industries=data.get('ai_industries'),
                     dynamic_attributes=data.get('dynamic_attributes', {}),
                     confidence_scores=data.get('confidence_scores', {})
                 )
@@ -301,6 +356,10 @@ class AgenticIngestionPipeline:
 分析結果:
 {json.dumps(analysis.__dict__, indent=2, ensure_ascii=False, default=str)}
 
+重要提醒：
+- 如果 confirmed_doc_industry 有值，表示使用規則 A（所有成分股強制指派該行業）
+- 如果 confirmed_doc_industry 為 null，表示使用規則 B（各公司各自 AI 提取行業）
+
 請執行寫入操作並返回結果。
 """
         
@@ -331,7 +390,15 @@ class AgenticIngestionPipeline:
             return {
                 "success": True,
                 "document_id": document_id,
-                "analysis": analysis.__dict__,
+                "analysis": {
+                    "document_type": analysis.document_type,
+                    "is_index_report": analysis.is_index_report,
+                    "index_theme": analysis.index_theme,
+                    "confirmed_doc_industry": analysis.confirmed_doc_industry,
+                    "parent_company": analysis.parent_company,
+                    "subsidiaries_count": len(analysis.subsidiaries),
+                    "industry_rule": "A (report_defined)" if analysis.confirmed_doc_industry else "B (ai_extracted)"
+                },
                 "elapsed_seconds": elapsed,
                 "task_id": task_id
             }
@@ -343,36 +410,6 @@ class AgenticIngestionPipeline:
                 "error": str(e),
                 "task_id": task_id
             }
-    
-    async def update_progress(self, task_id: str, progress: int, status: str = None):
-        """更新任務進度"""
-        from nanobot.ingestion.repository.db_client import DBClient
-        
-        db = DBClient()
-        await db.connect()
-        
-        try:
-            async with db.connection() as conn:
-                if status:
-                    await conn.execute(
-                        """
-                        UPDATE document_tasks 
-                        SET progress = $2, status = $3, updated_at = NOW()
-                        WHERE task_id = $1
-                        """,
-                        task_id, progress, status
-                    )
-                else:
-                    await conn.execute(
-                        """
-                        UPDATE document_tasks 
-                        SET progress = $2, updated_at = NOW()
-                        WHERE task_id = $1
-                        """,
-                        task_id, progress
-                    )
-        finally:
-            await db.close()
 
 
 # ============================================================
@@ -408,6 +445,7 @@ async def run_agentic_ingestion(
         )
         
         print(f"Document ID: {result['document_id']}")
+        print(f"Industry Rule: {result['analysis']['industry_rule']}")
     """
     if agent_loop is None:
         # 創建默認 AgentLoop
