@@ -287,25 +287,29 @@ class OpenDataLoaderProcessor:
     async def _create_document_record(self, pdf_path: str, company_id: Optional[int], doc_id: str, file_hash: str):
         """創建文檔記錄 (company_id 可為 NULL)"""
         pdf_path_obj = Path(pdf_path)
+        filename = pdf_path_obj.name
         
         await self.db_conn.execute(
             """
             INSERT INTO documents (
-                doc_id, company_id, title, document_type, 
+                doc_id, company_id, filename, title, document_type, 
                 file_path, file_hash, file_size_bytes,
-                processing_status, uploaded_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+                processing_status, status, uploaded_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
             ON CONFLICT (doc_id) DO UPDATE SET
                 processing_status = 'pending',
+                status = 'pending',
                 updated_at = NOW()
             """,
             doc_id,
             company_id,  # 可為 NULL
+            filename,
             pdf_path_obj.stem,  # 使用文件名作為標題
             "annual_report",
             str(pdf_path_obj.absolute()),
             file_hash,
             pdf_path_obj.stat().st_size,
+            "pending",
             "pending"
         )
     

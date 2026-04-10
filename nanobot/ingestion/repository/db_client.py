@@ -822,24 +822,30 @@ class DBClient:
         document_type: str = "annual_report"
     ):
         """創建文檔記錄"""
+        # 從 file_path 提取 filename
+        filename = Path(file_path).name
+        
         await self.conn.execute(
             """
             INSERT INTO documents (
-                doc_id, company_id, title, document_type, 
+                doc_id, company_id, filename, title, document_type, 
                 file_path, file_hash, file_size_bytes,
-                processing_status, uploaded_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+                processing_status, status, uploaded_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
             ON CONFLICT (doc_id) DO UPDATE SET
                 processing_status = 'pending',
+                status = 'pending',
                 updated_at = NOW()
             """,
             doc_id,
             company_id,
+            filename,
             title,
             document_type,
             file_path,
             file_hash,
             file_size,
+            "pending",
             "pending"
         )
     
@@ -856,6 +862,7 @@ class DBClient:
                 """
                 UPDATE documents SET
                     processing_status = 'completed',
+                    status = 'completed',
                     processing_completed_at = NOW(),
                     total_chunks = $1,
                     total_artifacts = $2,
@@ -871,11 +878,24 @@ class DBClient:
                 """
                 UPDATE documents SET
                     processing_status = 'failed',
+                    status = 'failed',
                     processing_error = $1,
                     updated_at = NOW()
                 WHERE doc_id = $2
                 """,
                 error,
+                doc_id
+            )
+        else:
+            await self.conn.execute(
+                """
+                UPDATE documents SET
+                    processing_status = $1,
+                    status = $1,
+                    updated_at = NOW()
+                WHERE doc_id = $2
+                """,
+                status,
                 doc_id
             )
     

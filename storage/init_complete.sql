@@ -24,56 +24,63 @@ CREATE EXTENSION IF NOT EXISTS vector;     -- 用於向量嵌入 (pgvector)
 CREATE TABLE IF NOT EXISTS documents (
     -- 主鍵
     id SERIAL PRIMARY KEY,
+    doc_id VARCHAR(255) UNIQUE,  -- 🔧 文檔唯一標識 (字符串)
+    file_hash VARCHAR(64),       -- 🔧 文件 SHA256 hash
     
     -- 基本信息
     filename VARCHAR(500) NOT NULL,
+    title VARCHAR(500),          -- 🔧 標題 (通常與 filename 相同)
     file_path VARCHAR(1000),
     file_size BIGINT,
+    file_size_bytes BIGINT,      -- 🔧 別名
     mime_type VARCHAR(100),
     
     -- 報告類型識別
-    report_type VARCHAR(50) DEFAULT 'annual_report',  -- 'annual_report' 或 'index_report'
+    report_type VARCHAR(50) DEFAULT 'annual_report',
+    document_type VARCHAR(50) DEFAULT 'annual_report',  -- 🔧 別名
     is_index_report BOOLEAN DEFAULT FALSE,
     
     -- 公司信息
-    parent_company VARCHAR(255),  -- 年報的母公司，指數報告為 NULL
+    company_id INTEGER,
+    year INTEGER,
+    parent_company VARCHAR(255),
     
     -- 指數報告專用字段
-    index_theme VARCHAR(255),     -- 指數主題，如 'Hang Seng Biotech Index'
-    confirmed_industry VARCHAR(100), -- 文檔級別確認的行業 (規則 A)
+    index_theme VARCHAR(255),
+    confirmed_industry VARCHAR(100),
     
     -- AI 提取信息
-    ai_extracted_industries JSONB,  -- AI 提取的行業列表
-    confidence_score DECIMAL(5, 4),  -- 提取置信度
+    ai_extracted_industries JSONB,
+    confidence_score DECIMAL(5, 4),
     
     -- JSONB 動態屬性
     dynamic_attributes JSONB DEFAULT '{}'::jsonb,
     
     -- 處理狀態
-    processing_status VARCHAR(50) DEFAULT 'pending',  -- pending, processing, completed, failed
+    processing_status VARCHAR(50) DEFAULT 'pending',
     processing_error TEXT,
+    status VARCHAR(50) DEFAULT 'pending',
+    total_chunks INTEGER DEFAULT 0,
     last_processed_at TIMESTAMP,
+    uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,  -- 🔧 上傳時間
     
     -- 審計字段
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     
     -- 約束
-    CONSTRAINT valid_report_type CHECK (report_type IN ('annual_report', 'index_report')),
-    CONSTRAINT valid_processing_status CHECK (processing_status IN ('pending', 'processing', 'completed', 'failed', 'review'))
+    CONSTRAINT valid_report_type CHECK (report_type IN ('annual_report', 'index_report'))
 );
 
 -- 文檔表索引
+CREATE INDEX IF NOT EXISTS idx_documents_doc_id ON documents(doc_id);
+CREATE INDEX IF NOT EXISTS idx_documents_file_hash ON documents(file_hash);
 CREATE INDEX IF NOT EXISTS idx_documents_filename ON documents(filename);
-CREATE INDEX IF NOT EXISTS idx_documents_report_type ON documents(report_type);
-CREATE INDEX IF NOT EXISTS idx_documents_is_index_report ON documents(is_index_report);
-CREATE INDEX IF NOT EXISTS idx_documents_parent_company ON documents(parent_company);
-CREATE INDEX IF NOT EXISTS idx_documents_index_theme ON documents(index_theme);
-CREATE INDEX IF NOT EXISTS idx_documents_confirmed_industry ON documents(confirmed_industry);
+CREATE INDEX IF NOT EXISTS idx_documents_company_id ON documents(company_id);
 CREATE INDEX IF NOT EXISTS idx_documents_processing_status ON documents(processing_status);
+CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
+CREATE INDEX IF NOT EXISTS idx_documents_uploaded_at ON documents(uploaded_at);
 CREATE INDEX IF NOT EXISTS idx_documents_created_at ON documents(created_at);
-
--- JSONB 動態屬性索引 (GIN 索引用於高效查詢)
 CREATE INDEX IF NOT EXISTS idx_documents_dynamic_attributes ON documents USING GIN (dynamic_attributes);
 CREATE INDEX IF NOT EXISTS idx_documents_ai_industries ON documents USING GIN (ai_extracted_industries);
 
@@ -133,21 +140,22 @@ CREATE TABLE IF NOT EXISTS document_processing_history (
     document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
     
     -- 處理信息
-    stage VARCHAR(100) NOT NULL,        -- 處理階段
-    status VARCHAR(50) NOT NULL,        -- 狀態
-    details JSONB DEFAULT '{}'::jsonb,  -- 詳細信息
-    error_message TEXT,                 -- 錯誤信息
+    stage VARCHAR(100),               -- 處理階段
+    action VARCHAR(100),              -- 🔧 動作 (別名)
+    status VARCHAR(50) NOT NULL,
+    details JSONB DEFAULT '{}'::jsonb,
+    notes TEXT,                       -- 🔧 備註
+    error_message TEXT,
     
     -- 審計字段
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    
-    -- 約束
-    CONSTRAINT valid_history_status CHECK (status IN ('pending', 'processing', 'completed', 'failed', 'skipped'))
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 處理歷史索引
 CREATE INDEX IF NOT EXISTS idx_dph_document_id ON document_processing_history(document_id);
 CREATE INDEX IF NOT EXISTS idx_dph_stage ON document_processing_history(stage);
+CREATE INDEX IF NOT EXISTS idx_dph_action ON document_processing_history(action);
+CREATE INDEX IF NOT EXISTS idx_dph_status ON document_processing_history(status);
 CREATE INDEX IF NOT EXISTS idx_dph_status ON document_processing_history(status);
 CREATE INDEX IF NOT EXISTS idx_dph_created_at ON document_processing_history(created_at);
 
@@ -566,13 +574,40 @@ CREATE TABLE IF NOT EXISTS listing_applications (
 CREATE TABLE IF NOT EXISTS document_pages (
     id SERIAL PRIMARY KEY,
     company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE,
+    doc_id VARCHAR(255),           -- 🔧 文檔 ID
+    year INTEGER,                  -- 🔧 報告年份
     page_num INTEGER,
     markdown_content TEXT,
+    content_type VARCHAR(50),      -- 🔧 內容類型
+    has_images BOOLEAN DEFAULT FALSE,
+    has_charts BOOLEAN DEFAULT FALSE,
     source_file VARCHAR(255),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_dp_company_id ON document_pages(company_id);
+CREATE INDEX IF NOT EXISTS idx_dp_doc_id ON document_pages(doc_id);
+
+-- ============================================================
+-- raw_artifacts 表 - 原始提取結果
+-- ============================================================
+CREATE TABLE IF NOT EXISTS raw_artifacts (
+    id SERIAL PRIMARY KEY,
+    artifact_id VARCHAR(255) UNIQUE,  -- 唯一標識
+    doc_id VARCHAR(255) NOT NULL,     -- 文檔 ID
+    company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE,
+    artifact_type VARCHAR(50),        -- 'text', 'table', 'image', 'metric'
+    content TEXT,                     -- 文本內容或 JSON
+    file_path VARCHAR(500),           -- 文件路徑 (圖片/表格)
+    file_type VARCHAR(50),            -- MIME 類型
+    page_num INTEGER,
+    bbox JSONB,                       -- 邊界框坐標
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_ra_doc_id ON raw_artifacts(doc_id);
+CREATE INDEX IF NOT EXISTS idx_ra_company_id ON raw_artifacts(company_id);
+CREATE INDEX IF NOT EXISTS idx_ra_type ON raw_artifacts(artifact_type);
 
 
 -- ============================================================
