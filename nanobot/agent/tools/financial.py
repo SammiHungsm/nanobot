@@ -412,18 +412,16 @@ class FinancialTools:
             else:
                 # 🔹 年度指標 → EAV
                 from ..ingestion.repository.db_client import DBClient
+                import re
                 
                 db = DBClient(self.pg_url)
                 await db.connect()
                 
-                # 數值處理：如果是字符串數字，轉換為 float
-                numeric_value = value
-                if isinstance(value, str) and value.replace(',', '').replace('-', '').replace('.', '').isdigit():
-                    numeric_value = float(value.replace(',', '').replace('-', ''))
-                elif isinstance(value, (int, float)):
-                    numeric_value = float(value)
-                else:
-                    # 非數值型（可能是 CEO 名字等）→ 強制轉為 JSONB
+                # 🎯 數值清洗：處理千分位、貨幣符號、括號負數
+                numeric_value = self._clean_numeric_value(value)
+                
+                # 如果清洗失敗，視為非數值型 → 寫入 JSONB
+                if numeric_value is None:
                     success = await db.update_company_extra_data(
                         company_id=company_id,
                         attribute_key=standard_name,
@@ -512,6 +510,78 @@ class FinancialTools:
             data={"success_count": success_count, "failed_count": failed_count},
             message=f"✅ 成功寫入 {success_count}/{len(metrics)} 個指標"
         )
+    
+    def _clean_numeric_value(self, value: Any) -> Optional[float]:
+        """
+        🎯 數值清洗：處理千分位、貨幣符號、括號負數
+        
+        支持格式：
+        - "1,500,000" → 1500000.0
+        - "HKD 1.5M" → 1500000.0
+        - "(1,500,000)" → -1500000.0
+        - "-$1,500" → -1500.0
+        - "USD 1.5 billion" → 1500000000.0
+        
+        Args:
+            value: 原始數值（可能是字串、整數、浮點數）
+            
+        Returns:
+            Optional[float]: 清洗後的數值，如果無法轉換則返回 None
+        """
+        import re
+        
+        # 如果已經是數值型，直接返回
+        if isinstance(value, (int, float)):
+            return float(value)
+        
+        if not isinstance(value, str):
+            return None
+        
+        # 去除前後空白
+        value_str = value.strip()
+        
+        # 檢測是否為括號表示的負數（會計慣例）
+        is_negative = False
+        if value_str.startswith('(') and value_str.endswith(')'):
+            is_negative = True
+            value_str = value_str[1:-1]  # 移除括號
+        
+        # 移除貨幣符號和文字
+        value_str = re.sub(r'[HKD|USD|CNY|RMB|€|£|¥]', '', value_str, flags=re.IGNORECASE)
+        
+        # 處理數量級縮寫 (M = Million, B = Billion, K = Thousand)
+        multiplier = 1.0
+        if 'M' in value_str.upper() or 'million' in value_str.lower():
+            multiplier = 1_000_000.0
+            value_str = re.sub(r'[Mm](illion)?', '', value_str)
+        elif 'B' in value_str.upper() or 'billion' in value_str.lower():
+            multiplier = 1_000_000_000.0
+            value_str = re.sub(r'[Bb](illion)?', '', value_str)
+        elif 'K' in value_str.upper() or 'thousand' in value_str.lower():
+            multiplier = 1_000.0
+            value_str = re.sub(r'[Kk](thousand)?', '', value_str)
+        
+        # 移除千分位逗號
+        value_str = value_str.replace(',', '')
+        
+        # 移除所有非數字字符（保留小數點和負號）
+        value_str = re.sub(r'[^\d\.\-]', '', value_str)
+        
+        # 如果結果為空，返回 None
+        if not value_str or value_str == '.' or value_str == '-':
+            return None
+        
+        # 轉換為浮點數
+        try:
+            result = float(value_str) * multiplier
+            
+            # 應用括號負數標記
+            if is_negative:
+                result = -result
+            
+            return result
+        except ValueError:
+            return None
     
     # ========================================================================
     # Helper Methods

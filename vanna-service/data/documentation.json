@@ -1,7 +1,52 @@
 {
   "description": "Documentation Training Data for Vanna - Business Logic",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "items": [
+    {
+      "id": "eav_architecture",
+      "content": "CRITICAL: financial_metrics uses EAV (Entity-Attribute-Value) model. Data is stored as ROWS (metric_name = 'Revenue') not COLUMNS (revenue column).",
+      "category": "critical"
+    },
+    {
+      "id": "eav_query_pattern",
+      "content": "To query a specific metric, use: SELECT value FROM financial_metrics WHERE metric_name = 'Revenue' AND year = 2023;",
+      "category": "critical"
+    },
+    {
+      "id": "eav_multiple_metrics",
+      "content": "To query multiple metrics for a company, use: SELECT metric_name, value FROM financial_metrics WHERE company_id = 1 AND year = 2023;",
+      "category": "example"
+    },
+    {
+      "id": "jsonb_architecture",
+      "content": "CRITICAL: companies.extra_data is a JSONB column storing dynamic attributes (CEO, major customers, core technology, etc.).",
+      "category": "critical"
+    },
+    {
+      "id": "jsonb_query_pattern",
+      "content": "To query JSONB attributes, use the -> operator: SELECT stock_code FROM companies WHERE extra_data->>'chief_executive' = '張三';",
+      "category": "critical"
+    },
+    {
+      "id": "jsonb_ilike_pattern",
+      "content": "For partial matches in JSONB, use ILIKE: SELECT stock_code FROM companies WHERE extra_data->>'major_customers' ILIKE '%Pfizer%';",
+      "category": "example"
+    },
+    {
+      "id": "jsonb_nested_query",
+      "content": "For nested JSONB values, use -> for JSON object or ->> for text: SELECT extra_data->'auditor'->>'firm' FROM companies WHERE id = 1;",
+      "category": "example"
+    },
+    {
+      "id": "dynamic_regions",
+      "content": "Revenue breakdown regions are DYNAMIC (not predefined). Companies may use different region names: 'Greater Bay Area', 'APAC', 'Belt and Road', etc.",
+      "category": "definition"
+    },
+    {
+      "id": "region_query_pattern",
+      "content": "Query revenue breakdown by exact region name from the report: SELECT category, percentage FROM revenue_breakdown WHERE company_id = 1 AND category = 'greater_bay_area';",
+      "category": "example"
+    },
     {
       "id": "critical_standardized_value",
       "content": "CRITICAL: financial_metrics table has TWO value columns: 'value' (original raw value) and 'standardized_value' (normalized to absolute units in HKD).",
