@@ -5,6 +5,7 @@ Vanna Training Module - Data-Driven Training for Annual Report Analysis
 1. 從 JSON 檔案載入訓練資料（資料與代碼分離）
 2. DDL 白名單驗證（防止 Vanna 學到垃圾表）
 3. 支援熱更新（更新 JSON 後重新訓練）
+4. 🚀 並行訓練（ThreadPoolExecutor 加速）
 """
 
 import os
@@ -12,6 +13,7 @@ import json
 import re
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from loguru import logger
 
 
@@ -263,18 +265,51 @@ class VannaTrainingData:
     # 訓練方法
     # ===========================================
     
-    def train_vanna(self, vn, validate: bool = True) -> Dict[str, Any]:
+    def _train_single_ddl(self, vn, ddl: str) -> Tuple[bool, str]:
+        """訓練單個 DDL（用於並行執行）"""
+        try:
+            vn.train(ddl=ddl)
+            return True, ""
+        except Exception as e:
+            return False, str(e)
+    
+    def _train_single_doc(self, vn, doc: str) -> Tuple[bool, str]:
+        """訓練單個 Documentation（用於並行執行）"""
+        try:
+            vn.train(documentation=doc)
+            return True, ""
+        except Exception as e:
+            return False, str(e)
+    
+    def _train_single_sql(self, vn, pair: dict, validate: bool) -> Tuple[bool, str, str]:
+        """訓練單個 SQL（用於並行執行）"""
+        try:
+            if validate:
+                is_valid, reason = self.validate_sql(pair["sql"])
+                if not is_valid:
+                    return False, reason, pair['question'][:30]
+            
+            vn.train(
+                question=pair["question"],
+                sql=pair["sql"]
+            )
+            return True, "", pair['question'][:50]
+        except Exception as e:
+            return False, str(e), pair.get('question', 'unknown')[:30]
+    
+    def train_vanna(self, vn, validate: bool = True, max_workers: int = 4) -> Dict[str, Any]:
         """
-        使用所有訓練資料訓練 Vanna
+        使用所有訓練資料訓練 Vanna（並行版本）
         
         Args:
             vn: Vanna 實例
             validate: 是否在訓練前驗證 SQL
+            max_workers: 並行線程數
             
         Returns:
             Dict: 訓練統計
         """
-        logger.info("🧠 開始訓練 Vanna...")
+        logger.info("🧠 開始訓練 Vanna (並行模式)...")
         
         stats = {
             "ddl_trained": 0,
@@ -289,48 +324,45 @@ class VannaTrainingData:
             if validation["invalid"] > 0:
                 logger.warning(f"⚠️ 發現 {validation['invalid']} 個無效 SQL，請檢查白名單配置")
         
-        # 2. 訓練 DDL
+        # 2. 並行訓練 DDL
         logger.info("\n📝 訓練 DDL...")
-        for ddl in self.load_ddl():
-            try:
-                vn.train(ddl=ddl)
-                stats["ddl_trained"] += 1
-                logger.debug(f"   ✅ DDL trained")
-            except Exception as e:
-                stats["errors"].append(f"DDL: {str(e)}")
-                logger.warning(f"   ⚠️ DDL training error: {e}")
+        ddl_list = self.load_ddl()
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(self._train_single_ddl, vn, ddl): ddl for ddl in ddl_list}
+            for future in as_completed(futures):
+                success, error = future.result()
+                if success:
+                    stats["ddl_trained"] += 1
+                else:
+                    stats["errors"].append(f"DDL: {error}")
+        logger.info(f"   ✅ DDL 訓練完成: {stats['ddl_trained']}")
         
-        # 3. 訓練 Documentation
+        # 3. 並行訓練 Documentation
         logger.info("\n📚 訓練 Documentation...")
-        for doc in self.load_documentation():
-            try:
-                vn.train(documentation=doc)
-                stats["documentation_trained"] += 1
-                logger.debug(f"   ✅ Documentation trained")
-            except Exception as e:
-                stats["errors"].append(f"Documentation: {str(e)}")
-                logger.warning(f"   ⚠️ Documentation training error: {e}")
+        doc_list = self.load_documentation()
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(self._train_single_doc, vn, doc): doc for doc in doc_list}
+            for future in as_completed(futures):
+                success, error = future.result()
+                if success:
+                    stats["documentation_trained"] += 1
+                else:
+                    stats["errors"].append(f"Documentation: {error}")
+        logger.info(f"   ✅ Documentation 訓練完成: {stats['documentation_trained']}")
         
-        # 4. 訓練 SQL Examples
+        # 4. 並行訓練 SQL Examples
         logger.info("\n💾 訓練 SQL Examples...")
-        for pair in self.load_sql_pairs():
-            try:
-                # 訓練前驗證
-                if validate:
-                    is_valid, reason = self.validate_sql(pair["sql"])
-                    if not is_valid:
-                        logger.warning(f"   ⚠️ 跳過無效 SQL: {pair['question'][:30]}... ({reason})")
-                        continue
-                
-                vn.train(
-                    question=pair["question"],
-                    sql=pair["sql"]
-                )
-                stats["sql_trained"] += 1
-                logger.debug(f"   ✅ SQL trained: {pair['question'][:50]}...")
-            except Exception as e:
-                stats["errors"].append(f"SQL: {str(e)}")
-                logger.warning(f"   ⚠️ SQL training error: {e}")
+        sql_pairs = self.load_sql_pairs()
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(self._train_single_sql, vn, pair, validate): pair for pair in sql_pairs}
+            for future in as_completed(futures):
+                success, error, question = future.result()
+                if success:
+                    stats["sql_trained"] += 1
+                    logger.debug(f"   ✅ SQL trained: {question}")
+                elif error:
+                    logger.warning(f"   ⚠️ 跳過/失敗: {question}... ({error})")
+        logger.info(f"   ✅ SQL 訓練完成: {stats['sql_trained']}")
         
         logger.info(f"\n✅ Vanna 訓練完成！")
         logger.info(f"   DDL: {stats['ddl_trained']}")

@@ -46,28 +46,36 @@ const UI = {
         this.elements.attachBtn = document.getElementById('attach-btn');
         this.elements.fileUpload = document.getElementById('file-upload');
         
-        // Bind event listeners
-        this.elements.chatForm.addEventListener('submit', (e) => this.handleChatSubmit(e));
-        this.elements.attachBtn.addEventListener('click', () => this.elements.fileUpload.click());
-        this.elements.fileUpload.addEventListener('change', async (e) => {
-            const files = Array.from(e.target.files);
-            await this.handleMultipleFileUpload(files, true);
-            e.target.value = '';
-        });
+        // Bind event listeners (with null checks)
+        if (this.elements.chatForm) {
+            this.elements.chatForm.addEventListener('submit', (e) => this.handleChatSubmit(e));
+        }
+        if (this.elements.attachBtn && this.elements.fileUpload) {
+            this.elements.attachBtn.addEventListener('click', () => this.elements.fileUpload.click());
+            this.elements.fileUpload.addEventListener('change', async (e) => {
+                const files = Array.from(e.target.files);
+                await this.handleMultipleFileUpload(files, true);
+                e.target.value = '';
+            });
+        }
         
         // Auto-resize textarea
-        this.elements.chatInput.addEventListener('input', function() {
-            this.style.height = 'auto';
-            this.style.height = Math.min(this.scrollHeight, 120) + 'px';
-        });
-        
-        // Enter to send
-        this.elements.chatInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                this.elements.chatForm.dispatchEvent(new Event('submit'));
-            }
-        });
+        if (this.elements.chatInput) {
+            this.elements.chatInput.addEventListener('input', function() {
+                this.style.height = 'auto';
+                this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+            });
+            
+            // Enter to send
+            this.elements.chatInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    if (this.elements.chatForm) {
+                        this.elements.chatForm.dispatchEvent(new Event('submit'));
+                    }
+                }
+            });
+        }
         
         console.log('[UI] ✅ UI module initialized');
     },

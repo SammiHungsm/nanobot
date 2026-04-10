@@ -20,7 +20,7 @@ const Auth = {
      * Initialize authentication module
      */
     init() {
-        // Cache DOM elements
+        // Cache DOM elements (with null checks)
         this.elements.overlay = document.getElementById('login-overlay');
         this.elements.form = document.getElementById('login-form');
         this.elements.usernameInput = document.getElementById('login-username');
@@ -28,9 +28,13 @@ const Auth = {
         this.elements.logoutBtn = document.getElementById('logout-btn');
         this.elements.displayUsername = document.getElementById('display-username');
         
-        // Bind event listeners
-        this.elements.form.addEventListener('submit', (e) => this.handleLogin(e));
-        this.elements.logoutBtn.addEventListener('click', () => this.handleLogout());
+        // Bind event listeners (with null checks)
+        if (this.elements.form) {
+            this.elements.form.addEventListener('submit', (e) => this.handleLogin(e));
+        }
+        if (this.elements.logoutBtn) {
+            this.elements.logoutBtn.addEventListener('click', () => this.handleLogout());
+        }
         
         // 🔧 修復：檢查 localStorage 是否有登入記錄，自動恢復登入狀態
         this.restoreSession();
@@ -41,7 +45,7 @@ const Auth = {
      */
     restoreSession() {
         const savedUser = localStorage.getItem('nanobot_user');
-        if (savedUser) {
+        if (savedUser && this.elements.overlay && this.elements.displayUsername) {
             this.currentUser = savedUser;
             this.elements.displayUsername.textContent = savedUser;
             
@@ -52,11 +56,6 @@ const Auth = {
                 this.elements.overlay.classList.remove('opacity-0');
             }, 300);
             
-            // 觸發 App 初始化
-            if (window.App && typeof App.init === 'function') {
-                App.init();
-            }
-            
             console.log(`✅ Session restored for user: ${savedUser}`);
         }
     },
@@ -66,9 +65,11 @@ const Auth = {
      */
     handleLogin(e) {
         e.preventDefault();
+        if (!this.elements.usernameInput) return;
+        
         const username = this.elements.usernameInput.value.trim();
         
-        if (username) {
+        if (username && this.elements.overlay && this.elements.displayUsername) {
             this.currentUser = username;
             this.elements.displayUsername.textContent = username;
             
@@ -81,11 +82,6 @@ const Auth = {
                 this.elements.overlay.classList.add('hidden');
                 this.elements.overlay.classList.remove('opacity-0');
             }, 300);
-            
-            // Trigger app initialization after login
-            if (window.App && typeof App.init === 'function') {
-                App.init();
-            }
         }
     },
     

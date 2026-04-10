@@ -496,23 +496,29 @@
             </div>
             
             <p class="text-sm text-slate-600 mb-4">
-                Please select the type of document you are uploading. This helps the system process it correctly.
+                Please select the type of document you are uploading:
             </p>
             
             <div class="space-y-3 mb-6">
+                <!-- Annual Report -->
                 <label class="flex items-start p-4 border-2 border-slate-200 rounded-lg cursor-pointer hover:border-blue-500 hover:bg-blue-50 transition group">
-                    <input type="radio" name="doc-type" value="annual_report" checked class="mt-1 mr-3 text-blue-600 focus:ring-blue-500">
+                    <input type="radio" name="doc-type" value="annual_report" checked 
+                           onclick="Library.handleDocTypeChange('annual_report')"
+                           class="mt-1 mr-3 text-blue-600 focus:ring-blue-500">
                     <div class="flex-1">
                         <div class="flex items-center">
                             <i class="fas fa-building mr-2 text-slate-400 group-hover:text-blue-600"></i>
-                            <span class="font-medium text-slate-800">Company Annual Report</span>
+                            <span class="font-medium text-slate-800">Company Annual Report (年報)</span>
                         </div>
-                        <p class="text-xs text-slate-500 mt-1">單一公司年報 - Financial statements, MD&A, notes</p>
+                        <p class="text-xs text-slate-500 mt-1">單一公司年報 - AI 自動提取公司信息和行業</p>
                     </div>
                 </label>
                 
+                <!-- Index Report -->
                 <label class="flex items-start p-4 border-2 border-slate-200 rounded-lg cursor-pointer hover:border-purple-500 hover:bg-purple-50 transition group" id="index-report-option">
-                    <input type="radio" name="doc-type" value="index_report" class="mt-1 mr-3 text-purple-600 focus:ring-purple-500">
+                    <input type="radio" name="doc-type" value="index_report"
+                           onclick="Library.handleDocTypeChange('index_report')"
+                           class="mt-1 mr-3 text-purple-600 focus:ring-purple-500">
                     <div class="flex-1">
                         <div class="flex items-center">
                             <i class="fas fa-chart-line mr-2 text-slate-400 group-hover:text-purple-600"></i>
@@ -522,14 +528,17 @@
                     </div>
                 </label>
                 
-                <label class="flex items-start p-4 border-2 border-slate-200 rounded-lg cursor-pointer hover:border-green-500 hover:bg-green-50 transition group">
-                    <input type="radio" name="doc-type" value="quarterly_report" class="mt-1 mr-3 text-green-600 focus:ring-green-500">
+                <!-- Excel (Disabled) -->
+                <label class="flex items-start p-4 border-2 border-slate-200 rounded-lg cursor-not-allowed opacity-50 bg-slate-50 group">
+                    <input type="radio" name="doc-type" value="excel" disabled
+                           class="mt-1 mr-3 text-green-600 focus:ring-green-500 cursor-not-allowed">
                     <div class="flex-1">
                         <div class="flex items-center">
-                            <i class="fas fa-calendar-alt mr-2 text-slate-400 group-hover:text-green-600"></i>
-                            <span class="font-medium text-slate-800">Quarterly Report</span>
+                            <i class="fas fa-file-excel mr-2 text-slate-400"></i>
+                            <span class="font-medium text-slate-500">Excel Spreadsheet</span>
+                            <span class="ml-2 text-xs bg-slate-200 text-slate-600 px-2 py-0.5 rounded">Coming Soon</span>
                         </div>
-                        <p class="text-xs text-slate-500 mt-1">季度報告 - Q1, Q2, Q3 financial updates</p>
+                        <p class="text-xs text-slate-400 mt-1">Excel 數據導入功能尚未開發</p>
                     </div>
                 </label>
             </div>
@@ -547,7 +556,7 @@
                         <p class="text-xs text-slate-500 mt-1">指數名稱，如「恒指生技指數」</p>
                     </div>
                     <div>
-                        <label class="block text-sm font-medium text-slate-700 mb-1">Confirmed Industry (確認行業)</label>
+                        <label class="block text-sm font-medium text-slate-700 mb-1">Confirmed Industry (確認行業) <span class="text-red-500">*</span></label>
                         <input type="text" id="confirmed-industry-input" placeholder="e.g., Biotech" 
                             class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-sm">
                         <p class="text-xs text-slate-500 mt-1">所有成分股都會被指派此行業（規則 A）</p>
@@ -557,13 +566,6 @@
                         <strong>規則 A：</strong>當報告有明確定義的行業時，所有成分股都會強制指派該行業，不再進行各自的 AI 行業預測。
                     </div>
                 </div>
-            </div>
-            
-            <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">
-                <p class="text-xs text-amber-700">
-                    <i class="fas fa-info-circle mr-1"></i>
-                    <strong>Tip:</strong> Index reports will update company master data (names, sectors) with authoritative information.
-                </p>
             </div>
             
             <div class="flex justify-end space-x-3">

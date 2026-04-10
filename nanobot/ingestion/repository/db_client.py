@@ -45,6 +45,7 @@ class DBClient:
         self.db_url = self._resolve_env_vars(self.db_url)
         
         self.pool: Optional[asyncpg.Pool] = None
+        self._conn: Optional[asyncpg.Connection] = None  # 🔧 單連接（向後兼容）
         self.pool_size = pool_size
         self.max_inactive_connection_lifetime = max_inactive_connection_lifetime
         
@@ -66,11 +67,12 @@ class DBClient:
     
     async def connect(self):
         """
-        連接數據庫（創建連接池）
+        連接數據庫（創建連接池 + 單連接向後兼容）
         
         Fix #2: 使用連接池代替單連接
         """
         try:
+            # 創建連接池
             self.pool = await asyncpg.create_pool(
                 self.db_url,
                 min_size=2,
@@ -78,13 +80,26 @@ class DBClient:
                 max_inactive_connection_lifetime=self.max_inactive_connection_lifetime,
                 command_timeout=60
             )
+            # 🔧 同時創建單連接（向後兼容 self.conn）
+            self._conn = await asyncpg.connect(self.db_url)
+            
             logger.info(f"✅ 數據庫連接池創建成功 (size={self.pool_size})")
         except Exception as e:
             logger.error(f"❌ 創建數據庫連接池失敗：{e}")
             raise
     
+    @property
+    def conn(self):
+        """向後兼容屬性：返回單連接"""
+        if self._conn is None:
+            raise RuntimeError("Database not connected. Call connect() first.")
+        return self._conn
+    
     async def close(self):
-        """關閉連接池"""
+        """關閉連接池和單連接"""
+        if self._conn:
+            await self._conn.close()
+            logger.info("📴 單連接已關閉")
         if self.pool:
             await self.pool.close()
             logger.info("📴 數據庫連接池已關閉")

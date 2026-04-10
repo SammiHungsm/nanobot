@@ -44,13 +44,15 @@ const Library = {
         this.elements.batchDeleteBtn = document.getElementById('batch-delete-btn');
         this.elements.batchDownloadBtn = document.getElementById('batch-download-btn');
         
-        // Bind event listeners
-        this.elements.fileUpload.addEventListener('change', async (e) => {
-            const files = Array.from(e.target.files);
-            // 🎯 改為先顯示類型選擇 modal，再上傳
-            this.showDocTypeModal(files);
-            e.target.value = '';
-        });
+        // Bind event listeners (with null checks)
+        if (this.elements.fileUpload) {
+            this.elements.fileUpload.addEventListener('change', async (e) => {
+                const files = Array.from(e.target.files);
+                // 🎯 改為先顯示類型選擇 modal，再上傳
+                this.showDocTypeModal(files);
+                e.target.value = '';
+            });
+        }
         
         // Start polling the server logs every 2 seconds
         setInterval(() => this.loadProcessingLogs(), 2000);
@@ -88,19 +90,6 @@ const Library = {
         if (indexThemeInput) indexThemeInput.value = '';
         if (confirmedIndustryInput) confirmedIndustryInput.value = '';
         
-        // 🌟 添加文檔類型切換事件
-        radioBtns.forEach(btn => {
-            btn.addEventListener('change', (e) => {
-                const indexOptions = document.getElementById('index-report-options');
-                if (e.target.value === 'index_report') {
-                    indexOptions.classList.remove('hidden');
-                    this.log('📊 選擇了指數報告，請填寫 Index Theme 和 Confirmed Industry', 'warning');
-                } else {
-                    indexOptions.classList.add('hidden');
-                }
-            });
-        });
-        
         // Show modal
         const modal = document.getElementById('doc-type-modal');
         if (modal) {
@@ -111,13 +100,45 @@ const Library = {
     },
     
     /**
+     * Handle doc type radio button change (called from HTML onclick)
+     */
+    handleDocTypeChange(value) {
+        const indexOptions = document.getElementById('index-report-options');
+        if (value === 'index_report') {
+            if (indexOptions) indexOptions.classList.remove('hidden');
+            this.log('📊 選擇了指數報告，請填寫 Index Theme 和 Confirmed Industry', 'warning');
+        } else {
+            if (indexOptions) indexOptions.classList.add('hidden');
+        }
+    },
+    
+    /**
+     * Close document type selection modal
+     */
+    closeDocTypeModal(clearFiles = true) {
+        const modal = document.getElementById('doc-type-modal');
+        if (modal) {
+            modal.classList.add('hidden');
+        }
+        if (clearFiles) {
+            this.pendingFiles = [];
+        }
+        this.log('Upload modal closed');
+    },
+    
+    /**
      * Confirm upload with selected document type
      * 🌟 收集指數報告的額外字段
      */
     async confirmUpload() {
+        console.log('[DEBUG] confirmUpload() called');
+        
         // Get selected document type
         const selectedRadio = document.querySelector('input[name="doc-type"]:checked');
         const docType = selectedRadio ? selectedRadio.value : 'annual_report';
+        
+        console.log('[DEBUG] Selected doc type:', docType);
+        console.log('[DEBUG] pendingFiles:', this.pendingFiles);
         
         this.selectedDocType = docType;
         
@@ -138,22 +159,30 @@ const Library = {
             this.log(`📊 指數報告設定: theme="${indexTheme}", industry="${confirmedIndustry}"`, 'warning');
         }
         
-        // Close modal
-        this.closeDocTypeModal();
+        // 🚨 先保存 files 引用，再關閉 modal
+        const filesToUpload = [...this.pendingFiles];
+        
+        console.log('[DEBUG] filesToUpload:', filesToUpload);
+        
+        // Close modal (不要清除 files)
+        this.closeDocTypeModal(false);
         
         // Proceed with upload
-        if (this.pendingFiles.length > 0) {
-            this.log(`🚀 開始上傳 ${this.pendingFiles.length} 個文件 (類型: ${docType})`, 'warning');
+        if (filesToUpload.length > 0) {
+            this.log(`🚀 開始上傳 ${filesToUpload.length} 個文件 (類型: ${docType})`, 'warning');
             
             // 🌟 傳遞額外的指數報告參數
             await this.handleFileUpload(
-                this.pendingFiles, 
+                filesToUpload, 
                 docType,
                 indexTheme,
                 confirmedIndustry
             );
-            this.pendingFiles = [];
+        } else {
+            console.error('[DEBUG] No files to upload!');
+            this.log('❌ 沒有文件可上傳', 'error');
         }
+        this.pendingFiles = [];
     },
     
     /**

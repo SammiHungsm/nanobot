@@ -129,6 +129,8 @@ services:
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
       - DASHSCOPE_API_BASE=${DASHSCOPE_API_BASE:-https://coding.dashscope.aliyuncs.com/v1}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      # Disable ChromaDB telemetry warnings
+      - ANONYMIZED_TELEMETRY=False
     depends_on:
       postgres-financial:
         condition: service_healthy  # ✅ 等待 PostgreSQL 完全启动
