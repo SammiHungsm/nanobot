@@ -383,6 +383,198 @@ ORDER BY rq.priority ASC, rq.created_at ASC;
 
 
 -- ============================================================
+-- 舊版 Company-Centric Schema (Vanna 向後兼容)
+-- ============================================================
+-- 這些表是為了 Vanna SQL 訓練數據的向後兼容
+-- 新工具應使用上面的 document-centric schema
+-- ============================================================
+
+-- companies 表 - 公司主表
+CREATE TABLE IF NOT EXISTS companies (
+    id SERIAL PRIMARY KEY,
+    name_en VARCHAR(255),
+    name_zh VARCHAR(255),
+    stock_code VARCHAR(50) UNIQUE,
+    industry VARCHAR(100),
+    sector VARCHAR(100),
+    auditor VARCHAR(100),
+    auditor_opinion VARCHAR(50),
+    ultimate_controlling_shareholder TEXT,
+    principal_banker TEXT,
+    extra_data JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_companies_stock_code ON companies(stock_code);
+CREATE INDEX IF NOT EXISTS idx_companies_sector ON companies(sector);
+CREATE INDEX IF NOT EXISTS idx_companies_industry ON companies(industry);
+
+-- financial_metrics 表 - 財務指標 (EAV 模型)
+CREATE TABLE IF NOT EXISTS financial_metrics (
+    id SERIAL PRIMARY KEY,
+    company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE,
+    year INTEGER NOT NULL,
+    fiscal_period VARCHAR(20) DEFAULT 'FY',
+    metric_name VARCHAR(255) NOT NULL,
+    metric_name_zh VARCHAR(255),
+    value DECIMAL(20, 4),
+    standardized_value DECIMAL(20, 4),
+    standardized_currency VARCHAR(10) DEFAULT 'HKD',
+    unit VARCHAR(50),
+    category VARCHAR(100),
+    original_metric_name VARCHAR(255),
+    source_file VARCHAR(255),
+    source_page INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(company_id, year, fiscal_period, metric_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_fm_company_id ON financial_metrics(company_id);
+CREATE INDEX IF NOT EXISTS idx_fm_year ON financial_metrics(year);
+CREATE INDEX IF NOT EXISTS idx_fm_metric_name ON financial_metrics(metric_name);
+CREATE INDEX IF NOT EXISTS idx_fm_category ON financial_metrics(category);
+
+-- market_data 表 - 市場數據
+CREATE TABLE IF NOT EXISTS market_data (
+    id SERIAL PRIMARY KEY,
+    company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE,
+    trade_date DATE NOT NULL,
+    closing_price DECIMAL(20, 4),
+    opening_price DECIMAL(20, 4),
+    high_price DECIMAL(20, 4),
+    low_price DECIMAL(20, 4),
+    trading_volume BIGINT,
+    issued_shares BIGINT,
+    source VARCHAR(100),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(company_id, trade_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_md_company_id ON market_data(company_id);
+CREATE INDEX IF NOT EXISTS idx_md_trade_date ON market_data(trade_date);
+
+-- key_personnel 表 - 關鍵人員
+CREATE TABLE IF NOT EXISTS key_personnel (
+    id SERIAL PRIMARY KEY,
+    company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE,
+    year INTEGER,
+    person_name VARCHAR(255),
+    person_name_zh VARCHAR(255),
+    role VARCHAR(255),
+    role_zh VARCHAR(255),
+    committee VARCHAR(255),
+    biography TEXT,
+    source_file VARCHAR(255),
+    source_page INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_kp_company_id ON key_personnel(company_id);
+
+-- shareholdings 表 - 股權結構
+CREATE TABLE IF NOT EXISTS shareholdings (
+    id SERIAL PRIMARY KEY,
+    company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE,
+    year INTEGER,
+    shareholder_name VARCHAR(255),
+    shareholder_name_zh VARCHAR(255),
+    shareholder_type VARCHAR(100),
+    percentage_held DECIMAL(10, 4),
+    trust_name VARCHAR(255),
+    trustee_name VARCHAR(255),
+    source_file VARCHAR(255),
+    source_page INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(company_id, year, shareholder_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_sh_company_id ON shareholdings(company_id);
+
+-- specific_events 表 - 特定事件
+CREATE TABLE IF NOT EXISTS specific_events (
+    id SERIAL PRIMARY KEY,
+    company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE,
+    event_category VARCHAR(100),
+    event_title VARCHAR(500),
+    event_detail TEXT,
+    event_date DATE,
+    effective_date DATE,
+    announcement_date DATE,
+    metric_value DECIMAL(20, 4),
+    metric_unit VARCHAR(50),
+    source_file VARCHAR(255),
+    source_page INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_se_company_id ON specific_events(company_id);
+CREATE INDEX IF NOT EXISTS idx_se_event_category ON specific_events(event_category);
+
+-- revenue_breakdown 表 - 收入分佈
+CREATE TABLE IF NOT EXISTS revenue_breakdown (
+    id SERIAL PRIMARY KEY,
+    company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE,
+    year INTEGER,
+    category VARCHAR(255),
+    category_type VARCHAR(50),
+    percentage DECIMAL(10, 4),
+    amount DECIMAL(20, 4),
+    currency VARCHAR(10),
+    sub_category VARCHAR(255),
+    sub_percentage DECIMAL(10, 4),
+    source_file VARCHAR(255),
+    source_page INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(company_id, year, category, category_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rb_company_id ON revenue_breakdown(company_id);
+
+-- debt_maturity 表 - 債務到期
+CREATE TABLE IF NOT EXISTS debt_maturity (
+    id SERIAL PRIMARY KEY,
+    company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE,
+    year INTEGER,
+    maturity_year INTEGER,
+    amount DECIMAL(20, 4),
+    currency VARCHAR(10),
+    debt_type VARCHAR(100),
+    source_file VARCHAR(255),
+    source_page INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_dm_company_id ON debt_maturity(company_id);
+
+-- listing_applications 表 - 上市申請統計
+CREATE TABLE IF NOT EXISTS listing_applications (
+    id SERIAL PRIMARY KEY,
+    company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE,
+    year INTEGER,
+    application_count INTEGER,
+    approved_count INTEGER,
+    rejected_count INTEGER,
+    source_file VARCHAR(255),
+    source_page INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(year, company_id)
+);
+
+-- document_pages 表 - 文檔頁面 (用於 fallback 搜索)
+CREATE TABLE IF NOT EXISTS document_pages (
+    id SERIAL PRIMARY KEY,
+    company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE,
+    page_num INTEGER,
+    markdown_content TEXT,
+    source_file VARCHAR(255),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_dp_company_id ON document_pages(company_id);
+
+
+-- ============================================================
 -- 初始數據
 -- ============================================================
 

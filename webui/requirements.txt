@@ -10,13 +10,14 @@ pydantic==2.5.2
 # HTTP Client
 httpx==0.25.2
 asyncpg==0.29.0
+aiohttp>=3.9.0  # Required for gateway streaming
 
 # File Uploads
 python-multipart==0.0.6
 aiofiles==23.2.1
 
 # PDF Processing
-opendataloader-pdf>=0.2.0
+opendataloader-pdf[cpu]>=2.2.0  # Match version with main pyproject.toml
 PyMuPDF>=1.23.0
 
 # Logging

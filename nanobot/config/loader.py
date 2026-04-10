@@ -90,9 +90,10 @@ def resolve_config_env_vars(config: Config) -> Config:
 
 
 def _resolve_env_vars(obj: object) -> object:
-    """Recursively resolve ``${VAR}`` patterns in string values."""
+    """Recursively resolve ``${VAR}`` and ``${VAR:-default}`` patterns in string values."""
     if isinstance(obj, str):
-        return re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", _env_replace, obj)
+        # Support both ${VAR} and ${VAR:-default} patterns
+        return re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}", _env_replace_with_default, obj)
     if isinstance(obj, dict):
         return {k: _resolve_env_vars(v) for k, v in obj.items()}
     if isinstance(obj, list):
@@ -100,7 +101,22 @@ def _resolve_env_vars(obj: object) -> object:
     return obj
 
 
+def _env_replace_with_default(match: re.Match[str]) -> str:
+    """Replace ${VAR} or ${VAR:-default} with environment variable or default."""
+    name = match.group(1)
+    default = match.group(2)  # None if no default provided
+    value = os.environ.get(name)
+    if value is None:
+        if default is not None:
+            return default
+        raise ValueError(
+            f"Environment variable '{name}' referenced in config is not set"
+        )
+    return value
+
+
 def _env_replace(match: re.Match[str]) -> str:
+    """Replace ${VAR} with environment variable (legacy, no default support)."""
     name = match.group(1)
     value = os.environ.get(name)
     if value is None:

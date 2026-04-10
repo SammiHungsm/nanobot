@@ -1,10 +1,10 @@
 {
   "description": "DDL Training Data for Vanna - Database Schema",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "tables": [
     {
       "name": "companies",
-      "ddl": "CREATE TABLE companies (\n    id SERIAL PRIMARY KEY,\n    name_en_index VARCHAR(255),\n    name_en_extracted VARCHAR(255),\n    name_zh_extracted VARCHAR(255),\n    name_en VARCHAR(255),\n    name_zh VARCHAR(255),\n    stock_code VARCHAR(20) UNIQUE,\n    industry VARCHAR(100),\n    sector VARCHAR(100),\n    listing_status VARCHAR(50) DEFAULT 'listed',\n    auditor VARCHAR(200),\n    auditor_opinion VARCHAR(50),\n    ultimate_controlling_shareholder VARCHAR(255),\n    principal_banker VARCHAR(255),\n    listing_date DATE\n);",
+      "ddl": "CREATE TABLE companies (\n    id SERIAL PRIMARY KEY,\n    name_en_index VARCHAR(255),\n    name_en_extracted VARCHAR(255),\n    name_zh_extracted VARCHAR(255),\n    name_en VARCHAR(255),\n    name_zh VARCHAR(255),\n    stock_code VARCHAR(20) UNIQUE,\n    industry VARCHAR(100),\n    sector VARCHAR(100),\n    listing_status VARCHAR(50) DEFAULT 'listed',\n    auditor VARCHAR(200),\n    auditor_opinion VARCHAR(50),\n    ultimate_controlling_shareholder VARCHAR(255),\n    principal_banker VARCHAR(255),\n    extra_data JSONB DEFAULT '{}'::jsonb,\n    listing_date DATE\n);",
       "enabled": true
     },
     {
@@ -15,12 +15,12 @@
     },
     {
       "name": "financial_metrics",
-      "ddl": "CREATE TABLE financial_metrics (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER NOT NULL REFERENCES companies(id),\n    year INTEGER NOT NULL,\n    fiscal_period VARCHAR(10) NOT NULL,\n    metric_name VARCHAR(100) NOT NULL,\n    metric_name_zh VARCHAR(100) NOT NULL,\n    original_metric_name VARCHAR(200),\n    value DOUBLE PRECISION NOT NULL,\n    unit VARCHAR(20) NOT NULL,\n    standardized_value NUMERIC(20,2),\n    standardized_currency VARCHAR(10) DEFAULT 'HKD',\n    category VARCHAR(50),\n    source_file VARCHAR(500),\n    source_page INTEGER\n);",
+      "ddl": "CREATE TABLE financial_metrics (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER NOT NULL REFERENCES companies(id),\n    year INTEGER NOT NULL,\n    fiscal_period VARCHAR(10) NOT NULL DEFAULT 'FY',\n    metric_name VARCHAR(100) NOT NULL,\n    metric_name_zh VARCHAR(100),\n    original_metric_name VARCHAR(200),\n    value DOUBLE PRECISION NOT NULL,\n    unit VARCHAR(20) NOT NULL,\n    standardized_value NUMERIC(20,2),\n    standardized_currency VARCHAR(10) DEFAULT 'HKD',\n    category VARCHAR(50),\n    source_file VARCHAR(500),\n    source_page INTEGER,\n    UNIQUE(company_id, year, fiscal_period, metric_name)\n);",
       "enabled": true
     },
     {
       "name": "market_data",
-      "ddl": "CREATE TABLE market_data (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER NOT NULL REFERENCES companies(id),\n    trade_date DATE NOT NULL,\n    closing_price DECIMAL(18, 6),\n    opening_price DECIMAL(18, 6),\n    high_price DECIMAL(18, 6),\n    low_price DECIMAL(18, 6),\n    issued_shares BIGINT,\n    trading_volume BIGINT,\n    market_cap DECIMAL(20, 2)\n);",
+      "ddl": "CREATE TABLE market_data (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER NOT NULL REFERENCES companies(id),\n    trade_date DATE NOT NULL,\n    closing_price DECIMAL(18, 6),\n    opening_price DECIMAL(18, 6),\n    high_price DECIMAL(18, 6),\n    low_price DECIMAL(18, 6),\n    issued_shares BIGINT,\n    trading_volume BIGINT,\n    source VARCHAR(100),\n    UNIQUE(company_id, trade_date)\n);",
       "enabled": true
     },
     {
@@ -30,17 +30,17 @@
     },
     {
       "name": "shareholdings",
-      "ddl": "CREATE TABLE shareholdings (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER NOT NULL REFERENCES companies(id),\n    year INTEGER NOT NULL,\n    shareholder_name VARCHAR(255) NOT NULL,\n    shareholder_name_zh VARCHAR(255),\n    shareholder_type VARCHAR(50),\n    percentage_held DECIMAL(10, 4),\n    shares_held BIGINT,\n    trust_name VARCHAR(255),\n    trustee_name VARCHAR(255),\n    source_file VARCHAR(500),\n    source_page INTEGER\n);",
+      "ddl": "CREATE TABLE shareholdings (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER NOT NULL REFERENCES companies(id),\n    year INTEGER NOT NULL,\n    shareholder_name VARCHAR(255) NOT NULL,\n    shareholder_name_zh VARCHAR(255),\n    shareholder_type VARCHAR(50),\n    percentage_held DECIMAL(10, 4),\n    shares_held BIGINT,\n    trust_name VARCHAR(255),\n    trustee_name VARCHAR(255),\n    source_file VARCHAR(500),\n    source_page INTEGER,\n    UNIQUE(company_id, year, shareholder_name)\n);",
       "enabled": true
     },
     {
       "name": "specific_events",
-      "ddl": "CREATE TABLE specific_events (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER REFERENCES companies(id),\n    doc_id VARCHAR(100),\n    event_category VARCHAR(100) NOT NULL,\n    event_type VARCHAR(100),\n    event_title VARCHAR(500),\n    event_detail TEXT,\n    event_date DATE,\n    effective_date DATE,\n    metric_value DECIMAL(20, 2),\n    metric_unit VARCHAR(50),\n    source_file VARCHAR(500),\n    source_page INTEGER\n);",
+      "ddl": "CREATE TABLE specific_events (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER REFERENCES companies(id),\n    doc_id VARCHAR(100),\n    event_category VARCHAR(100) NOT NULL,\n    event_type VARCHAR(100),\n    event_title VARCHAR(500),\n    event_detail TEXT,\n    event_date DATE,\n    effective_date DATE,\n    announcement_date DATE,\n    metric_value DECIMAL(20, 2),\n    metric_unit VARCHAR(50),\n    source_file VARCHAR(500),\n    source_page INTEGER\n);",
       "enabled": true
     },
     {
       "name": "revenue_breakdown",
-      "ddl": "CREATE TABLE revenue_breakdown (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER NOT NULL REFERENCES companies(id),\n    year INTEGER NOT NULL,\n    category VARCHAR(100) NOT NULL,\n    category_type VARCHAR(50),\n    percentage DECIMAL(10, 4),\n    amount DECIMAL(20, 2),\n    currency VARCHAR(10),\n    sub_category VARCHAR(100),\n    sub_percentage DECIMAL(10, 4),\n    source_file VARCHAR(500),\n    source_page INTEGER\n);",
+      "ddl": "CREATE TABLE revenue_breakdown (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER NOT NULL REFERENCES companies(id),\n    year INTEGER NOT NULL,\n    category VARCHAR(100) NOT NULL,\n    category_type VARCHAR(50),\n    percentage DECIMAL(10, 4),\n    amount DECIMAL(20, 2),\n    currency VARCHAR(10),\n    sub_category VARCHAR(100),\n    sub_percentage DECIMAL(10, 4),\n    source_file VARCHAR(500),\n    source_page INTEGER,\n    UNIQUE(company_id, year, category, category_type)\n);",
       "enabled": true
     },
     {
@@ -50,13 +50,31 @@
     },
     {
       "name": "listing_applications",
-      "ddl": "CREATE TABLE listing_applications (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER REFERENCES companies(id),\n    doc_id VARCHAR(100),\n    year INTEGER NOT NULL,\n    application_count INTEGER,\n    approved_count INTEGER,\n    rejected_count INTEGER,\n    source_file VARCHAR(500),\n    source_page INTEGER\n);",
+      "ddl": "CREATE TABLE listing_applications (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER REFERENCES companies(id),\n    doc_id VARCHAR(100),\n    year INTEGER NOT NULL,\n    application_count INTEGER,\n    approved_count INTEGER,\n    rejected_count INTEGER,\n    source_file VARCHAR(500),\n    source_page INTEGER,\n    UNIQUE(year, company_id)\n);",
       "enabled": true
     },
     {
       "name": "document_pages",
       "ddl": "CREATE TABLE document_pages (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER NOT NULL REFERENCES companies(id),\n    doc_id VARCHAR(100),\n    year INTEGER NOT NULL,\n    page_num INTEGER NOT NULL,\n    markdown_content TEXT,\n    content_type VARCHAR(50),\n    has_images BOOLEAN DEFAULT FALSE,\n    has_charts BOOLEAN DEFAULT FALSE,\n    source_file VARCHAR(500),\n    UNIQUE(company_id, year, page_num, source_file)\n);",
       "enabled": true
+    },
+    {
+      "name": "documents",
+      "ddl": "CREATE TABLE documents (\n    id SERIAL PRIMARY KEY,\n    filename VARCHAR(500) NOT NULL,\n    report_type VARCHAR(50) DEFAULT 'annual_report',\n    is_index_report BOOLEAN DEFAULT FALSE,\n    parent_company VARCHAR(255),\n    index_theme VARCHAR(255),\n    confirmed_industry VARCHAR(100),\n    ai_extracted_industries JSONB,\n    dynamic_attributes JSONB DEFAULT '{}'::jsonb,\n    processing_status VARCHAR(50) DEFAULT 'pending',\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n    CONSTRAINT valid_report_type CHECK (report_type IN ('annual_report', 'index_report'))\n);",
+      "enabled": true,
+      "note": "Document-centric schema - stores report metadata and dynamic attributes"
+    },
+    {
+      "name": "document_companies",
+      "ddl": "CREATE TABLE document_companies (\n    id SERIAL PRIMARY KEY,\n    document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,\n    company_name VARCHAR(255) NOT NULL,\n    stock_code VARCHAR(50),\n    assigned_industry VARCHAR(100),\n    ai_suggested_industries JSONB,\n    industry_source VARCHAR(50) DEFAULT 'ai_extracted',\n    industry_confidence DECIMAL(5, 4),\n    dynamic_attributes JSONB DEFAULT '{}'::jsonb,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n    CONSTRAINT valid_industry_source CHECK (industry_source IN ('confirmed', 'ai_extracted', 'manual', 'pending'))\n);",
+      "enabled": true,
+      "note": "Links documents to companies with industry assignment (Rule A/B)"
+    },
+    {
+      "name": "vanna_training_data",
+      "ddl": "CREATE TABLE vanna_training_data (\n    id SERIAL PRIMARY KEY,\n    question TEXT NOT NULL,\n    sql_query TEXT NOT NULL,\n    table_name VARCHAR(255),\n    documentation TEXT,\n    quality_score DECIMAL(3, 2),\n    is_verified BOOLEAN DEFAULT FALSE,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);",
+      "enabled": true,
+      "note": "Stores Vanna training examples for text-to-SQL"
     }
   ]
 }

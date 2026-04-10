@@ -79,7 +79,7 @@ VOLUME /app/.data
 
 EXPOSE 8080
 
-ENV NANOBOT_CONFIG=/app/config/config.yaml
+ENV NANOBOT_CONFIG=/app/config/config.json
 ENV PYTHONUNBUFFERED=1
 ENV USE_CUDA=false
 ENV TORCH_DEVICE=cpu
@@ -87,4 +87,4 @@ ENV TORCH_DEVICE=cpu
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
-CMD ["nanobot", "start", "--config", "/app/config/config.yaml"]
+CMD ["nanobot", "gateway", "--config", "/app/config/config.json"]

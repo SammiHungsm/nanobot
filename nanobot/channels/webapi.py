@@ -13,6 +13,7 @@ Endpoints:
 import asyncio
 import uuid
 import json
+import os
 from typing import Any, Union
 
 from fastapi import FastAPI, HTTPException
@@ -49,6 +50,7 @@ class HealthResponse(BaseModel):
     status: str
     channel: str
     version: str = "1.0.0"
+    database: str = "unknown"  # Database connectivity status
 
 
 class WebAPIChannel(BaseChannel):
@@ -97,10 +99,24 @@ class WebAPIChannel(BaseChannel):
         
         @self.app.get("/api/health", response_model=HealthResponse)
         async def health_check():
-            """Health check endpoint."""
+            """Health check endpoint with database connectivity test."""
+            db_status = "unknown"
+            try:
+                import asyncpg
+                db_url = os.getenv("DATABASE_URL", "")
+                if db_url:
+                    conn = await asyncpg.connect(db_url, timeout=5)
+                    await conn.close()
+                    db_status = "connected"
+                else:
+                    db_status = "not_configured"
+            except Exception as e:
+                db_status = f"error: {str(e)[:50]}"
+                
             return HealthResponse(
                 status="online",
                 channel=self.name,
+                database=db_status,
             )
 
         @self.app.post("/api/chat", response_model=ChatResponse)
@@ -172,15 +188,21 @@ class WebAPIChannel(BaseChannel):
                         # 等待下一個字粒，超時設為 120 秒 (避免一直卡死)
                         chunk = await asyncio.wait_for(message_queue.get(), timeout=120.0)
                         
-                        if chunk == "[DONE]":
-                            break
-                            
+                        # Parse the JSON chunk to check for done signal
+                        try:
+                            chunk_data = json.loads(chunk) if isinstance(chunk, str) else chunk
+                            if chunk_data.get("type") == "done":
+                                break
+                        except (json.JSONDecodeError, TypeError):
+                            # Fallback: treat as raw content
+                            pass
+                        
                         # 🌟 SSE 格式輸出
-                        yield f"data: {json.dumps({'content': chunk})}\n\n"
+                        yield f"data: {chunk}\n\n"
                 except asyncio.TimeoutError:
-                    yield f"data: {json.dumps({'error': 'Agent thinking timeout (120s)'})}\n\n"
+                    yield f"data: {json.dumps({'type': 'error', 'content': 'Agent thinking timeout (120s)'})}\n\n"
                 except Exception as e:
-                    yield f"data: {json.dumps({'error': f'Stream Error: {str(e)}'})}\n\n"
+                    yield f"data: {json.dumps({'type': 'error', 'content': f'Stream Error: {str(e)}'})}\n\n"
                 finally:
                     await self._cleanup_tracking_id(tracking_id, delay=0)
 
@@ -221,13 +243,13 @@ class WebAPIChannel(BaseChannel):
                     target.set_result(msg.content)
             elif isinstance(target, asyncio.Queue):
                 if is_progress:
-                    # 🌟 如果只係進度 (例如: "Executing read_file...")
-                    # 加上 Markdown 引用格式同 Emoji 推畀 WebUI，但【唔好】結束 Stream
-                    await target.put(f"\n> ⏳ *{msg.content}*\n\n")
+                    # 🌟 Progress message: use proper JSON SSE format
+                    # Frontend will render as italic/progress indicator
+                    await target.put(json.dumps({"type": "progress", "content": msg.content}))
                 else:
                     # 🌟 如果係最終答案，推入結果並標記 [DONE] 結束
-                    await target.put(msg.content)
-                    await target.put("[DONE]")
+                    await target.put(json.dumps({"type": "content", "content": msg.content}))
+                    await target.put(json.dumps({"type": "done"}))
             return
 
     async def send_delta(self, chat_id: str, delta: str, metadata: dict[str, Any] | None = None) -> None:
@@ -237,8 +259,8 @@ class WebAPIChannel(BaseChannel):
         if tracking_id and tracking_id in self._response_cache:
             target = self._response_cache[tracking_id]
             if isinstance(target, asyncio.Queue):
-                # 🌟 將字粒放進 Queue 推俾前端
-                await target.put(delta)
+                # 🌟 將字粒放進 Queue 推俾前端 - use consistent JSON format
+                await target.put(json.dumps({"type": "delta", "content": delta}))
 
     async def _cleanup_tracking_id(self, tracking_id: str, delay: float = 5.0) -> None:
         """Clean up tracking ID from cache after a delay."""

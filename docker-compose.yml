@@ -17,9 +17,9 @@ services:
     ports:
       - "5433:5432"
     environment:
-      POSTGRES_DB: annual_reports
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres_password_change_me
+      POSTGRES_DB: ${POSTGRES_DB:-annual_reports}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres_password_change_me}
       POSTGRES_INITDB_ARGS: "-E UTF8"
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -50,9 +50,13 @@ services:
       - "8081:8081"
     environment:
       - NANOBOT_CONFIG=/app/config/config.json
-      - LOG_LEVEL=DEBUG
+      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
       - HTTPX_LOG_LEVEL=DEBUG
-      - DATABASE_URL=postgresql://postgres:postgres_password_change_me@postgres-financial:5432/annual_reports
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres_password_change_me}@postgres-financial:5432/${POSTGRES_DB:-annual_reports}
+      # 🔑 API Keys from .env (required for config.json env var interpolation)
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
+      - DASHSCOPE_API_BASE=${DASHSCOPE_API_BASE:-https://coding.dashscope.aliyuncs.com/v1}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     volumes:
       - ./config:/app/config
       - ~/.nanobot:/root/.nanobot
@@ -86,7 +90,7 @@ services:
     environment:
       - PDF_UPLOAD_DIR=/app/uploads
       - PDF_OUTPUT_DIR=/app/outputs
-      - DATABASE_URL=postgresql://postgres:postgres_password_change_me@postgres-financial:5432/annual_reports
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres_password_change_me}@postgres-financial:5432/${POSTGRES_DB:-annual_reports}
       - GATEWAY_URL=http://nanobot-gateway:8081
       - DATA_DIR=/app/data/raw
       - PYTHONUNBUFFERED=1
@@ -94,6 +98,9 @@ services:
       - JAVA_OPTS=-Xmx2g -Xms512m  # Java heap for OpenDataLoader (2GB max, 512MB min)
       - _JAVA_OPTIONS=-Xmx2g -Xms512m
       - NANOBOT_CONFIG=/app/config/config.json  # Config file path for API keys
+      # 🔑 API Keys for document processing
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     depends_on:
       postgres-financial:
         condition: service_healthy
@@ -115,9 +122,13 @@ services:
       - ./config:/app/config
       - ~/.nanobot:/root/.nanobot
     environment:
-      - DATABASE_URL=postgresql://postgres:postgres_password_change_me@postgres-financial:5432/annual_reports
-      - VANNA_MODEL=financial-sql
-      - LOG_LEVEL=DEBUG
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres_password_change_me}@postgres-financial:5432/${POSTGRES_DB:-annual_reports}
+      - VANNA_MODEL=${VANNA_MODEL:-financial-sql}
+      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
+      # 🔑 API Keys for Vanna OpenAI-compatible LLM
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
+      - DASHSCOPE_API_BASE=${DASHSCOPE_API_BASE:-https://coding.dashscope.aliyuncs.com/v1}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     depends_on:
       postgres-financial:
         condition: service_healthy  # ✅ 等待 PostgreSQL 完全启动
@@ -136,11 +147,14 @@ services:
       - worker
     command: ["python", "-m", "nanobot.ingestion.batch_processor"]
     environment:
-      - DATABASE_URL=postgresql://postgres:postgres_password_change_me@postgres-financial:5432/annual_reports
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres_password_change_me}@postgres-financial:5432/${POSTGRES_DB:-annual_reports}
       - DATA_DIR=/app/data/raw
       - PDF_INPUT_DIR=/data/pdfs
-      - MAX_CONCURRENT_TASKS=5
-      - BATCH_SIZE=10
+      - MAX_CONCURRENT_TASKS=${MAX_CONCURRENT_TASKS:-5}
+      - BATCH_SIZE=${BATCH_SIZE:-10}
+      # 🔑 API Keys for PDF processing
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     depends_on:
       - postgres-financial
     restart: unless-stopped
