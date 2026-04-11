@@ -431,13 +431,13 @@ v_documents_for_vanna 是 Vanna 專用文檔視圖：
 這是 Vanna 查詢文檔的最佳入口。
 """,
             'raw_artifacts': """
-Raw_Artifacts 是 LiteParse 原始提取結果表：
+Raw_Artifacts 是 OpenDataLoader 原始提取結果表：
 - artifact_id: 唯一識別 ID
 - document_id: 🌟 關聯到 documents (溯源)
 - artifact_type: text_chunk, table, chart, image_screenshot
-- content: LiteParse 提取的 Markdown 內容
-- file_path: Cap 圖儲存路徑
-- parsed_data: Qwen-VL 解析結果 (JSONB)
+- content: OpenDataLoader 提取的 Markdown 內容
+- file_path: OpenDataLoader 截圖/表格的儲存路徑
+- parsed_data: Qwen-VL 或 OpenDataLoader 解析結果 (JSONB)
 - parsing_status: pending, parsed, failed
 
 支援「完美溯源」：如果 AI 讀錯數，可以用 artifact_id 搵返原圖對質。

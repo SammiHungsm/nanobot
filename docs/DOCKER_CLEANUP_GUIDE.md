@@ -17,7 +17,7 @@
 
 ### 1. `sfc_poc/docker-compose.yml` - **旧架构**
 **原因**：
-- 使用 LiteParse MCP Server（已被 OpenDataLoader 替代）
+- 使用 OpenDataLoader MCP Server（已被 OpenDataLoader 替代）
 - 架构已过时
 - 与 `nanobot/docker-compose.yml` 冲突
 

@@ -481,7 +481,7 @@ CREATE TABLE IF NOT EXISTS key_personnel (
     
     -- 元數據
     biography TEXT,
-    source_page INTEGER,         -- 記錄 LiteParse 搵到嘅原圖/表格位置
+    source_page INTEGER,         -- 記錄 OpenDataLoader 搵到嘅原圖/表格位置
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -540,9 +540,9 @@ CREATE INDEX IF NOT EXISTS idx_shareholding_trustee_name ON shareholding_structu
 
 
 -- ============================================================
--- 14. 原始提取結果表 (Raw Artifacts - LiteParse 對應)
+-- 14. 原始提取結果表 (Raw Artifacts - OpenDataLoader 對應)
 -- ============================================================
--- 這個表用於存儲 LiteParse 截出的圖片、Markdown 和空間排版信息
+-- 這個表用於存儲 OpenDataLoader 截出的圖片、Markdown 和空間排版信息
 -- 支援「完美溯源」：如果 Qwen-VL 讀錯數，可以用 artifact_id 搵返原圖對質
 -- ============================================================
 CREATE TABLE IF NOT EXISTS raw_artifacts (
@@ -553,10 +553,10 @@ CREATE TABLE IF NOT EXISTS raw_artifacts (
     -- 類型分類
     artifact_type VARCHAR(50),        -- 'text_chunk', 'table', 'image_screenshot', 'chart'
     
-    -- LiteParse 嘔出的 Markdown 內容
+    -- OpenDataLoader 嘔出的 Markdown 內容
     content TEXT,
     
-    -- LiteParse Cap 圖的儲存路徑
+    -- OpenDataLoader Cap 圖的儲存路徑
     file_path VARCHAR(500),
     
     -- 空間排版位置 (Spatial Layout)
@@ -772,7 +772,7 @@ BEGIN
     RAISE NOTICE '  - review_queue (審核隊列)';
     RAISE NOTICE '  - vanna_training_data (Vanna 訓練數據)';
     RAISE NOTICE '';
-    RAISE NOTICE '深度內容抽取表 (LiteParse + Qwen-VL):';
+    RAISE NOTICE '深度內容抽取表 (OpenDataLoader + Qwen-VL):';
     RAISE NOTICE '  - financial_metrics (財務指標 EAV)';
     RAISE NOTICE '  - market_data (市場數據)';
     RAISE NOTICE '  - revenue_breakdown (收入分解)';

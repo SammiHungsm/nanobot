@@ -54,7 +54,7 @@ EXPOSE 8080
 
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
-ENV MCP_SERVER_URL=http://liteparse-mcp:3000
+ENV MCP_SERVER_URL=http://OpenDataLoader-mcp:3000
 ENV PDF_DATA_DIR=/data/pdfs
 ENV PDF_UPLOAD_DIR=/app/uploads
 ENV PDF_OUTPUT_DIR=/app/outputs

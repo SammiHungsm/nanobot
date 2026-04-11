@@ -276,13 +276,14 @@ def train_vanna_on_schema():
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         
         # Tables to skip from Vanna training (RAG-specific tables that Vanna shouldn't use)
-        RAG_TABLES = {'document_chunks', 'knowledge_graph'}
+        # 📝 document_tables 包含大量切片數據，避免 Vanna 嘗試寫 SQL Query 幾萬字嘅 Markdown
+        RAG_TABLES = {'document_chunks', 'document_tables', 'knowledge_graph'}
         
         cursor.execute("""
             SELECT table_name, table_schema 
             FROM information_schema.tables 
             WHERE table_schema = 'public'
-            AND table_name NOT IN ('document_chunks', 'knowledge_graph')
+            AND table_name NOT IN ('document_chunks', 'document_tables', 'knowledge_graph')
             ORDER BY table_name
         """)
         
