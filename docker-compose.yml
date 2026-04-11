@@ -40,6 +40,7 @@ services:
       -c max_connections=200
 
   # Nanobot Gateway - Main bot service
+  # Nanobot Gateway - Main bot service
   nanobot-gateway:
     container_name: nanobot-gateway
     <<: *common-config
@@ -53,15 +54,14 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
       - HTTPX_LOG_LEVEL=DEBUG
       - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres_password_change_me}@postgres-financial:5432/${POSTGRES_DB:-annual_reports}
-      # 🔑 API Keys from .env (required for config.json env var interpolation)
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
       - DASHSCOPE_API_BASE=${DASHSCOPE_API_BASE:-https://coding.dashscope.aliyuncs.com/v1}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     volumes:
       - ./config:/app/config
       - ~/.nanobot:/root/.nanobot
-      - ./data/uploads:/app/uploads  # Share uploads with webui
-      - ./data/raw:/app/data/raw      # Share processed data with webui
+      - ./data/uploads:/app/data/uploads  
+      - ./data/raw:/app/data/raw      
     depends_on:
       postgres-financial:
         condition: service_healthy
@@ -79,26 +79,26 @@ services:
     container_name: nanobot-webui
     command: ["python", "-m", "app.main"]
     volumes:
-      # Use bind mounts for persistence (survives container restarts)
-      - ./data/uploads:/app/uploads
-      - ./data/outputs:/app/outputs
+      # 🌟 修正：全部統一掛載到 /app/data/ 底下，並修正 outputs 為 output
+      - ./data/uploads:/app/data/uploads
+      - ./data/output:/app/data/output
       - ./data/raw:/app/data/raw
-      - ./nanobot:/app/nanobot:ro  # Mount nanobot package as read-only
-      - ./config:/app/config  # Mount config folder to read config.json
+      - ./nanobot:/app/nanobot:ro  
+      - ./config:/app/config  
     ports:
       - "3000:8080"
     environment:
-      - PDF_UPLOAD_DIR=/app/uploads
-      - PDF_OUTPUT_DIR=/app/outputs
+      # 🌟 修正：環境變數名稱與 config.py 完全對齊
+      - UPLOAD_DIR=/app/data/uploads
+      - OUTPUT_DIR=/app/data/output
+      - DATA_DIR=/app/data/raw
       - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres_password_change_me}@postgres-financial:5432/${POSTGRES_DB:-annual_reports}
       - GATEWAY_URL=http://nanobot-gateway:8081
-      - DATA_DIR=/app/data/raw
       - PYTHONUNBUFFERED=1
       - PYTHONPATH=/app
-      - JAVA_OPTS=-Xmx2g -Xms512m  # Java heap for OpenDataLoader (2GB max, 512MB min)
+      - JAVA_OPTS=-Xmx2g -Xms512m  
       - _JAVA_OPTIONS=-Xmx2g -Xms512m
-      - NANOBOT_CONFIG=/app/config/config.json  # Config file path for API keys
-      # 🔑 API Keys for document processing
+      - NANOBOT_CONFIG=/app/config/config.json  
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     depends_on:
@@ -109,7 +109,7 @@ services:
       resources:
         limits:
           cpus: '2'
-          memory: 4G  # Increased from 512M to 4GB for PDF processing with images
+          memory: 4G
   
   # Vanna AI Service - Text-to-SQL with persistence
   vanna-service:
