@@ -437,6 +437,7 @@ const UI = {
         }
         
         const filesToUpload = [];
+        let shouldReplace = false; // 🌟 新增：追蹤是否需要覆蓋
         
         for (const file of files) {
             const existingDoc = this.documents.find(d => d.name === file.name);
@@ -453,6 +454,7 @@ const UI = {
                     }
                     continue;
                 } else if (action === 'replace') {
+                    shouldReplace = true; // 🌟 標記需要覆蓋
                     // Remove old document from list
                     const idx = this.documents.findIndex(d => d.id === existingDoc.id);
                     if (idx !== -1) {
@@ -470,35 +472,17 @@ const UI = {
             return;
         }
         
-        const formData = new FormData();
-        for (const file of filesToUpload) {
-            formData.append('files', file);
-        }
-        
-        // 🌟 添加文檔類型參數
-        formData.append('doc_type', docType.type);
-        formData.append('is_index_report', docType.is_index_report);
-        
-        if (docType.is_index_report) {
-            formData.append('index_theme', docType.index_theme || '');
-            formData.append('confirmed_doc_industry', docType.confirmed_industry || '');
-        }
-        
         console.log('[DEBUG] 準備上傳文檔...');
-        console.log('[DEBUG] formData:', Object.fromEntries(formData.entries()));
         
         try {
-            const response = await fetch('/api/upload', {
-                method: 'POST',
-                body: formData
+            // 🌟 統一使用 api.js 進行請求，代碼瞬間乾淨晒
+            const result = await API.uploadFile(filesToUpload, Auth.getUser(), {
+                docType: docType.type,
+                isIndexReport: docType.is_index_report,
+                indexTheme: docType.index_theme,
+                confirmedIndustry: docType.confirmed_industry,
+                replace: shouldReplace // 🌟 裝返呢個極度重要嘅參數！
             });
-            
-            if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.detail || 'Upload failed');
-            }
-            
-            const result = await response.json();
             
             // Process each uploaded file
             let uploadedCount = 0;

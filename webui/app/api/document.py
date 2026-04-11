@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from loguru import logger
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, BackgroundTasks
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, BackgroundTasks
 from fastapi.responses import FileResponse, Response, StreamingResponse, JSONResponse
 from app.schemas.document import (
     DocumentListResponse,
@@ -87,13 +87,13 @@ async def get_document_status(doc_id: str):
 async def upload_document(
     background_tasks: BackgroundTasks,
     files: list[UploadFile] = File(...),
-    username: str = "anonymous",
-    replace: bool = False,  # 👈 接收前端傳來的 replace 參數
-    doc_type: str = "annual_report",  # 🎯 顯式宣告文件類型
-    # 🌟 新增指數報告參數
-    is_index_report: bool = False,
-    index_theme: str = None,
-    confirmed_doc_industry: str = None
+    # 🌟 以下所有參數必須加上 Form()，否則接唔到 api.js 的 formData
+    username: str = Form("anonymous"),
+    replace: bool = Form(False), 
+    doc_type: str = Form("annual_report"), 
+    is_index_report: bool = Form(False),
+    index_theme: str = Form(None),
+    confirmed_doc_industry: str = Form(None)
 ):
     """
     Upload one or more PDF documents
@@ -386,6 +386,50 @@ async def batch_download_documents(doc_ids: str):
         zip_buffer,
         media_type="application/zip",
         headers={"Content-Disposition": "attachment; filename=documents_batch.zip"}
+    )
+
+
+@router.get("/pdf/{doc_id}/preview")
+async def preview_pdf(doc_id: str):
+    """Preview a PDF document in browser"""
+    if document_service is None:
+        raise HTTPException(status_code=500, detail="Document service not initialized")
+    
+    if doc_id not in document_service.documents_db:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    doc = document_service.documents_db[doc_id]
+    file_path = Path(doc["path"])
+    
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found on disk")
+    
+    return FileResponse(
+        str(file_path),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"inline; filename={doc['filename']}"}
+    )
+
+
+@router.get("/pdf/{doc_id}/download")
+async def download_pdf(doc_id: str):
+    """Download a PDF document"""
+    if document_service is None:
+        raise HTTPException(status_code=500, detail="Document service not initialized")
+    
+    if doc_id not in document_service.documents_db:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    doc = document_service.documents_db[doc_id]
+    file_path = Path(doc["path"])
+    
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found on disk")
+    
+    return FileResponse(
+        str(file_path),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={doc['filename']}"}
     )
 
 

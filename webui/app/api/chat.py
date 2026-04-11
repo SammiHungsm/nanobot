@@ -7,6 +7,7 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from app.schemas.chat import ChatRequest, ChatResponse, ChatStreamRequest
+from app.services.chat_service import process_chat_message  # 🌟 引入 Service
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -23,26 +24,16 @@ GATEWAY_URL = os.getenv("GATEWAY_URL", _default_gateway)
 async def chat_endpoint(request: ChatRequest):
     """
     Main chat endpoint for processing user messages.
+    🌟 使用 Service 处理，启用 Fallback 逻辑
     """
     try:
-        # Forward to Gateway for LLM processing
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                f"{GATEWAY_URL}/api/chat",
-                json={
-                    "message": request.message,
-                    "username": request.username,
-                    "document_path": request.document_path
-                }
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                return ChatResponse(reply=result.get("reply", ""), success=True)
-            else:
-                raise HTTPException(status_code=response.status_code, detail=f"Gateway error: {response.text}")
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=503, detail=f"無法連線至 AI 引擎：{str(e)}")
+        reply = await process_chat_message(
+            user_message=request.message,
+            username=request.username,
+            document_path=request.document_path,
+            session_id=request.session_id
+        )
+        return ChatResponse(reply=reply, success=True)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

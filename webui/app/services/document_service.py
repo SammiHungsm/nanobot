@@ -297,7 +297,11 @@ class DocumentService:
                 company_id=None,  # 由 Vision LLM 從封面自動提取
                 doc_id=doc_id,
                 progress_callback=update_progress,
-                replace=doc.get("replace", False)
+                replace=doc.get("replace", False),
+                # 🌟 必須將新參數傳遞畀底層 Pipeline，否則 AI 唔知呢份係指數報告！
+                is_index_report=doc.get("is_index_report", False),
+                index_theme=doc.get("index_theme"),
+                confirmed_doc_industry=doc.get("confirmed_doc_industry")
             )
             
             return result

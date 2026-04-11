@@ -1,5 +1,6 @@
 """
 Database API Router - Exposes PostgreSQL data for the Database Tab
+🌟 Updated for Schema v2.3 Compatibility
 """
 import os
 import asyncpg
@@ -47,17 +48,17 @@ async def get_database_stats():
             # Get document count
             doc_count = await conn.fetchval("SELECT COUNT(*) FROM documents")
             
-            # Get chunk count
+            # Get chunk count (if table exists)
             chunk_count = await conn.fetchval("SELECT COUNT(*) FROM document_chunks")
             
-            # Get table artifacts count
+            # 🌟 修正：使用 artifact_type 和正確的值
             table_count = await conn.fetchval(
-                "SELECT COUNT(*) FROM raw_artifacts WHERE file_type = 'table_json'"
+                "SELECT COUNT(*) FROM raw_artifacts WHERE artifact_type = 'table'"
             )
             
-            # Get image count
+            # 🌟 修正：使用 artifact_type 和 image_screenshot
             image_count = await conn.fetchval(
-                "SELECT COUNT(*) FROM raw_artifacts WHERE file_type = 'image'"
+                "SELECT COUNT(*) FROM raw_artifacts WHERE artifact_type = 'image_screenshot'"
             )
             
             return {
@@ -78,11 +79,13 @@ async def get_recent_chunks(limit: int = 50, offset: int = 0):
         pool = await get_db_pool()
         
         async with pool.acquire() as conn:
+            # 🌟 修正：Join documents 表拎 doc_id，並使用 page_number
             rows = await conn.fetch(
                 """
-                SELECT doc_id, chunk_type, page_num, content, metadata
-                FROM document_chunks
-                ORDER BY created_at DESC
+                SELECT d.doc_id, c.chunk_type, c.page_number, c.content, c.metadata
+                FROM document_chunks c
+                JOIN documents d ON c.document_id = d.id
+                ORDER BY c.created_at DESC
                 LIMIT $1 OFFSET $2
                 """,
                 limit, offset
@@ -93,7 +96,7 @@ async def get_recent_chunks(limit: int = 50, offset: int = 0):
                 chunks.append({
                     "doc_id": row["doc_id"],
                     "chunk_type": row["chunk_type"],
-                    "page_num": row["page_num"],
+                    "page_num": row["page_number"],  # 前端預期 page_num，這裡做 Mapping
                     "content": row["content"],
                     "metadata": row["metadata"]
                 })
@@ -111,9 +114,10 @@ async def get_documents():
         pool = await get_db_pool()
         
         async with pool.acquire() as conn:
+            # 🌟 修正：使用 owner_company_id, filename (取代 title), report_type (取代 document_type)
             rows = await conn.fetch(
                 """
-                SELECT doc_id, company_id, title, document_type, 
+                SELECT doc_id, owner_company_id, filename, report_type, 
                        file_path, file_hash, file_size_bytes,
                        processing_status, uploaded_at, processing_completed_at,
                        total_chunks, total_artifacts
@@ -126,9 +130,9 @@ async def get_documents():
             for row in rows:
                 documents.append({
                     "doc_id": row["doc_id"],
-                    "company_id": row["company_id"],
-                    "title": row["title"],
-                    "document_type": row["document_type"],
+                    "company_id": row["owner_company_id"],  # 前端預期 company_id
+                    "title": row["filename"],  # 前端預期 title
+                    "document_type": row["report_type"],  # 前端預期 document_type
                     "file_path": row["file_path"],
                     "file_hash": row["file_hash"],
                     "file_size_bytes": row["file_size_bytes"],

@@ -48,8 +48,10 @@ const Library = {
         if (this.elements.fileUpload) {
             this.elements.fileUpload.addEventListener('change', async (e) => {
                 const files = Array.from(e.target.files);
-                // 🎯 改為先顯示類型選擇 modal，再上傳
-                this.showDocTypeModal(files);
+                // 🎯 改為使用 ui.js 的動態對話框
+                if (window.UI) {
+                    await UI.handleMultipleFileUpload(files, false);
+                }
                 e.target.value = '';
             });
         }

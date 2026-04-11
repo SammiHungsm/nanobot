@@ -37,10 +37,25 @@ const API = {
         return await response.json();
     },
     
-    async uploadFile(file, username) {
+    // 🌟 支援單一檔案或檔案陣列，支援 v2.3 新架構
+    async uploadFile(files, username, options = {}) {
         const formData = new FormData();
-        formData.append('file', file);
+        
+        // 處理多檔案上傳
+        if (Array.isArray(files)) {
+            files.forEach(f => formData.append('files', f));
+        } else {
+            formData.append('files', files);
+        }
+        
         formData.append('username', username);
+        
+        // 🌟 將新架構需要嘅參數加落 FormData
+        if (options.replace !== undefined) formData.append('replace', options.replace);
+        if (options.docType) formData.append('doc_type', options.docType);
+        if (options.isIndexReport !== undefined) formData.append('is_index_report', options.isIndexReport);
+        if (options.indexTheme) formData.append('index_theme', options.indexTheme);
+        if (options.confirmedIndustry) formData.append('confirmed_doc_industry', options.confirmedIndustry);
         
         const response = await fetch(`${this.BASE_URL}/api/upload`, {
             method: 'POST',
