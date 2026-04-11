@@ -171,13 +171,37 @@
     {
       "id": "biotech_top10_marketcap_001",
       "question": "Provide the Top 10 stock codes and names of the market capital from the BioTech Sector. The result is shown in a table.",
-      "sql": "SELECT c.stock_code, c.name_en as company_name, (m.closing_price * m.issued_shares) as market_capital, m.closing_price, m.issued_shares FROM companies c JOIN market_data m ON c.id = m.company_id WHERE c.sector = 'BioTech' AND m.trade_date = (SELECT MAX(trade_date) FROM market_data) ORDER BY market_capital DESC LIMIT 10;",
+      "sql": "SELECT c.stock_code, c.name_en as company_name, m.market_cap, m.close_price, m.data_date FROM companies c JOIN market_data m ON c.id = m.company_id WHERE c.sector = 'BioTech' AND m.market_cap IS NOT NULL ORDER BY m.market_cap DESC LIMIT 10;",
       "tags": [
         "biotech",
         "market_cap",
         "ranking",
         "top10"
-      ]
+      ],
+      "note": "Uses stored market_cap value. If market_cap is NULL, calculate dynamically: close_price * (query shares from another source)."
+    },
+    {
+      "id": "market_cap_dynamic_calculation_001",
+      "question": "Calculate market cap for company 00700 Tencent using latest closing price and total issued shares",
+      "sql": "SELECT c.stock_code, c.name_en, m.close_price, fm.value as issued_shares, (m.close_price * fm.value) as calculated_market_cap FROM companies c JOIN market_data m ON c.id = m.company_id JOIN financial_metrics fm ON c.id = fm.company_id WHERE c.stock_code = '00700' AND fm.metric_name ILIKE '%total shares%' AND m.data_date = (SELECT MAX(data_date) FROM market_data WHERE company_id = c.id);",
+      "tags": [
+        "market_cap",
+        "dynamic_calculation",
+        "financial_metrics"
+      ],
+      "note": "Dynamically calculates market cap from close_price * issued_shares for data freshness when static market_cap is unavailable."
+    },
+    {
+      "id": "market_cap_ranking_dynamic_001",
+      "question": "Rank top 5 companies by dynamically calculated market cap in HKD using standardized values",
+      "sql": "SELECT c.stock_code, c.name_en, (m.close_price * fm.standardized_value) as dynamic_market_cap, fm.standardized_currency FROM companies c JOIN market_data m ON c.id = m.company_id JOIN financial_metrics fm ON c.id = fm.company_id WHERE fm.metric_name ILIKE '%total shares%' AND m.market_cap IS NULL AND fm.year = 2024 ORDER BY dynamic_market_cap DESC LIMIT 5;",
+      "tags": [
+        "market_cap",
+        "dynamic_calculation",
+        "standardized_value",
+        "ranking"
+      ],
+      "note": "Uses standardized_value for issued_shares to ensure correct cross-company comparison. Combines with latest close_price for real-time market cap."
     },
     {
       "id": "biotech_top5_liabilities_001",
@@ -241,7 +265,7 @@
     {
       "id": "stock_price_volume_chart_001",
       "question": "Plot the line chart of the closing price and transaction volume for stock 09969 in 2022",
-      "sql": "SELECT trade_date, closing_price, trading_volume FROM market_data WHERE company_id = (SELECT id FROM companies WHERE stock_code = '09969') AND trade_date BETWEEN '2022-01-01' AND '2022-12-31' ORDER BY trade_date;",
+      "sql": "SELECT data_date, close_price, volume FROM market_data WHERE company_id = (SELECT id FROM companies WHERE stock_code = '09969') AND data_date BETWEEN '2022-01-01' AND '2022-12-31' ORDER BY data_date;",
       "tags": [
         "market_data",
         "price",
@@ -276,7 +300,7 @@
     {
       "id": "stock_avg_volume_001",
       "question": "What is the average trading volume for stock 09969 in 2022",
-      "sql": "SELECT AVG(trading_volume) as avg_volume FROM market_data WHERE company_id = (SELECT id FROM companies WHERE stock_code = '09969') AND trade_date BETWEEN '2022-01-01' AND '2022-12-31';",
+      "sql": "SELECT AVG(volume) as avg_volume FROM market_data WHERE company_id = (SELECT id FROM companies WHERE stock_code = '09969') AND data_date BETWEEN '2022-01-01' AND '2022-12-31';",
       "tags": [
         "market_data",
         "average",
@@ -298,7 +322,7 @@
     {
       "id": "biotech_hsbc_avg_price_001",
       "question": "Show average closing price for BioTech stocks with HSBC as principal banker in 2022",
-      "sql": "SELECT c.stock_code, c.name_en, AVG(m.closing_price) as avg_closing_price FROM companies c JOIN market_data m ON c.id = m.company_id WHERE c.sector = 'BioTech' AND c.principal_banker ILIKE '%HSBC%' AND m.trade_date BETWEEN '2022-01-01' AND '2022-12-31' GROUP BY c.stock_code, c.name_en ORDER BY avg_closing_price DESC;",
+      "sql": "SELECT c.stock_code, c.name_en, AVG(m.close_price) as avg_closing_price FROM companies c JOIN market_data m ON c.id = m.company_id WHERE c.sector = 'BioTech' AND c.principal_banker ILIKE '%HSBC%' AND m.data_date BETWEEN '2022-01-01' AND '2022-12-31' GROUP BY c.stock_code, c.name_en ORDER BY avg_closing_price DESC;",
       "tags": [
         "biotech",
         "hsbc",

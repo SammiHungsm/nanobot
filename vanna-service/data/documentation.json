@@ -24,8 +24,13 @@
     },
     {
       "id": "document_relation_type",
-      "content": "To find companies mentioned inside a document, join 'documents' with 'document_companies' using document_id, and check the 'relation_type' column (e.g., 'index_constituent', 'subsidiary', 'competitor', 'mentioned').",
+      "content": "To find companies mentioned inside a document, join 'documents' with 'document_companies' using document_id, and check the 'relation_type' column. Values: 'index_constituent' (指数成分股), 'subsidiary' (子公司), 'mentioned' (一般提及).",
       "category": "definition"
+    },
+    {
+      "id": "index_constituent_usage",
+      "content": "CRITICAL: For index reports (report_type = 'index_report'), relation_type should be 'index_constituent' for all companies in the report. This distinguishes them from regular annual report mentions.",
+      "category": "critical"
     },
     {
       "id": "v_companies_for_vanna_usage",
@@ -59,17 +64,17 @@
     },
     {
       "id": "jsonb_dynamic_attributes",
-      "content": "CRITICAL: The 'documents' and 'document_companies' tables contain JSONB columns named 'dynamic_attributes' and 'ai_suggested_industries'. These columns store dynamic metadata extracted by AI (e.g., 'index_quarter', 'report_version', 'base_date').",
+      "content": "CRITICAL: The 'companies' table contains a JSONB column 'extra_data' for dynamic attributes (CEO, major customers, etc.). The 'documents' table NO longer has dynamic_attributes (deleted in v2.3).",
       "category": "critical"
     },
     {
       "id": "jsonb_dynamic_query",
-      "content": "To query values inside dynamic_attributes, MUST use the PostgreSQL JSONB operator ->>. Example: SELECT filename FROM documents WHERE dynamic_attributes->>'index_quarter' = 'Q3';",
+      "content": "To query values inside extra_data, MUST use the PostgreSQL JSONB operator ->>. Example: SELECT name_en FROM companies WHERE extra_data->>'index_quarter' = 'Q3';",
       "category": "critical"
     },
     {
       "id": "jsonb_key_exists",
-      "content": "To check if a key exists in JSONB, use the ? operator: SELECT * FROM documents WHERE dynamic_attributes ? 'base_date';",
+      "content": "To check if a key exists in JSONB, use the ? operator: SELECT * FROM companies WHERE extra_data ? 'base_date';",
       "category": "example"
     },
     {
@@ -313,44 +318,29 @@
     },
     {
       "id": "specialized_tables",
-      "content": "當用戶詢問具體的財務數字時，請優先查詢對應的專用表：revenue_breakdown（收入分佈）、key_personnel（高管）、shareholdings（股東）、specific_events（特定事件）、market_data（股價）、debt_maturity（債務）、v_companies_resolved（公司信息）。",
+      "content": "當用戶詢問具體的財務數字時，請優先查詢對應的專用表：revenue_breakdown（收入分佈）、key_personnel（高管）、shareholding_structure（股東）、financial_metrics（財務指標）、market_data（股價）、document_companies（文檔公司關聯）。",
       "category": "system"
     },
     {
-      "id": "jsonb_dynamic_attributes",
-      "content": "CRITICAL: The 'documents' and 'document_companies' tables contain a JSONB column named 'dynamic_attributes'. This column stores dynamic metadata extracted by AI (e.g., 'index_quarter', 'report_version', 'is_audited').",
-      "category": "critical"
-    },
-    {
-      "id": "jsonb_dynamic_query",
-      "content": "To query values inside dynamic_attributes, MUST use the PostgreSQL JSONB operator ->>. Example: SELECT filename FROM documents WHERE dynamic_attributes->>'index_quarter' = 'Q3';",
-      "category": "example"
-    },
-    {
-      "id": "jsonb_key_exists",
-      "content": "To check if a key exists in JSONB, use the ? operator: SELECT * FROM documents WHERE dynamic_attributes ? 'index_quarter';",
-      "category": "example"
-    },
-    {
       "id": "index_report_characteristics",
-      "content": "Index reports (report_type = 'index_report') have: owner_company_id IS NULL, dynamic_attributes->>'theme' defined (e.g., 'Hang Seng Biotech Index'), multiple companies in document_companies.",
+      "content": "Index reports (report_type = 'index_report') have: owner_company_id IS NULL (no single parent company), multiple companies in document_companies with relation_type = 'index_constituent', confirmed_industry set for all constituents (Rule A).",
       "category": "definition",
-      "note": "v2.3: is_index_report → report_type, parent_company → owner_company_id IS NULL"
+      "note": "v2.3: dynamic_attributes deleted, index_theme moved to companies.extra_data"
     },
     {
       "id": "annual_report_characteristics",
-      "content": "Annual reports (report_type = 'annual_report') have: owner_company_id defined (single company), dynamic_attributes->>'theme' = NULL, usually single company or subsidiaries.",
+      "content": "Annual reports (report_type = 'annual_report') have: owner_company_id defined (single parent company), usually single company or subsidiaries, ai_extracted_industries for each company (Rule B).",
       "category": "definition",
-      "note": "v2.3: parent_company → owner_company_id"
+      "note": "v2.3: parent_company renamed to owner_company_id"
     },
     {
       "id": "document_companies_join",
-      "content": "To get all companies from a document with their industries: SELECT dc.company_name, dc.stock_code, dc.assigned_industry, dc.industry_source, d.index_theme FROM document_companies dc JOIN documents d ON dc.document_id = d.id;",
+      "content": "To get all companies from a document with their industries (v2.3): SELECT c.name_en, c.stock_code, dc.relation_type, dc.extracted_industries, dc.extraction_source FROM document_companies dc JOIN documents d ON dc.document_id = d.id JOIN companies c ON dc.company_id = c.id;",
       "category": "example"
     },
     {
       "id": "get_dynamic_keys",
-      "content": "To discover all available dynamic attribute keys: SELECT DISTINCT jsonb_object_keys(dynamic_attributes) AS key FROM documents WHERE dynamic_attributes IS NOT NULL;",
+      "content": "To discover all available dynamic attribute keys (v2.3): SELECT DISTINCT jsonb_object_keys(extra_data) AS key FROM companies WHERE extra_data IS NOT NULL;",
       "category": "example"
     },
     {

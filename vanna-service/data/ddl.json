@@ -1,23 +1,68 @@
 {
-  "description": "DDL Training Data for Vanna - Database Schema",
-  "version": "2.1.0",
+  "description": "DDL Training Data for Vanna - Database Schema v2.3",
+  "version": "2.3.0",
   "tables": [
     {
       "name": "companies",
-      "ddl": "CREATE TABLE companies (\n    id SERIAL PRIMARY KEY,\n    name_en_index VARCHAR(255),\n    name_en_extracted VARCHAR(255),\n    name_zh_extracted VARCHAR(255),\n    name_en VARCHAR(255),\n    name_zh VARCHAR(255),\n    stock_code VARCHAR(20) UNIQUE,\n    industry VARCHAR(100),\n    sector VARCHAR(100),\n    listing_status VARCHAR(50) DEFAULT 'listed',\n    auditor VARCHAR(200),\n    auditor_opinion VARCHAR(50),\n    ultimate_controlling_shareholder VARCHAR(255),\n    principal_banker VARCHAR(255),\n    extra_data JSONB DEFAULT '{}'::jsonb,\n    listing_date DATE\n);",
+      "ddl": "CREATE TABLE companies (\n    id SERIAL PRIMARY KEY,\n    name_en VARCHAR(255),\n    name_zh VARCHAR(255),\n    stock_code VARCHAR(50) UNIQUE,\n    confirmed_industry VARCHAR(100),\n    is_industry_confirmed BOOLEAN DEFAULT FALSE,\n    ai_extracted_industries JSONB,\n    sector VARCHAR(100),\n    auditor VARCHAR(200),\n    auditor_opinion VARCHAR(50),\n    ultimate_controlling_shareholder TEXT,\n    principal_banker TEXT,\n    extra_data JSONB DEFAULT '{}'::jsonb,\n    listing_status VARCHAR(50) DEFAULT 'listed',\n    listing_date DATE,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);",
+      "enabled": true,
+      "note": "🌟 v2.3: 统一的 name_en/name_zh，双轨制行业（confirmed_industry + ai_extracted_industries），动态属性在 extra_data"
+    },
+    {
+      "name": "documents",
+      "ddl": "CREATE TABLE documents (\n    id SERIAL PRIMARY KEY,\n    doc_id VARCHAR(255) UNIQUE,\n    filename VARCHAR(500) NOT NULL,\n    report_type VARCHAR(50) DEFAULT 'annual_report',\n    owner_company_id INTEGER REFERENCES companies(id),\n    year INTEGER,\n    file_path VARCHAR(500),\n    file_hash VARCHAR(64),\n    file_size_bytes BIGINT,\n    processing_status VARCHAR(50) DEFAULT 'pending',\n    processing_error TEXT,\n    total_chunks INTEGER DEFAULT 0,\n    total_artifacts INTEGER DEFAULT 0,\n    uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n    processing_completed_at TIMESTAMP\n);",
+      "enabled": true,
+      "note": "🌟 v2.3: owner_company_id 替代 parent_company，删除 dynamic_attributes/index_theme"
+    },
+    {
+      "name": "document_companies",
+      "ddl": "CREATE TABLE document_companies (\n    id SERIAL PRIMARY KEY,\n    document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,\n    company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,\n    relation_type VARCHAR(50) DEFAULT 'mentioned',\n    extracted_industries JSONB,\n    extraction_source VARCHAR(50) DEFAULT 'ai_predict',\n    extraction_confidence FLOAT DEFAULT 0.8,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n    UNIQUE(document_id, company_id)\n);",
+      "enabled": true,
+      "note": "🌟 v2.3 多對多關聯表：relation_type 应为 'mentioned', 'subsidiary', 或 'index_constituent'"
+    },
+    {
+      "name": "financial_metrics",
+      "ddl": "CREATE TABLE financial_metrics (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER NOT NULL REFERENCES companies(id),\n    year INTEGER NOT NULL,\n    fiscal_period VARCHAR(20) DEFAULT 'FY',\n    metric_name VARCHAR(100) NOT NULL,\n    metric_name_zh VARCHAR(100),\n    original_metric_name VARCHAR(200),\n    value NUMERIC(20, 2),\n    unit VARCHAR(50),\n    standardized_value NUMERIC(20, 2),\n    standardized_currency VARCHAR(10) DEFAULT 'HKD',\n    category VARCHAR(50),\n    source_document_id INTEGER REFERENCES documents(id),\n    source_page INTEGER,\n    extraction_confidence FLOAT DEFAULT 0.8,\n    metadata JSONB DEFAULT '{}'::jsonb,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n    CONSTRAINT unique_metric UNIQUE (company_id, year, fiscal_period, metric_name)\n);",
+      "enabled": true,
+      "note": "⚠️ 跨公司比較排名時，必須使用 standardized_value (已轉換為 HKD 絕對單位)，不可用 value"
+    },
+    {
+      "name": "market_data",
+      "ddl": "CREATE TABLE market_data (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER NOT NULL REFERENCES companies(id),\n    data_date DATE NOT NULL,\n    period_type VARCHAR(20) DEFAULT 'daily',\n    close_price NUMERIC(15, 4),\n    open_price NUMERIC(15, 4),\n    high_price NUMERIC(15, 4),\n    low_price NUMERIC(15, 4),\n    volume BIGINT,\n    turnover NUMERIC(20, 2),\n    market_cap NUMERIC(20, 2),\n    pe_ratio NUMERIC(10, 4),\n    pb_ratio NUMERIC(10, 4),\n    dividend_yield NUMERIC(6, 4),\n    source VARCHAR(100),\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);",
       "enabled": true
     },
     {
-      "name": "v_companies_resolved",
-      "ddl": "CREATE VIEW v_companies_resolved AS SELECT id, stock_code, COALESCE(name_en_index, name_en_extracted, name_en) AS display_name_en, COALESCE(name_zh_extracted, name_zh) AS display_name_zh, industry, sector, auditor, auditor_opinion, ultimate_controlling_shareholder, principal_banker, listing_status, listing_date FROM companies;",
-      "enabled": true,
-      "note": "Vanna 應優先查詢此視圖，它會自動選取最佳公司名稱（恆指報表 > PDF 擷取）"
+      "name": "key_personnel",
+      "ddl": "CREATE TABLE key_personnel (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER NOT NULL REFERENCES companies(id),\n    document_id INTEGER REFERENCES documents(id),\n    year INTEGER,\n    name_en VARCHAR(255),\n    name_zh VARCHAR(255),\n    position_title_en VARCHAR(255),\n    position_title_zh VARCHAR(255),\n    position_type VARCHAR(50),\n    role VARCHAR(255),\n    board_role VARCHAR(100),\n    committee_membership JSONB,\n    appointment_date DATE,\n    resignation_date DATE,\n    is_current BOOLEAN DEFAULT TRUE,\n    biography TEXT,\n    source_page INTEGER,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);",
+      "enabled": true
     },
     {
-      "name": "v_documents_for_vanna",
-      "ddl": "CREATE OR REPLACE VIEW v_documents_for_vanna AS SELECT d.id, d.doc_id, d.filename, d.report_type, d.year, d.processing_status, d.uploaded_at, c.name_en AS owner_company_name_en, c.name_zh AS owner_company_name_zh, c.stock_code AS owner_stock_code, d.dynamic_attributes->>'theme' AS doc_theme, d.dynamic_attributes->>'region' AS doc_region FROM documents d LEFT JOIN companies c ON d.owner_company_id = c.id;",
+      "name": "shareholding_structure",
+      "ddl": "CREATE TABLE shareholding_structure (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,\n    year INTEGER NOT NULL,\n    shareholder_name VARCHAR(255),\n    shareholder_type VARCHAR(50),\n    shares_held NUMERIC(20, 2),\n    percentage NUMERIC(6, 4),\n    is_controlling BOOLEAN DEFAULT FALSE,\n    is_institutional BOOLEAN DEFAULT FALSE,\n    source_document_id INTEGER REFERENCES documents(id) ON DELETE SET NULL,\n    notes TEXT,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);",
+      "enabled": true
+    },
+    {
+      "name": "revenue_breakdown",
+      "ddl": "CREATE TABLE revenue_breakdown (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER NOT NULL REFERENCES companies(id),\n    year INTEGER NOT NULL,\n    segment_name VARCHAR(255) NOT NULL,\n    segment_type VARCHAR(50) DEFAULT 'business',\n    revenue_amount NUMERIC(20, 2),\n    revenue_percentage NUMERIC(5, 2),\n    currency VARCHAR(10) DEFAULT 'HKD',\n    source_document_id INTEGER REFERENCES documents(id),\n    notes TEXT,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);",
+      "enabled": true
+    },
+    {
+      "name": "document_pages",
+      "ddl": "CREATE TABLE document_pages (\n    id SERIAL PRIMARY KEY,\n    document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,\n    page_num INTEGER NOT NULL,\n    markdown_content TEXT,\n    has_images BOOLEAN DEFAULT FALSE,\n    has_tables BOOLEAN DEFAULT FALSE,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n    UNIQUE(document_id, page_num)\n);",
       "enabled": true,
-      "note": "Vanna 專用視圖：將 documents 的 JSONB 屬性展平，方便查詢"
+      "note": "🌟 v2.3 Zone 2 兜底表：确保所有文档（包括指数报告）的全文检索数据"
+    },
+    {
+      "name": "raw_artifacts",
+      "ddl": "CREATE TABLE raw_artifacts (\n    id SERIAL PRIMARY KEY,\n    artifact_id VARCHAR(255) UNIQUE,\n    document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,\n    artifact_type VARCHAR(50),\n    content TEXT,\n    file_path VARCHAR(500),\n    page_num INTEGER,\n    bbox JSONB,\n    parsed_data JSONB,\n    parsing_status VARCHAR(50) DEFAULT 'pending',\n    parsing_error TEXT,\n    metadata JSONB DEFAULT '{}'::jsonb,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);",
+      "enabled": true,
+      "note": "OpenDataLoader 原始提取结果，支持完美溯源"
+    },
+    {
+      "name": "entity_relations",
+      "ddl": "CREATE TABLE entity_relations (\n    id SERIAL PRIMARY KEY,\n    document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,\n    source_entity_type VARCHAR(50),\n    source_entity_id INTEGER,\n    source_entity_name VARCHAR(255),\n    target_entity_type VARCHAR(50),\n    target_entity_id INTEGER,\n    target_entity_name VARCHAR(255),\n    relation_type VARCHAR(100),\n    relation_strength FLOAT DEFAULT 1.0,\n    event_date DATE,\n    event_year INTEGER,\n    source_page INTEGER,\n    source_artifact_id VARCHAR(255),\n    metadata JSONB DEFAULT '{}'::jsonb,\n    extraction_confidence FLOAT DEFAULT 0.8,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);",
+      "enabled": true,
+      "note": "Graph-based 关系抽取"
     },
     {
       "name": "v_companies_for_vanna",
@@ -26,68 +71,10 @@
       "note": "🌟 雙軌制行業解決方案：如果有權威定義就用權威，沒有的話就拿 AI 預測的第一個行業"
     },
     {
-      "name": "financial_metrics",
-      "ddl": "CREATE TABLE financial_metrics (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER NOT NULL REFERENCES companies(id),\n    year INTEGER NOT NULL,\n    fiscal_period VARCHAR(10) NOT NULL DEFAULT 'FY',\n    metric_name VARCHAR(100) NOT NULL,\n    metric_name_zh VARCHAR(100),\n    original_metric_name VARCHAR(200),\n    value DOUBLE PRECISION NOT NULL,\n    unit VARCHAR(20) NOT NULL,\n    standardized_value NUMERIC(20,2),\n    standardized_currency VARCHAR(10) DEFAULT 'HKD',\n    category VARCHAR(50),\n    source_file VARCHAR(500),\n    source_page INTEGER,\n    UNIQUE(company_id, year, fiscal_period, metric_name)\n);",
-      "enabled": true
-    },
-    {
-      "name": "market_data",
-      "ddl": "CREATE TABLE market_data (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER NOT NULL REFERENCES companies(id),\n    trade_date DATE NOT NULL,\n    closing_price DECIMAL(18, 6),\n    opening_price DECIMAL(18, 6),\n    high_price DECIMAL(18, 6),\n    low_price DECIMAL(18, 6),\n    issued_shares BIGINT,\n    trading_volume BIGINT,\n    source VARCHAR(100),\n    UNIQUE(company_id, trade_date)\n);",
-      "enabled": true
-    },
-    {
-      "name": "key_personnel",
-      "ddl": "CREATE TABLE key_personnel (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER REFERENCES companies(id),\n    year INTEGER NOT NULL,\n    person_name VARCHAR(200) NOT NULL,\n    person_name_zh VARCHAR(200),\n    role VARCHAR(100),\n    role_zh VARCHAR(100),\n    committee VARCHAR(200),\n    committee_position VARCHAR(100),\n    biography TEXT,\n    biography_zh TEXT,\n    age INTEGER,\n    source_file VARCHAR(500),\n    source_page INTEGER\n);",
-      "enabled": true
-    },
-    {
-      "name": "shareholding_structure",
-      "ddl": "CREATE TABLE shareholding_structure (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,\n    year INTEGER NOT NULL,\n    shareholder_name VARCHAR(255),\n    shareholder_type VARCHAR(50),\n    trust_name VARCHAR(255),\n    trustee_name VARCHAR(255),\n    shares_held NUMERIC(20, 2),\n    percentage NUMERIC(6, 4),\n    is_controlling BOOLEAN DEFAULT FALSE,\n    is_institutional BOOLEAN DEFAULT FALSE,\n    source_document_id INTEGER REFERENCES documents(id) ON DELETE SET NULL,\n    notes TEXT,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n    CONSTRAINT unique_shareholder UNIQUE (company_id, year, shareholder_name)\n);",
+      "name": "v_documents_for_vanna",
+      "ddl": "CREATE OR REPLACE VIEW v_documents_for_vanna AS SELECT d.id, d.doc_id, d.filename, d.report_type, d.year, d.processing_status, d.uploaded_at, c.name_en AS owner_company_name_en, c.stock_code AS owner_stock_code FROM documents d LEFT JOIN companies c ON d.owner_company_id = c.id;",
       "enabled": true,
-      "note": "⭐ Updated v2.3: Added trust_name and trustee_name for trust structure queries"
-    },
-    {
-      "name": "specific_events",
-      "ddl": "CREATE TABLE specific_events (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER REFERENCES companies(id),\n    doc_id VARCHAR(100),\n    event_category VARCHAR(100) NOT NULL,\n    event_type VARCHAR(100),\n    event_title VARCHAR(500),\n    event_detail TEXT,\n    event_date DATE,\n    effective_date DATE,\n    announcement_date DATE,\n    metric_value DECIMAL(20, 2),\n    metric_unit VARCHAR(50),\n    source_file VARCHAR(500),\n    source_page INTEGER\n);",
-      "enabled": true
-    },
-    {
-      "name": "revenue_breakdown",
-      "ddl": "CREATE TABLE revenue_breakdown (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER NOT NULL REFERENCES companies(id),\n    year INTEGER NOT NULL,\n    category VARCHAR(100) NOT NULL,\n    category_type VARCHAR(50),\n    percentage DECIMAL(10, 4),\n    amount DECIMAL(20, 2),\n    currency VARCHAR(10),\n    sub_category VARCHAR(100),\n    sub_percentage DECIMAL(10, 4),\n    source_file VARCHAR(500),\n    source_page INTEGER,\n    UNIQUE(company_id, year, category, category_type)\n);",
-      "enabled": true
-    },
-    {
-      "name": "debt_maturity",
-      "ddl": "CREATE TABLE debt_maturity (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER NOT NULL REFERENCES companies(id),\n    year INTEGER NOT NULL,\n    maturity_year INTEGER NOT NULL,\n    maturity_date DATE,\n    amount DECIMAL(20, 2),\n    currency VARCHAR(10) DEFAULT 'HKD',\n    debt_type VARCHAR(100),\n    source_file VARCHAR(500),\n    source_page INTEGER\n);",
-      "enabled": true
-    },
-    {
-      "name": "listing_applications",
-      "ddl": "CREATE TABLE listing_applications (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER REFERENCES companies(id),\n    doc_id VARCHAR(100),\n    year INTEGER NOT NULL,\n    application_count INTEGER,\n    approved_count INTEGER,\n    rejected_count INTEGER,\n    source_file VARCHAR(500),\n    source_page INTEGER,\n    UNIQUE(year, company_id)\n);",
-      "enabled": true
-    },
-    {
-      "name": "document_pages",
-      "ddl": "CREATE TABLE document_pages (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER NOT NULL REFERENCES companies(id),\n    doc_id VARCHAR(100),\n    year INTEGER NOT NULL,\n    page_num INTEGER NOT NULL,\n    markdown_content TEXT,\n    content_type VARCHAR(50),\n    has_images BOOLEAN DEFAULT FALSE,\n    has_charts BOOLEAN DEFAULT FALSE,\n    source_file VARCHAR(500),\n    UNIQUE(company_id, year, page_num, source_file)\n);",
-      "enabled": true
-    },
-    {
-      "name": "documents",
-      "ddl": "CREATE TABLE documents (\n    id SERIAL PRIMARY KEY,\n    filename VARCHAR(500) NOT NULL,\n    report_type VARCHAR(50) DEFAULT 'annual_report',\n    is_index_report BOOLEAN DEFAULT FALSE,\n    parent_company VARCHAR(255),\n    index_theme VARCHAR(255),\n    confirmed_industry VARCHAR(100),\n    ai_extracted_industries JSONB,\n    dynamic_attributes JSONB DEFAULT '{}'::jsonb,\n    processing_status VARCHAR(50) DEFAULT 'pending',\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n    CONSTRAINT valid_report_type CHECK (report_type IN ('annual_report', 'index_report'))\n);",
-      "enabled": true,
-      "note": "Document-centric schema - stores report metadata and dynamic attributes"
-    },
-    {
-      "name": "document_companies",
-      "ddl": "CREATE TABLE document_companies (\n    id SERIAL PRIMARY KEY,\n    document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,\n    company_name VARCHAR(255) NOT NULL,\n    stock_code VARCHAR(50),\n    assigned_industry VARCHAR(100),\n    ai_suggested_industries JSONB,\n    industry_source VARCHAR(50) DEFAULT 'ai_extracted',\n    industry_confidence DECIMAL(5, 4),\n    dynamic_attributes JSONB DEFAULT '{}'::jsonb,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n    CONSTRAINT valid_industry_source CHECK (industry_source IN ('confirmed', 'ai_extracted', 'manual', 'pending'))\n);",
-      "enabled": true,
-      "note": "Links documents to companies with industry assignment (Rule A/B)"
-    },
-    {
-      "name": "vanna_training_data",
-      "ddl": "CREATE TABLE vanna_training_data (\n    id SERIAL PRIMARY KEY,\n    question TEXT NOT NULL,\n    sql_query TEXT NOT NULL,\n    table_name VARCHAR(255),\n    documentation TEXT,\n    quality_score DECIMAL(3, 2),\n    is_verified BOOLEAN DEFAULT FALSE,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);",
-      "enabled": true,
-      "note": "Stores Vanna training examples for text-to-SQL"
+      "note": "🌟 Vanna 專用視圖：展平 documents 與 companies 的關聯"
     }
   ]
 }
