@@ -22,8 +22,9 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     fastapi \
     uvicorn
 
-# Create data directory for ChromaDB persistence
-RUN mkdir -p /app/data/raw /app/data/chromadb
+# Create data directory for ChromaDB persistence with proper permissions
+RUN mkdir -p /app/data/raw /app/data/chromadb && \
+    chmod -R 777 /app/data
 
 # 🚀 Step 2: Copy application code LAST (changes frequently)
 # This way, code changes don't invalidate the pip install cache

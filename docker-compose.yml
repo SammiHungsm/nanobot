@@ -118,7 +118,8 @@ services:
       dockerfile: Dockerfile
     container_name: vanna-service
     volumes:
-      - vanna_data:/app/data
+      - vanna_data:/app/data                    # Named volume for persistence
+      - ./data/vanna:/app/data/chromadb         # 🔧 額外掛載 ChromaDB 到本地，方便開發時查看
       - ./config:/app/config
       - ~/.nanobot:/root/.nanobot
     environment:
