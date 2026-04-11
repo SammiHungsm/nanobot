@@ -1,23 +1,16 @@
 """
 Chat API Router - Handles all chat-related endpoints
+🎯 Architecture: Uses unified config from core.config
 """
 import json
-import os
 import httpx
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from app.schemas.chat import ChatRequest, ChatResponse, ChatStreamRequest
-from app.services.chat_service import process_chat_message  # 🌟 引入 Service
+from app.services.chat_service import process_chat_message
+from app.core.config import settings  # 🌟 引入統一配置
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
-
-# Gateway URL - 支持本地开发和 Docker 环境
-_default_gateway = (
-    "http://localhost:8081" 
-    if os.getenv("ENV") == "development" or not os.getenv("GATEWAY_URL")
-    else "http://nanobot-gateway:8081"
-)
-GATEWAY_URL = os.getenv("GATEWAY_URL", _default_gateway)
 
 
 @router.post("", response_model=ChatResponse)
@@ -48,10 +41,10 @@ async def chat_stream_endpoint(request: ChatStreamRequest):
         async def forward_stream():
             async with httpx.AsyncClient(timeout=120.0) as client:
                 try:
-                    # Forward to Gateway's streaming endpoint
+                    # 🌟 直接使用 settings.GATEWAY_URL
                     async with client.stream(
                         "POST", 
-                        f"{GATEWAY_URL}/api/stream", 
+                        f"{settings.GATEWAY_URL}/api/stream", 
                         json={
                             "message": request.message,
                             "username": request.username,

@@ -685,12 +685,34 @@ const UI = {
     
     /**
      * Format Markdown text
+     * 🌟 使用 marked.js 支持代码块、表格等专业 Markdown 渲染
      */
     formatMarkdown(text) {
-        let formatted = text.replace(/\[Doc:\s([^\]]+)\]/g, '<span class="inline-block bg-blue-500/20 text-blue-100 px-2 py-0.5 rounded text-xs font-mono mb-1 mr-1 border border-blue-500/30"><i class="fas fa-paperclip mr-1"></i>$1</span>');
-        formatted = formatted.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-        formatted = formatted.replace(/\n/g, '<br>');
-        return formatted;
+        // 先處理自定义 Tag (Document Link)
+        let customText = text.replace(/\[Doc:\s([^\]]+)\]/g, '<span class="inline-block bg-blue-500/20 text-blue-100 px-2 py-0.5 rounded text-xs font-mono mb-1 mr-1 border border-blue-500/30"><i class="fas fa-paperclip mr-1"></i>$1</span>');
+        
+        // 🌟 使用 marked.js 渲染 Markdown (支持代码块 ```sql、表格等)
+        // 如果 marked.js 未加载，fallback 到简单渲染
+        if (typeof marked !== 'undefined') {
+            try {
+                // 配置 marked.js
+                marked.setOptions({
+                    breaks: true,      // 支持 GFM 单行换行
+                    gfm: true,         // GitHub Flavored Markdown
+                    headerIds: false   // 不生成 header ID (避免冲突)
+                });
+                return marked.parse(customText);
+            } catch (e) {
+                console.error('marked.js error:', e);
+                // Fallback: 简单渲染
+                return customText.replace(/\n/g, '<br>');
+            }
+        } else {
+            // Fallback: 简单渲染 (无代码块支持)
+            let formatted = customText.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+            formatted = formatted.replace(/\n/g, '<br>');
+            return formatted;
+        }
     },
     
     /**

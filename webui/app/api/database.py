@@ -1,49 +1,31 @@
 """
 Database API Router - Exposes PostgreSQL data for the Database Tab
 🌟 Updated for Schema v2.3 Compatibility
+🎯 Architecture: True Dependency Injection using FastAPI Depends()
 """
-import os
 import asyncpg
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends, Request
 from typing import List, Dict, Any
 
 router = APIRouter(prefix="/api/database", tags=["database"])
 
-# Database connection pool
-_db_pool = None
 
-
-async def get_db_pool():
-    """Get or create database connection pool"""
-    global _db_pool
+def get_db_pool(request: Request) -> asyncpg.Pool:
+    """
+    依赖注入函数：从 app.state 获取数据库连接池
     
-    if _db_pool is None:
-        db_url = os.getenv("DATABASE_URL", "postgresql://postgres:postgres_password_change_me@postgres-financial:5432/annual_reports")
-        _db_pool = await asyncpg.create_pool(db_url, min_size=2, max_size=10)
-    
-    return _db_pool
-
-
-@router.on_event("startup")
-async def startup():
-    """Initialize database pool on startup"""
-    await get_db_pool()
-
-
-@router.on_event("shutdown")
-async def shutdown():
-    """Close database pool on shutdown"""
-    global _db_pool
-    if _db_pool:
-        await _db_pool.close()
+    Benefits:
+    - 无全局变量
+    - 易于单元测试
+    - FastAPI 最佳实践
+    """
+    return request.app.state.db_pool
 
 
 @router.get("/stats")
-async def get_database_stats():
+async def get_database_stats(pool: asyncpg.Pool = Depends(get_db_pool)):
     """Get database statistics"""
     try:
-        pool = await get_db_pool()
-        
         async with pool.acquire() as conn:
             # Get document count
             doc_count = await conn.fetchval("SELECT COUNT(*) FROM documents")
@@ -73,11 +55,9 @@ async def get_database_stats():
 
 
 @router.get("/chunks")
-async def get_recent_chunks(limit: int = 50, offset: int = 0):
+async def get_recent_chunks(pool: asyncpg.Pool = Depends(get_db_pool), limit: int = 50, offset: int = 0):
     """Get recent document chunks"""
     try:
-        pool = await get_db_pool()
-        
         async with pool.acquire() as conn:
             # 🌟 修正：Join documents 表拎 doc_id，並使用 page_number
             rows = await conn.fetch(
@@ -108,11 +88,9 @@ async def get_recent_chunks(limit: int = 50, offset: int = 0):
 
 
 @router.get("/documents")
-async def get_documents():
+async def get_documents(pool: asyncpg.Pool = Depends(get_db_pool)):
     """Get all documents"""
     try:
-        pool = await get_db_pool()
-        
         async with pool.acquire() as conn:
             # 🌟 修正：使用 owner_company_id, filename (取代 title), report_type (取代 document_type)
             rows = await conn.fetch(

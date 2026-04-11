@@ -3,13 +3,11 @@ Chat Service - Handles chat message processing
 """
 import re
 import httpx
-import os
 from typing import Optional
 from pathlib import Path
 from loguru import logger
 
-
-NANOBOT_API_URL = os.getenv("NANOBOT_API_URL", "http://nanobot-gateway:8081")
+from app.core.config import settings
 
 
 async def process_chat_message(
@@ -34,7 +32,7 @@ async def process_chat_message(
     try:
         async with httpx.AsyncClient(timeout=300.0) as client:
             response = await client.post(
-                f"{NANOBOT_API_URL}/api/chat",
+                f"{settings.NANOBOT_API_URL}/api/chat",
                 json={
                     "message": user_message,
                     "username": username,

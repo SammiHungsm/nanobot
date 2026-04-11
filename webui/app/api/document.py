@@ -1,7 +1,7 @@
 """
 Document API Router - Handles all document-related endpoints
+🎯 Architecture: True Dependency Injection using FastAPI Depends()
 """
-import os
 import json
 import zipfile
 import io
@@ -9,9 +9,12 @@ import hashlib
 from datetime import datetime
 from pathlib import Path
 from loguru import logger
+from typing import Optional
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, BackgroundTasks
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request, Depends
 from fastapi.responses import FileResponse, Response, StreamingResponse, JSONResponse
+
+from app.core.config import settings
 from app.schemas.document import (
     DocumentListResponse,
     DocumentStatus,
@@ -21,25 +24,25 @@ from app.schemas.document import (
 )
 from app.services.document_service import DocumentService
 
+
 router = APIRouter(prefix="/api", tags=["documents"])
 
-# Global document service instance
-document_service: DocumentService = None
 
-
-def init_document_service(upload_dir: Path, output_dir: Path):
-    """Initialize the document service with directories"""
-    global document_service
-    document_service = DocumentService(upload_dir, output_dir)
-    return document_service
+def get_document_service(request: Request) -> DocumentService:
+    """
+    依赖注入函数：从 app.state 获取 document service
+    
+    Benefits:
+    - 无全局变量
+    - 易于单元测试
+    - FastAPI 最佳实践
+    """
+    return request.app.state.document_service
 
 
 @router.get("/documents", response_model=DocumentListResponse)
-async def list_documents():
+async def list_documents(document_service: DocumentService = Depends(get_document_service)):
     """List all available documents"""
-    if document_service is None:
-        raise HTTPException(status_code=500, detail="Document service not initialized")
-    
     try:
         documents = []
         for doc in document_service.documents_db.values():
@@ -54,20 +57,15 @@ async def list_documents():
                 "progress": doc.get("progress", 100.0)
             })
         
-        # Sort by date descending
         documents.sort(key=lambda x: x.get('date', ''), reverse=True)
-        
         return DocumentListResponse(documents=documents, success=True)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/status/{doc_id}", response_model=DocumentStatus)
-async def get_document_status(doc_id: str):
+async def get_document_status(doc_id: str, document_service: DocumentService = Depends(get_document_service)):
     """Get processing status for a specific document"""
-    if document_service is None:
-        raise HTTPException(status_code=500, detail="Document service not initialized")
-    
     if doc_id not in document_service.documents_db:
         raise HTTPException(status_code=404, detail="Document not found")
     
@@ -85,9 +83,8 @@ async def get_document_status(doc_id: str):
 
 @router.post("/upload", response_model=DocumentUploadResponse)
 async def upload_document(
-    background_tasks: BackgroundTasks,
+    document_service: DocumentService = Depends(get_document_service),  # 🌟 真正依赖注入
     files: list[UploadFile] = File(...),
-    # 🌟 以下所有參數必須加上 Form()，否則接唔到 api.js 的 formData
     username: str = Form("anonymous"),
     replace: bool = Form(False), 
     doc_type: str = Form("annual_report"), 
@@ -95,72 +92,51 @@ async def upload_document(
     index_theme: str = Form(None),
     confirmed_doc_industry: str = Form(None)
 ):
-    """
-    Upload one or more PDF documents
+    """Upload one or more PDF documents with explicit document type declaration"""
+    # 🌟 Worker 已由 lifespan 全局管理，无需 BackgroundTasks
+    logger.info(f"📥 收到上傳請求: {len(files)} 文件, 類型: {doc_type}")
     
-    🎯 顯式宣告架構 (Explicit Declaration):
-    - doc_type="annual_report": 單一公司年報，走標準 Pipeline
-    - doc_type="index_report": 恆指生技主數據，更新公司主檔
-    
-    🌟 指數報告特殊處理 (Index Report Handling):
-    - is_index_report: 是否為指數報告
-    - index_theme: 指數主題 (如 "Hang Seng Biotech Index")
-    - confirmed_doc_industry: 報告定義的行業 (如 "Biotech")
-      * 規則 A: 所有成分股都會被強制指派此行業，不再各自 AI 預測
-    
-    這種設計避免了後端猜測文件類型的風險，100% 準確分流。
-    """
-    if document_service is None:
-        raise HTTPException(status_code=500, detail="Document service not initialized")
-    
-    # 🌟 詳細日誌
-    logger.info(f"📥 收到上傳請求:")
-    logger.info(f"   - 文件數量: {len(files)}")
-    logger.info(f"   - 文檔類型: {doc_type}")
-    logger.info(f"   - 是否為指數報告: {is_index_report}")
-    logger.info(f"   - 指數主題: {index_theme}")
-    logger.info(f"   - 確認行業: {confirmed_doc_industry}")
-    logger.info(f"   - 替換模式: {replace}")
-    
-    # 🌟 驗證指數報告參數
     if is_index_report or doc_type == "index_report":
-        if not confirmed_doc_industry:
-            logger.warning("⚠️ 指數報告缺少 confirmed_doc_industry 參數")
-            # 不強制報錯，因為可以讓 AI 自動提取
-        else:
-            logger.info(f"📊 規則 A 啟用: 所有成分股將被指派行業 '{confirmed_doc_industry}'")
+        logger.info(f"📊 規則 A 啟用: 行業 '{confirmed_doc_industry}'")
     
     try:
         uploaded_files = []
-        MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
+        # 🌟 使用統一配置 (settings.MAX_UPLOAD_SIZE_MB)
+        MAX_FILE_SIZE = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
         
         for file in files:
             if not file.filename.lower().endswith('.pdf'):
-                uploaded_files.append({
-                    "name": file.filename, 
-                    "error": "Only PDF files are supported", 
-                    "is_duplicate": False
-                })
+                uploaded_files.append({"name": file.filename, "error": "Only PDF files", "is_duplicate": False})
                 continue
             
-            # Check file size
-            file_size = 0
-            file_chunks = []
-            while content := await file.read(8192):
-                file_chunks.append(content)
-                file_size += len(content)
-                if file_size > MAX_FILE_SIZE:
-                    uploaded_files.append({
-                        "name": file.filename,
-                        "error": "File size exceeds 50MB limit",
-                        "is_duplicate": False
-                    })
-                    continue
+            # 🌟 先生成目标文件路径（用于边读边写）
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            safe_filename = f"{timestamp}_{file.filename.replace(' ', '_')}"
+            file_path = document_service.upload_dir / safe_filename
             
-            # Reset file position
-            await file.seek(0)
+            actual_size = 0
+            file_hash = hashlib.sha256()
+            size_exceeded = False
             
-            # Check for duplicates
+            # 🌟 修正：边读取边写入硬盘 (Streaming to Disk)，极大节省内存！
+            # 避免多人同时上传时触发 OOM (Out of Memory)
+            with open(file_path, 'wb') as f:
+                while content := await file.read(8192):
+                    f.write(content)
+                    actual_size += len(content)
+                    file_hash.update(content)
+                    
+                    if actual_size > MAX_FILE_SIZE:
+                        size_exceeded = True
+                        break
+            
+            if size_exceeded:
+                # 删除不完整的文件
+                file_path.unlink()
+                uploaded_files.append({"name": file.filename, "error": f"File size exceeds {settings.MAX_UPLOAD_SIZE_MB}MB limit", "is_duplicate": False})
+                continue
+            
+            # Check duplicates (基于 filename，不是基于 doc_id)
             is_duplicate = False
             existing_doc_id = None
             for doc_id, doc in document_service.documents_db.items():
@@ -169,47 +145,27 @@ async def upload_document(
                     existing_doc_id = doc_id
                     break
             
-            # 🚀 如果檔案已存在且前端沒有要求強制覆蓋，回傳 409 Conflict
             if is_duplicate and not replace:
+                # 删除刚上传的文件（因为不覆盖）
+                file_path.unlink()
                 return JSONResponse(
                     status_code=409, 
-                    content={
-                        "error": "File already exists", 
-                        "code": "FILE_EXISTS",
-                        "filename": file.filename,
-                        "existing_doc_id": existing_doc_id
-                    }
+                    content={"error": "File already exists", "code": "FILE_EXISTS", "filename": file.filename, "existing_doc_id": existing_doc_id}
                 )
             
-            # 如果 replace=True 或是檔案不存在，繼續處理
             if is_duplicate and replace:
-                # 刪除舊的文檔記錄
-                document_service.delete_document(existing_doc_id)
-                logger.info(f"🔄 Replacing existing document: {file.filename} (ID: {existing_doc_id})")
+                # 🌟 删除旧文档（使用 await）
+                await document_service.delete_document(existing_doc_id)
+                logger.info(f"🔄 Replacing: {file.filename} (old ID: {existing_doc_id})")
             
-            # Save file
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            safe_filename = f"{timestamp}_{file.filename.replace(' ', '_')}"
-            file_path = document_service.upload_dir / safe_filename
-            
-            file_hash = hashlib.sha256()
-            actual_size = 0
-            
-            with open(file_path, 'wb') as f:
-                for chunk in file_chunks:
-                    f.write(chunk)
-                    actual_size += len(chunk)
-                    file_hash.update(chunk)
-            
-            # Add to document service
+            # Add document to service（此时文件已写入硬盘）
             doc_id = await document_service.add_document(
                 filename=file.filename,
                 file_path=str(file_path),
                 uploader=username,
                 file_size=actual_size,
-                replace=replace,  # 👈 傳遞 replace 參數
-                doc_type=doc_type,  # 🎯 傳遞顯式文件類型
-                # 🌟 新增指數報告參數
+                replace=replace,
+                doc_type=doc_type,
                 is_index_report=is_index_report,
                 index_theme=index_theme,
                 confirmed_doc_industry=confirmed_doc_industry
@@ -225,142 +181,91 @@ async def upload_document(
                 "is_duplicate": False
             })
         
-        # Start queue processor if not running
-        if not document_service.queue_running:
-            document_service.queue_running = True
-            background_tasks.add_task(document_service.process_queue)
+        # 🌟 Worker 已由 lifespan 全局管理，无需 BackgroundTasks
+        # Queue Worker 在 main.py 的 lifespan 中启动，永久运行
+        # 文件入队后，Worker 会自动检测并处理
         
         success_count = len([f for f in uploaded_files if not f.get('is_duplicate')])
-        
-        return DocumentUploadResponse(
-            success=True,
-            message=f"Uploaded {success_count} file(s)",
-            files=uploaded_files
-        )
+        return DocumentUploadResponse(success=True, message=f"Uploaded {success_count} file(s)", files=uploaded_files)
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
 
 @router.delete("/documents/{doc_id}")
-async def delete_document(doc_id: str):
+async def delete_document(doc_id: str, document_service: DocumentService = Depends(get_document_service)):
     """Delete a document"""
-    if document_service is None:
-        raise HTTPException(status_code=500, detail="Document service not initialized")
-    
-    if not document_service.delete_document(doc_id):
+    success = await document_service.delete_document(doc_id)  # 🌟 补上 await
+    if not success:
         raise HTTPException(status_code=404, detail="Document not found")
-    
     return {"success": True, "message": "Document deleted"}
 
 
 @router.get("/queue/status", response_model=QueueStatusResponse)
-async def get_queue_status():
+async def get_queue_status(document_service: DocumentService = Depends(get_document_service)):
     """Get current queue statistics"""
-    if document_service is None:
-        raise HTTPException(status_code=500, detail="Document service not initialized")
-    
     return document_service.get_queue_status()
 
 
 @router.get("/logs", response_model=ProcessingLogResponse)
-async def get_processing_logs():
+async def get_processing_logs(document_service: DocumentService = Depends(get_document_service)):
     """Get processing logs"""
-    if document_service is None:
-        raise HTTPException(status_code=500, detail="Document service not initialized")
-    
     return ProcessingLogResponse(logs=document_service.processing_logs, success=True)
 
 
 @router.post("/queue/start")
-async def start_queue(background_tasks: BackgroundTasks):
-    """Start the processing queue"""
-    if document_service is None:
-        raise HTTPException(status_code=500, detail="Document service not initialized")
-    
+async def start_queue(document_service: DocumentService = Depends(get_document_service)):
+    """Start the processing queue (Worker 已由 lifespan 管理)"""
     if document_service.queue_running:
-        return {"message": "Queue already running"}
-    
+        return {"message": "Queue already running (lifespan-managed)", "status": "active"}
     document_service.queue_running = True
-    background_tasks.add_task(document_service.process_queue)
-    return {"message": "Queue started"}
+    return {"message": "Queue flag set to True (Worker managed by lifespan)", "status": "active"}
 
 
 @router.post("/queue/stop")
-async def stop_queue():
+async def stop_queue(document_service: DocumentService = Depends(get_document_service)):
     """Stop the processing queue"""
-    if document_service is None:
-        raise HTTPException(status_code=500, detail="Document service not initialized")
-    
     document_service.queue_running = False
     return {"message": "Queue will stop after current document"}
 
 
 @router.post("/documents/{doc_id}/retry")
-async def retry_document(doc_id: str, background_tasks: BackgroundTasks):
-    """
-    🔧 新增：重試失敗的文檔處理
-    """
-    if document_service is None:
-        raise HTTPException(status_code=500, detail="Document service not initialized")
-    
+async def retry_document(doc_id: str, document_service: DocumentService = Depends(get_document_service)):
+    """Retry failed document"""
     if doc_id not in document_service.documents_db:
         raise HTTPException(status_code=404, detail="Document not found")
     
     doc = document_service.documents_db[doc_id]
-    
-    # 只允許重試失敗的文檔
     if doc["status"] not in ["failed", "Failed"]:
-        raise HTTPException(status_code=400, detail=f"Cannot retry document with status: {doc['status']}")
+        raise HTTPException(status_code=400, detail=f"Cannot retry: {doc['status']}")
     
-    # Reset status
     doc["status"] = "queued"
     doc["progress"] = 0.0
     doc["error_message"] = None
     
-    # Start queue processor if not running
-    if not document_service.queue_running:
-        document_service.queue_running = True
-        background_tasks.add_task(document_service.process_queue)
-    
-    logger.info(f"🔄 Retrying document: {doc['filename']} (ID: {doc_id})")
-    
-    return {"success": True, "message": f"Document {doc['filename']} queued for retry"}
+    # 🌟 Worker 已由 lifespan 全局管理，文件入队后自动处理
+    logger.info(f"🔄 Retrying: {doc['filename']}")
+    return {"success": True, "message": f"Document {doc['filename']} queued for retry (Worker: lifespan-managed)"}
 
 
 @router.post("/documents/batch-delete")
-async def batch_delete_documents(doc_ids: list[str]):
-    """
-    🔧 新增：批次刪除文檔
-    """
-    if document_service is None:
-        raise HTTPException(status_code=500, detail="Document service not initialized")
-    
+async def batch_delete_documents(doc_ids: list[str], document_service: DocumentService = Depends(get_document_service)):
+    """Batch delete documents"""
     deleted_count = 0
     failed_count = 0
     
     for doc_id in doc_ids:
-        if document_service.delete_document(doc_id):
+        if await document_service.delete_document(doc_id):  # 🌟 补上 await
             deleted_count += 1
         else:
             failed_count += 1
     
-    return {
-        "success": True,
-        "deleted_count": deleted_count,
-        "failed_count": failed_count,
-        "message": f"Deleted {deleted_count} document(s)"
-    }
+    return {"success": True, "deleted_count": deleted_count, "failed_count": failed_count, "message": f"Deleted {deleted_count} document(s)"}
 
 
 @router.get("/documents/batch-download")
-async def batch_download_documents(doc_ids: str):
-    """
-    🔧 新增：批次下載文檔（返回 ZIP）
-    """
-    if document_service is None:
-        raise HTTPException(status_code=500, detail="Document service not initialized")
-    
+async def batch_download_documents(doc_ids: str, document_service: DocumentService = Depends(get_document_service)):
+    """Batch download documents as ZIP"""
     doc_id_list = doc_ids.split(",")
     files_to_zip = []
     
@@ -374,27 +279,18 @@ async def batch_download_documents(doc_ids: str):
     if not files_to_zip:
         raise HTTPException(status_code=404, detail="No documents found")
     
-    # Create ZIP in memory
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
         for file_path, filename in files_to_zip:
             zip_file.write(file_path, arcname=filename)
     
     zip_buffer.seek(0)
-    
-    return StreamingResponse(
-        zip_buffer,
-        media_type="application/zip",
-        headers={"Content-Disposition": "attachment; filename=documents_batch.zip"}
-    )
+    return StreamingResponse(zip_buffer, media_type="application/zip", headers={"Content-Disposition": "attachment; filename=documents_batch.zip"})
 
 
 @router.get("/pdf/{doc_id}/preview")
-async def preview_pdf(doc_id: str):
+async def preview_pdf(doc_id: str, document_service: DocumentService = Depends(get_document_service)):
     """Preview a PDF document in browser"""
-    if document_service is None:
-        raise HTTPException(status_code=500, detail="Document service not initialized")
-    
     if doc_id not in document_service.documents_db:
         raise HTTPException(status_code=404, detail="Document not found")
     
@@ -404,19 +300,12 @@ async def preview_pdf(doc_id: str):
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="File not found on disk")
     
-    return FileResponse(
-        str(file_path),
-        media_type="application/pdf",
-        headers={"Content-Disposition": f"inline; filename={doc['filename']}"}
-    )
+    return FileResponse(str(file_path), media_type="application/pdf", headers={"Content-Disposition": f"inline; filename={doc['filename']}"})
 
 
 @router.get("/pdf/{doc_id}/download")
-async def download_pdf(doc_id: str):
+async def download_pdf(doc_id: str, document_service: DocumentService = Depends(get_document_service)):
     """Download a PDF document"""
-    if document_service is None:
-        raise HTTPException(status_code=500, detail="Document service not initialized")
-    
     if doc_id not in document_service.documents_db:
         raise HTTPException(status_code=404, detail="Document not found")
     
@@ -426,33 +315,22 @@ async def download_pdf(doc_id: str):
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="File not found on disk")
     
-    return FileResponse(
-        str(file_path),
-        media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename={doc['filename']}"}
-    )
+    return FileResponse(str(file_path), media_type="application/pdf", headers={"Content-Disposition": f"attachment; filename={doc['filename']}"})
 
 
 @router.get("/pdf/{doc_id}/output")
-async def get_processed_output(doc_id: str):
-    """Get processed JSON output from OpenDataLoader"""
-    if document_service is None:
-        raise HTTPException(status_code=500, detail="Document service not initialized")
-    
+async def get_processed_output(doc_id: str, document_service: DocumentService = Depends(get_document_service)):
+    """Get processed JSON output"""
     if doc_id not in document_service.documents_db:
         raise HTTPException(status_code=404, detail="Document not found")
     
     doc = document_service.documents_db[doc_id]
     
-    # 🛠️ 嘗試讀取真實的 OpenDataLoader 原始輸出 JSON
-    # 路徑必須與 opendataloader_processor.py 中保存的路徑一致
-    DATA_DIR = os.getenv("DATA_DIR", "/app/data/raw")
-    
-    # 可能的 JSON 檔案路徑（取決於 processor 怎麼存）
+    # 🌟 使用統一配置
     json_paths = [
-        os.path.join(DATA_DIR, doc_id, "output.json"),
-        os.path.join(DATA_DIR, f"{doc_id}.json"),
-        doc.get("output_path")  #  fallback 到資料庫記錄的路徑
+        Path(settings.DATA_DIR) / doc_id / "output.json",
+        Path(settings.DATA_DIR) / f"{doc_id}.json",
+        doc.get("output_path")
     ]
     
     for json_path in json_paths:
@@ -460,39 +338,19 @@ async def get_processed_output(doc_id: str):
             try:
                 with open(json_path, 'r', encoding='utf-8') as f:
                     raw_data = json.load(f)
-                
-                # 直接回傳真實的 OpenDataLoader 原始數據
-                return {
-                    "metadata": {
-                        "status": "Loaded from Disk",
-                        "message": f"Successfully loaded raw OpenDataLoader output for {doc_id}."
-                    },
-                    "content": raw_data
-                }
+                return {"metadata": {"status": "Loaded from Disk"}, "content": raw_data}
             except Exception as e:
-                raise HTTPException(status_code=500, detail=f"Error reading JSON output: {str(e)}")
+                raise HTTPException(status_code=500, detail=f"Error reading JSON: {str(e)}")
     
-    # Fallback: 如果找不到 JSON 檔案，回傳資料庫狀態
     return {
-        "metadata": {
-            "status": "In PostgreSQL Database",
-            "message": f"Document {doc.get('filename')} has been successfully parsed."
-        },
-        "content": [
-            {
-                "type": "success",
-                "text": "📊 Raw data has been successfully extracted and stored in the PostgreSQL database for Vanna RAG training. You can now start chatting with it!"
-            }
-        ]
+        "metadata": {"status": "In PostgreSQL Database", "message": f"Document {doc.get('filename')} parsed successfully."},
+        "content": [{"type": "success", "text": "📊 Data stored in PostgreSQL for Vanna RAG training."}]
     }
 
 
 @router.get("/pdf/{doc_id}/output/download")
-async def download_processed_output(doc_id: str):
-    """Download processed JSON output file"""
-    if document_service is None:
-        raise HTTPException(status_code=500, detail="Document service not initialized")
-    
+async def download_processed_output(doc_id: str, document_service: DocumentService = Depends(get_document_service)):
+    """Download processed JSON output"""
     if doc_id not in document_service.documents_db:
         raise HTTPException(status_code=404, detail="Document not found")
     
@@ -503,24 +361,14 @@ async def download_processed_output(doc_id: str):
     
     output_path = doc.get("output_path")
     
-    # If file exists, download it
     if output_path and Path(output_path).exists():
         output_filename = Path(doc["filename"]).stem + "_processed.json"
-        return FileResponse(
-            str(output_path),
-            filename=output_filename,
-            media_type="application/json"
-        )
+        return FileResponse(str(output_path), filename=output_filename, media_type="application/json")
     
-    # Fallback: Return status JSON
     output_filename = Path(doc["filename"]).stem + "_status.json"
     status_content = {
-        "metadata": {
-            "document": doc.get("filename"),
-            "status": "In PostgreSQL Database",
-            "message": "This document has been parsed and stored in PostgreSQL for Vanna RAG training."
-        },
-        "note": "Raw data is stored in the document_chunks table. Use the Vanna API to query it."
+        "metadata": {"document": doc.get("filename"), "status": "In PostgreSQL"},
+        "note": "Raw data stored in document_chunks. Use Vanna API to query."
     }
     
     return Response(
@@ -531,14 +379,8 @@ async def download_processed_output(doc_id: str):
 
 
 @router.get("/pdf/{doc_id}/output/download-all")
-async def download_all_raw_output(doc_id: str):
-    """
-    Download all raw output (JSON tables + images) as a ZIP file.
-    This endpoint packages all artifacts from the data directory.
-    """
-    if document_service is None:
-        raise HTTPException(status_code=500, detail="Document service not initialized")
-    
+async def download_all_raw_output(doc_id: str, document_service: DocumentService = Depends(get_document_service)):
+    """Download all raw output as ZIP"""
     if doc_id not in document_service.documents_db:
         raise HTTPException(status_code=404, detail="Document not found")
     
@@ -547,33 +389,21 @@ async def download_all_raw_output(doc_id: str):
     if doc["status"] != "completed":
         raise HTTPException(status_code=400, detail="Document processing not complete")
     
-    # Get the data directory from document service
     data_dir = document_service.output_dir / doc_id
     
     if not data_dir.exists():
-        raise HTTPException(status_code=404, detail="No raw output found for this document")
+        raise HTTPException(status_code=404, detail="No raw output found")
     
-    # Collect all files in the document directory
-    files_to_include = []
-    for file_path in data_dir.rglob("*"):
-        if file_path.is_file():
-            files_to_include.append(file_path)
+    files_to_include = [f for f in data_dir.rglob("*") if f.is_file()]
     
     if not files_to_include:
-        raise HTTPException(status_code=404, detail="No files found in raw output directory")
+        raise HTTPException(status_code=404, detail="No files in output directory")
     
-    # Create ZIP file in memory
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
         for file_path in files_to_include:
-            # Calculate relative path for the ZIP structure
             arcname = file_path.relative_to(data_dir)
             zip_file.write(file_path, arcname=str(arcname))
     
     zip_buffer.seek(0)
-    
-    return StreamingResponse(
-        zip_buffer,
-        media_type="application/zip",
-        headers={"Content-Disposition": f"attachment; filename={doc['filename']}_raw_output.zip"}
-    )
+    return StreamingResponse(zip_buffer, media_type="application/zip", headers={"Content-Disposition": f"attachment; filename={doc['filename']}_raw_output.zip"})
