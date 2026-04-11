@@ -4,77 +4,117 @@
   "tables": [
     {
       "name": "companies",
-      "ddl": "CREATE TABLE companies (\n    id SERIAL PRIMARY KEY,\n    name_en VARCHAR(255),\n    name_zh VARCHAR(255),\n    stock_code VARCHAR(50) UNIQUE,\n    confirmed_industry VARCHAR(100),\n    is_industry_confirmed BOOLEAN DEFAULT FALSE,\n    ai_extracted_industries JSONB,\n    sector VARCHAR(100),\n    auditor VARCHAR(200),\n    auditor_opinion VARCHAR(50),\n    ultimate_controlling_shareholder TEXT,\n    principal_banker TEXT,\n    extra_data JSONB DEFAULT '{}'::jsonb,\n    listing_status VARCHAR(50) DEFAULT 'listed',\n    listing_date DATE,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);",
+      "ddl": "CREATE TABLE companies (\n    id SERIAL PRIMARY KEY,\n    name_en VARCHAR(255),\n    name_zh VARCHAR(255),\n    stock_code VARCHAR(50) UNIQUE,\n    is_industry_confirmed BOOLEAN DEFAULT FALSE,\n    confirmed_industry VARCHAR(100),\n    ai_extracted_industries JSONB,\n    sector VARCHAR(100),\n    auditor VARCHAR(200),\n    auditor_opinion VARCHAR(50),\n    ultimate_controlling_shareholder TEXT,\n    principal_banker TEXT,\n    extra_data JSONB DEFAULT '{}'::jsonb,\n    listing_status VARCHAR(50) DEFAULT 'listed',\n    listing_date DATE,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);",
       "enabled": true,
-      "note": "🌟 v2.3: 统一的 name_en/name_zh，双轨制行业（confirmed_industry + ai_extracted_industries），动态属性在 extra_data"
+      "note": "🌟 v2.3: 公司主檔，支援行業雙軌制（confirmed_industry + ai_extracted_industries），動態屬性在 extra_data (JSONB)"
     },
     {
       "name": "documents",
-      "ddl": "CREATE TABLE documents (\n    id SERIAL PRIMARY KEY,\n    doc_id VARCHAR(255) UNIQUE,\n    filename VARCHAR(500) NOT NULL,\n    report_type VARCHAR(50) DEFAULT 'annual_report',\n    owner_company_id INTEGER REFERENCES companies(id),\n    year INTEGER,\n    file_path VARCHAR(500),\n    file_hash VARCHAR(64),\n    file_size_bytes BIGINT,\n    processing_status VARCHAR(50) DEFAULT 'pending',\n    processing_error TEXT,\n    total_chunks INTEGER DEFAULT 0,\n    total_artifacts INTEGER DEFAULT 0,\n    uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n    processing_completed_at TIMESTAMP\n);",
+      "ddl": "CREATE TABLE documents (\n    id SERIAL PRIMARY KEY,\n    doc_id VARCHAR(255) UNIQUE,\n    filename VARCHAR(500) NOT NULL,\n    report_type VARCHAR(50) DEFAULT 'annual_report',\n    owner_company_id INTEGER REFERENCES companies(id) ON DELETE SET NULL,\n    year INTEGER,\n    processing_status VARCHAR(50) DEFAULT 'pending',\n    dynamic_attributes JSONB DEFAULT '{}'::jsonb,\n    file_path TEXT,\n    file_hash VARCHAR(64),\n    file_size_bytes INTEGER,\n    processing_error TEXT,\n    processing_completed_at TIMESTAMP,\n    total_chunks INTEGER DEFAULT 0,\n    total_artifacts INTEGER DEFAULT 0,\n    uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);",
       "enabled": true,
-      "note": "🌟 v2.3: owner_company_id 替代 parent_company，删除 dynamic_attributes/index_theme"
+      "note": "🌟 v2.3: 文檔主檔。report_type區分annual_report/index_report。index_report的owner_company_id為NULL。dynamic_attributes支援擴展屬性。"
     },
     {
       "name": "document_companies",
-      "ddl": "CREATE TABLE document_companies (\n    id SERIAL PRIMARY KEY,\n    document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,\n    company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,\n    relation_type VARCHAR(50) DEFAULT 'mentioned',\n    extracted_industries JSONB,\n    extraction_source VARCHAR(50) DEFAULT 'ai_predict',\n    extraction_confidence FLOAT DEFAULT 0.8,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n    UNIQUE(document_id, company_id)\n);",
+      "ddl": "CREATE TABLE document_companies (\n    id SERIAL PRIMARY KEY,\n    document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,\n    company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,\n    relation_type VARCHAR(50) DEFAULT 'mentioned',\n    extracted_industries JSONB,\n    extraction_source VARCHAR(50) DEFAULT 'ai_predict',\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n    UNIQUE(document_id, company_id)\n);",
       "enabled": true,
-      "note": "🌟 v2.3 多對多關聯表：relation_type 应为 'mentioned', 'subsidiary', 或 'index_constituent'"
+      "note": "🌟 v2.3 文檔-公司關聯表：relation_type包括'mentioned', 'subsidiary', 'index_constituent'。extraction_source區分'index_rule'(權威)和'ai_predict'(AI預測)"
     },
     {
-      "name": "financial_metrics",
-      "ddl": "CREATE TABLE financial_metrics (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER NOT NULL REFERENCES companies(id),\n    year INTEGER NOT NULL,\n    fiscal_period VARCHAR(20) DEFAULT 'FY',\n    metric_name VARCHAR(100) NOT NULL,\n    metric_name_zh VARCHAR(100),\n    original_metric_name VARCHAR(200),\n    value NUMERIC(20, 2),\n    unit VARCHAR(50),\n    standardized_value NUMERIC(20, 2),\n    standardized_currency VARCHAR(10) DEFAULT 'HKD',\n    category VARCHAR(50),\n    source_document_id INTEGER REFERENCES documents(id),\n    source_page INTEGER,\n    extraction_confidence FLOAT DEFAULT 0.8,\n    metadata JSONB DEFAULT '{}'::jsonb,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n    CONSTRAINT unique_metric UNIQUE (company_id, year, fiscal_period, metric_name)\n);",
+      "name": "document_processing_history",
+      "ddl": "CREATE TABLE document_processing_history (\n    id SERIAL PRIMARY KEY,\n    document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,\n    stage VARCHAR(100),\n    status VARCHAR(50) NOT NULL,\n    details JSONB DEFAULT '{}'::jsonb,\n    error_message TEXT,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);",
       "enabled": true,
-      "note": "⚠️ 跨公司比較排名時，必須使用 standardized_value (已轉換為 HKD 絕對單位)，不可用 value"
-    },
-    {
-      "name": "market_data",
-      "ddl": "CREATE TABLE market_data (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER NOT NULL REFERENCES companies(id),\n    data_date DATE NOT NULL,\n    period_type VARCHAR(20) DEFAULT 'daily',\n    close_price NUMERIC(15, 4),\n    open_price NUMERIC(15, 4),\n    high_price NUMERIC(15, 4),\n    low_price NUMERIC(15, 4),\n    volume BIGINT,\n    turnover NUMERIC(20, 2),\n    market_cap NUMERIC(20, 2),\n    pe_ratio NUMERIC(10, 4),\n    pb_ratio NUMERIC(10, 4),\n    dividend_yield NUMERIC(6, 4),\n    source VARCHAR(100),\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);",
-      "enabled": true
-    },
-    {
-      "name": "key_personnel",
-      "ddl": "CREATE TABLE key_personnel (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER NOT NULL REFERENCES companies(id),\n    document_id INTEGER REFERENCES documents(id),\n    year INTEGER,\n    name_en VARCHAR(255),\n    name_zh VARCHAR(255),\n    position_title_en VARCHAR(255),\n    position_title_zh VARCHAR(255),\n    position_type VARCHAR(50),\n    role VARCHAR(255),\n    board_role VARCHAR(100),\n    committee_membership JSONB,\n    appointment_date DATE,\n    resignation_date DATE,\n    is_current BOOLEAN DEFAULT TRUE,\n    biography TEXT,\n    source_page INTEGER,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);",
-      "enabled": true
-    },
-    {
-      "name": "shareholding_structure",
-      "ddl": "CREATE TABLE shareholding_structure (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,\n    year INTEGER NOT NULL,\n    shareholder_name VARCHAR(255),\n    shareholder_type VARCHAR(50),\n    shares_held NUMERIC(20, 2),\n    percentage NUMERIC(6, 4),\n    is_controlling BOOLEAN DEFAULT FALSE,\n    is_institutional BOOLEAN DEFAULT FALSE,\n    source_document_id INTEGER REFERENCES documents(id) ON DELETE SET NULL,\n    notes TEXT,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);",
-      "enabled": true
-    },
-    {
-      "name": "revenue_breakdown",
-      "ddl": "CREATE TABLE revenue_breakdown (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER NOT NULL REFERENCES companies(id),\n    year INTEGER NOT NULL,\n    segment_name VARCHAR(255) NOT NULL,\n    segment_type VARCHAR(50) DEFAULT 'business',\n    revenue_amount NUMERIC(20, 2),\n    revenue_percentage NUMERIC(5, 2),\n    currency VARCHAR(10) DEFAULT 'HKD',\n    source_document_id INTEGER REFERENCES documents(id),\n    notes TEXT,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);",
-      "enabled": true
+      "note": "🌟 v2.3: 文檔處理歷史追蹤表，記錄每個處理階段的狀態"
     },
     {
       "name": "document_pages",
-      "ddl": "CREATE TABLE document_pages (\n    id SERIAL PRIMARY KEY,\n    document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,\n    page_num INTEGER NOT NULL,\n    markdown_content TEXT,\n    has_images BOOLEAN DEFAULT FALSE,\n    has_tables BOOLEAN DEFAULT FALSE,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n    UNIQUE(document_id, page_num)\n);",
+      "ddl": "CREATE TABLE document_pages (\n    id SERIAL PRIMARY KEY,\n    document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,\n    page_num INTEGER NOT NULL,\n    markdown_content TEXT NOT NULL,\n    ocr_confidence FLOAT DEFAULT 0.0,\n    has_tables BOOLEAN DEFAULT FALSE,\n    has_images BOOLEAN DEFAULT FALSE,\n    embedding_vector VECTOR(1536),\n    metadata JSONB DEFAULT '{}'::jsonb,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n    CONSTRAINT unique_page UNIQUE (document_id, page_num)\n);",
       "enabled": true,
-      "note": "🌟 v2.3 Zone 2 兜底表：确保所有文档（包括指数报告）的全文检索数据"
+      "note": "🌟 v2.3: PDF頁面Markdown內容表（Zone 2 Fallback）。支援全文搜索及向量嵌入。必須通過JOIN documents找到owner_company_id。"
+    },
+    {
+      "name": "document_chunks",
+      "ddl": "CREATE TABLE document_chunks (\n    id SERIAL PRIMARY KEY,\n    document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,\n    chunk_index INTEGER NOT NULL,\n    chunk_type VARCHAR(50) DEFAULT 'text',\n    content TEXT NOT NULL,\n    page_number INTEGER,\n    bounding_box JSONB,\n    embedding_vector VECTOR(1536),\n    metadata JSONB DEFAULT '{}'::jsonb,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);",
+      "enabled": true,
+      "note": "🌟 v2.3: 文檔切片表，用於RAG檢索。chunk_type包括text/table/image。"
+    },
+    {
+      "name": "document_tables",
+      "ddl": "CREATE TABLE document_tables (\n    id SERIAL PRIMARY KEY,\n    document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,\n    chunk_id INTEGER REFERENCES document_chunks(id) ON DELETE SET NULL,\n    table_index INTEGER NOT NULL,\n    table_type VARCHAR(100),\n    title TEXT,\n    headers JSONB,\n    rows JSONB NOT NULL,\n    page_number INTEGER,\n    bounding_box JSONB,\n    metadata JSONB DEFAULT '{}'::jsonb,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);",
+      "enabled": true,
+      "note": "🌟 v2.3: 文檔表格提取表。table_type包括balance_sheet, income_statement, cash_flow等。"
+    },
+    {
+      "name": "review_queue",
+      "ddl": "CREATE TABLE review_queue (\n    id SERIAL PRIMARY KEY,\n    document_id INTEGER REFERENCES documents(id) ON DELETE CASCADE,\n    company_id INTEGER REFERENCES document_companies(id) ON DELETE CASCADE,\n    review_type VARCHAR(100) NOT NULL,\n    priority INTEGER DEFAULT 5,\n    status VARCHAR(50) DEFAULT 'pending',\n    issue_description TEXT,\n    ai_suggestion TEXT,\n    human_decision TEXT,\n    reviewer_id VARCHAR(100),\n    reviewed_at TIMESTAMP,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n    CONSTRAINT valid_review_status CHECK (status IN ('pending', 'in_review', 'approved', 'rejected', 'escalated'))\n);",
+      "enabled": true,
+      "note": "🌟 v2.3: 人工審核隊列表。review_type包括industry_extraction, company_name等。priority 1-10，1最高。"
+    },
+    {
+      "name": "vanna_training_data",
+      "ddl": "CREATE TABLE vanna_training_data (\n    id SERIAL PRIMARY KEY,\n    question TEXT NOT NULL,\n    sql_query TEXT NOT NULL,\n    table_name VARCHAR(255),\n    documentation TEXT,\n    quality_score DECIMAL(3, 2),\n    is_verified BOOLEAN DEFAULT FALSE,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);",
+      "enabled": true,
+      "note": "🌟 v2.3: Vanna Text-to-SQL訓練數據表。quality_score範圍0.00-1.00。"
+    },
+    {
+      "name": "financial_metrics",
+      "ddl": "CREATE TABLE financial_metrics (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,\n    year INTEGER NOT NULL,\n    fiscal_period VARCHAR(20) DEFAULT 'FY',\n    metric_name VARCHAR(100) NOT NULL,\n    metric_name_zh VARCHAR(100),\n    original_metric_name VARCHAR(200),\n    value NUMERIC(20, 2),\n    unit VARCHAR(50),\n    standardized_value NUMERIC(20, 2),\n    standardized_currency VARCHAR(10) DEFAULT 'HKD',\n    source_document_id INTEGER REFERENCES documents(id) ON DELETE SET NULL,\n    source_page INTEGER,\n    source_table_id VARCHAR(100),\n    extraction_confidence FLOAT DEFAULT 0.8,\n    metadata JSONB DEFAULT '{}'::jsonb,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n    CONSTRAINT unique_metric UNIQUE (company_id, year, fiscal_period, metric_name)\n);",
+      "enabled": true,
+      "note": "⚠️ 跨公司比較排名時，必須使用 standardized_value (已轉換為 HKD 絕對單位)，不可用 value。EAV模式：metric_name是列名，不是值。"
+    },
+    {
+      "name": "market_data",
+      "ddl": "CREATE TABLE market_data (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,\n    data_date DATE NOT NULL,\n    period_type VARCHAR(20) DEFAULT 'daily',\n    open_price NUMERIC(15, 4),\n    high_price NUMERIC(15, 4),\n    low_price NUMERIC(15, 4),\n    close_price NUMERIC(15, 4),\n    adj_close_price NUMERIC(15, 4),\n    volume BIGINT,\n    turnover NUMERIC(20, 2),\n    market_cap NUMERIC(20, 2),\n    pe_ratio NUMERIC(10, 4),\n    pb_ratio NUMERIC(10, 4),\n    dividend_yield NUMERIC(6, 4),\n    source VARCHAR(100),\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n    CONSTRAINT unique_market_data UNIQUE (company_id, data_date, period_type)\n);",
+      "enabled": true,
+      "note": "🌟 v2.3: 市場數據表。包含股價數據(open/high/low/close)、成交量(volume)、成交額(turnover)、估值指標(pe_ratio/pb_ratio/dividend_yield)。"
+    },
+    {
+      "name": "revenue_breakdown",
+      "ddl": "CREATE TABLE revenue_breakdown (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,\n    year INTEGER NOT NULL,\n    segment_name VARCHAR(255) NOT NULL,\n    segment_type VARCHAR(50) DEFAULT 'business',\n    revenue_amount NUMERIC(20, 2),\n    revenue_percentage NUMERIC(5, 2),\n    currency VARCHAR(10) DEFAULT 'HKD',\n    source_document_id INTEGER REFERENCES documents(id) ON DELETE SET NULL,\n    notes TEXT,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n    CONSTRAINT unique_revenue_segment UNIQUE (company_id, year, segment_name, segment_type)\n);",
+      "enabled": true,
+      "note": "🌟 v2.3: 收入分解表。segment_type包括business/geography/product。注意欄位名稱變更：category→segment_name, category_type→segment_type, amount→revenue_amount。"
+    },
+    {
+      "name": "key_personnel",
+      "ddl": "CREATE TABLE key_personnel (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,\n    document_id INTEGER REFERENCES documents(id) ON DELETE SET NULL,\n    year INTEGER,\n    name_en VARCHAR(255),\n    name_zh VARCHAR(255),\n    position_title_en VARCHAR(255),\n    position_title_zh VARCHAR(255),\n    position_type VARCHAR(50),\n    role VARCHAR(255),\n    board_role VARCHAR(100),\n    committee_membership JSONB,\n    appointment_date DATE,\n    resignation_date DATE,\n    is_current BOOLEAN DEFAULT TRUE,\n    biography TEXT,\n    source_page INTEGER,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);",
+      "enabled": true,
+      "note": "🌟 v2.3: 關鍵人員表。注意欄位名稱變更：person_name→name_en, person_name_zh→name_zh, committee→committee_membership(JSONB)。新增position_title_en/zh, position_type, board_role。"
+    },
+    {
+      "name": "shareholding_structure",
+      "ddl": "CREATE TABLE shareholding_structure (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,\n    year INTEGER NOT NULL,\n    shareholder_name VARCHAR(255),\n    shareholder_type VARCHAR(50),\n    trust_name VARCHAR(255),\n    trustee_name VARCHAR(255),\n    shares_held NUMERIC(20, 2),\n    percentage NUMERIC(6, 4),\n    is_controlling BOOLEAN DEFAULT FALSE,\n    is_institutional BOOLEAN DEFAULT FALSE,\n    source_document_id INTEGER REFERENCES documents(id) ON DELETE SET NULL,\n    notes TEXT,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n    CONSTRAINT unique_shareholder UNIQUE (company_id, year, shareholder_name)\n);",
+      "enabled": true,
+      "note": "🌟 v2.3: 股東結構表。新增trust_name和trustee_name欄位支援信託資訊。shareholder_type包括individual/corporation/government。"
     },
     {
       "name": "raw_artifacts",
       "ddl": "CREATE TABLE raw_artifacts (\n    id SERIAL PRIMARY KEY,\n    artifact_id VARCHAR(255) UNIQUE,\n    document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,\n    artifact_type VARCHAR(50),\n    content TEXT,\n    file_path VARCHAR(500),\n    page_num INTEGER,\n    bbox JSONB,\n    parsed_data JSONB,\n    parsing_status VARCHAR(50) DEFAULT 'pending',\n    parsing_error TEXT,\n    metadata JSONB DEFAULT '{}'::jsonb,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);",
       "enabled": true,
-      "note": "OpenDataLoader 原始提取结果，支持完美溯源"
+      "note": "🌟 v2.3: OpenDataLoader原始提取結果表，支援完美溯源。artifact_type包括text_chunk/table/image_screenshot/chart。沒有company_id，需通過document_id JOIN documents。"
     },
     {
       "name": "entity_relations",
-      "ddl": "CREATE TABLE entity_relations (\n    id SERIAL PRIMARY KEY,\n    document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,\n    source_entity_type VARCHAR(50),\n    source_entity_id INTEGER,\n    source_entity_name VARCHAR(255),\n    target_entity_type VARCHAR(50),\n    target_entity_id INTEGER,\n    target_entity_name VARCHAR(255),\n    relation_type VARCHAR(100),\n    relation_strength FLOAT DEFAULT 1.0,\n    event_date DATE,\n    event_year INTEGER,\n    source_page INTEGER,\n    source_artifact_id VARCHAR(255),\n    metadata JSONB DEFAULT '{}'::jsonb,\n    extraction_confidence FLOAT DEFAULT 0.8,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);",
+      "ddl": "CREATE TABLE entity_relations (\n    id SERIAL PRIMARY KEY,\n    document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,\n    source_entity_type VARCHAR(50),\n    source_entity_id INTEGER,\n    source_entity_name VARCHAR(255),\n    target_entity_type VARCHAR(50),\n    target_entity_id INTEGER,\n    target_entity_name VARCHAR(255),\n    relation_type VARCHAR(100),\n    relation_strength FLOAT DEFAULT 1.0,\n    event_date DATE,\n    event_year INTEGER,\n    source_page INTEGER,\n    source_artifact_id VARCHAR(255) REFERENCES raw_artifacts(artifact_id) ON DELETE SET NULL,\n    metadata JSONB DEFAULT '{}'::jsonb,\n    extraction_confidence FLOAT DEFAULT 0.8,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);",
       "enabled": true,
-      "note": "Graph-based 关系抽取"
+      "note": "🌟 v2.3: 實體關係抽取表，支援Graph-based查詢。relation_type包括appointed/resigned/acquired/subsidiary_of。source/target_entity_type包括person/company/event/location。"
     },
     {
       "name": "v_companies_for_vanna",
       "ddl": "CREATE OR REPLACE VIEW v_companies_for_vanna AS SELECT id, name_en, name_zh, stock_code, sector, is_industry_confirmed, COALESCE(confirmed_industry, ai_extracted_industries->>0) AS primary_industry, created_at FROM companies;",
       "enabled": true,
-      "note": "🌟 雙軌制行業解決方案：如果有權威定義就用權威，沒有的話就拿 AI 預測的第一個行業"
+      "note": "🌟 v2.3 雙軌制行業解決方案：如果有權威定義(confirmed_industry)就用權威，沒有的話就拿AI預測的第一個行業(ai_extracted_industries->>0)"
     },
     {
       "name": "v_documents_for_vanna",
-      "ddl": "CREATE OR REPLACE VIEW v_documents_for_vanna AS SELECT d.id, d.doc_id, d.filename, d.report_type, d.year, d.processing_status, d.uploaded_at, c.name_en AS owner_company_name_en, c.stock_code AS owner_stock_code FROM documents d LEFT JOIN companies c ON d.owner_company_id = c.id;",
+      "ddl": "CREATE OR REPLACE VIEW v_documents_for_vanna AS SELECT d.id, d.doc_id, d.filename, d.report_type, d.year, d.processing_status, d.uploaded_at, c.name_en AS owner_company_name_en, c.name_zh AS owner_company_name_zh, c.stock_code AS owner_stock_code, d.dynamic_attributes->>'theme' AS doc_theme, d.dynamic_attributes->>'region' AS doc_region FROM documents d LEFT JOIN companies c ON d.owner_company_id = c.id;",
       "enabled": true,
-      "note": "🌟 Vanna 專用視圖：展平 documents 與 companies 的關聯"
+      "note": "🌟 v2.3 Vanna專用視圖：展平documents與companies的關聯，並從JSONB提取theme/region屬性"
+    },
+    {
+      "name": "document_summary",
+      "ddl": "CREATE OR REPLACE VIEW document_summary AS SELECT d.id, d.filename, d.report_type, d.year, d.processing_status, d.uploaded_at, d.dynamic_attributes->>'index_theme' AS index_theme, c_owner.name_en AS owner_company_name, COUNT(dc.id) AS mentioned_companies_count FROM documents d LEFT JOIN companies c_owner ON d.owner_company_id = c_owner.id LEFT JOIN document_companies dc ON d.id = dc.document_id GROUP BY d.id, c_owner.name_en;",
+      "enabled": true,
+      "note": "🌟 v2.3 文檔摘要視圖：提供文檔基本資訊、母公司名稱、提及公司數量"
     }
   ]
 }

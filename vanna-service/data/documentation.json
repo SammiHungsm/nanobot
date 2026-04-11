@@ -1,10 +1,10 @@
 {
-  "description": "Documentation Training Data for Vanna - Business Logic",
-  "version": "2.2.0",
+  "description": "Documentation Training Data for Vanna - Business Logic (Schema v2.3)",
+  "version": "2.3.0",
   "items": [
     {
       "id": "source_page_mapping",
-      "content": "CRITICAL: When a user asks for data 'on page X', 'p.X', 'p X', 'page X', or '(p X)', you MUST add a filter for source_page. Example: WHERE source_page = 6; This applies to financial_metrics, revenue_breakdown, and other tables with source_page column.",
+      "content": "CRITICAL: When a user asks for data 'on page X', 'p.X', 'p X', 'page X', or '(p X)', you MUST add a filter for source_page. Example: WHERE source_page = 6; This applies to financial_metrics, revenue_breakdown, key_personnel, and other tables with source_page column.",
       "category": "critical"
     },
     {
@@ -24,7 +24,7 @@
     },
     {
       "id": "document_relation_type",
-      "content": "To find companies mentioned inside a document, join 'documents' with 'document_companies' using document_id, and check the 'relation_type' column. Values: 'index_constituent' (指数成分股), 'subsidiary' (子公司), 'mentioned' (一般提及).",
+      "content": "To find companies mentioned inside a document, join 'documents' with 'document_companies' using document_id, and check the 'relation_type' column. Values: 'index_constituent' (指數成分股), 'subsidiary' (子公司), 'mentioned' (一般提及), 'competitor' (競爭對手).",
       "category": "definition"
     },
     {
@@ -39,7 +39,7 @@
     },
     {
       "id": "v_documents_for_vanna_usage",
-      "content": "IMPORTANT: The view 'v_documents_for_vanna' flattens JSONB attributes like document theme and region. It also joins the document with its owner company name and stock code. Use this view for general document queries.",
+      "content": "IMPORTANT: The view 'v_documents_for_vanna' flattens JSONB attributes like document theme (doc_theme) and region (doc_region). It also joins the document with its owner company name and stock code. Use this view for general document queries.",
       "category": "critical"
     },
     {
@@ -49,23 +49,24 @@
     },
     {
       "id": "eav_query_pattern",
-      "content": "To query a specific metric, use: SELECT value FROM financial_metrics WHERE metric_name = 'Revenue' AND year = 2023;",
+      "content": "To query a specific metric, use: SELECT standardized_value FROM financial_metrics WHERE metric_name = 'Revenue' AND year = 2023;",
       "category": "critical"
     },
     {
       "id": "eav_multiple_metrics",
-      "content": "To query multiple metrics for a company, use: SELECT metric_name, value FROM financial_metrics WHERE company_id = 1 AND year = 2023;",
+      "content": "To query multiple metrics for a company, use: SELECT metric_name, standardized_value FROM financial_metrics WHERE company_id = 1 AND year = 2023;",
       "category": "example"
     },
     {
       "id": "jsonb_architecture",
-      "content": "CRITICAL: companies.extra_data is a JSONB column storing dynamic attributes (CEO, major customers, core technology, etc.).",
+      "content": "CRITICAL: companies.extra_data is a JSONB column storing dynamic attributes (CEO, major customers, core technology, etc.). documents.dynamic_attributes is also JSONB for document-level attributes.",
       "category": "critical"
     },
     {
       "id": "jsonb_dynamic_attributes",
-      "content": "CRITICAL: The 'companies' table contains a JSONB column 'extra_data' for dynamic attributes (CEO, major customers, etc.). The 'documents' table NO longer has dynamic_attributes (deleted in v2.3).",
-      "category": "critical"
+      "content": "CRITICAL: The 'companies' table contains a JSONB column 'extra_data' for dynamic attributes. The 'documents' table has 'dynamic_attributes' JSONB column for document-level extensions.",
+      "category": "critical",
+      "note": "v2.3: documents.dynamic_attributes保留，並新增theme/region提取於視圖中"
     },
     {
       "id": "jsonb_dynamic_query",
@@ -79,27 +80,23 @@
     },
     {
       "id": "jsonb_array_query",
-      "content": "For JSONB arrays like extracted_industries, use ? to check if an element exists: SELECT * FROM document_companies WHERE extracted_industries ? 'Biotech';",
-      "category": "example",
-      "note": "v2.3: ai_suggested_industries → extracted_industries"
+      "content": "For JSONB arrays like extracted_industries or ai_extracted_industries, use ? to check if an element exists: SELECT * FROM document_companies WHERE extracted_industries ? 'Biotech';",
+      "category": "example"
     },
     {
       "id": "rule_a_industry",
       "content": "Rule A (Index Reports): When confirmed_industry is set, all constituent companies have extracted_industries = confirmed_industry and extraction_source = 'index_rule'.",
-      "category": "definition",
-      "note": "v2.3: industry_source → extraction_source"
+      "category": "definition"
     },
     {
       "id": "rule_b_industry",
       "content": "Rule B (Annual Reports): When confirmed_industry is NULL, each company's industry is stored in extracted_industries (JSONB array) and extraction_source = 'ai_predict'.",
-      "category": "definition",
-      "note": "v2.3: ai_suggested_industries → extracted_industries, industry_source → extraction_source"
+      "category": "definition"
     },
     {
       "id": "index_report_no_parent",
       "content": "IMPORTANT: Index reports (report_type = 'index_report') have owner_company_id IS NULL because they cover multiple constituent companies, not a single parent.",
-      "category": "definition",
-      "note": "v2.3: is_index_report → report_type, parent_company → owner_company_id"
+      "category": "definition"
     },
     {
       "id": "jsonb_query_pattern",
@@ -117,14 +114,16 @@
       "category": "example"
     },
     {
-      "id": "dynamic_regions",
-      "content": "Revenue breakdown regions are DYNAMIC (not predefined). Companies may use different region names: 'Greater Bay Area', 'APAC', 'Belt and Road', etc.",
-      "category": "definition"
+      "id": "dynamic_segments",
+      "content": "Revenue breakdown segments are DYNAMIC (not predefined). Companies may use different segment names: 'Greater Bay Area', 'APAC', 'Belt and Road', etc. segment_type can be 'business', 'geography', or 'product'.",
+      "category": "definition",
+      "note": "v2.3: category→segment_name, category_type→segment_type"
     },
     {
-      "id": "region_query_pattern",
-      "content": "Query revenue breakdown by exact region name from the report: SELECT category, percentage FROM revenue_breakdown WHERE company_id = 1 AND category = 'greater_bay_area';",
-      "category": "example"
+      "id": "segment_query_pattern",
+      "content": "Query revenue breakdown by exact segment name from the report: SELECT segment_name, revenue_percentage FROM revenue_breakdown WHERE company_id = 1 AND segment_name = 'Greater Bay Area' AND segment_type = 'geography';",
+      "category": "example",
+      "note": "v2.3: 使用segment_name和segment_type"
     },
     {
       "id": "critical_standardized_value",
@@ -148,7 +147,7 @@
     },
     {
       "id": "standardized_value_example_correct",
-      "content": "Example correct query: SELECT stock_code, standardized_value FROM financial_metrics ORDER BY standardized_value DESC LIMIT 5;",
+      "content": "Example correct query: SELECT stock_code, standardized_value FROM financial_metrics fm JOIN companies c ON fm.company_id = c.id WHERE fm.metric_name = 'Revenue' ORDER BY standardized_value DESC LIMIT 5;",
       "category": "example"
     },
     {
@@ -172,18 +171,20 @@
       "category": "best_practice"
     },
     {
-      "id": "no_market_cap_column",
-      "content": "IMPORTANT: Do NOT use a market_cap column. Always calculate market_cap as (closing_price * issued_shares) in your SQL query.",
-      "category": "critical"
+      "id": "market_cap_column_available",
+      "content": "IMPORTANT: market_data table now has a 'market_cap' column. You can use it directly. If market_cap is NULL, calculate dynamically: close_price * issued_shares (from financial_metrics where metric_name ILIKE '%total shares%').",
+      "category": "critical",
+      "note": "v2.3: 新增market_cap欄位"
     },
     {
       "id": "market_cap_formula",
-      "content": "Market Capital is calculated by multiplying the closing price by the issued shares. Formula: Market Capital = closing_price * issued_shares",
-      "category": "formula"
+      "content": "Market Capital can be calculated by multiplying the closing price by the issued shares. Formula: Market Capital = close_price * issued_shares. Use close_price (not closing_price) column name.",
+      "category": "formula",
+      "note": "v2.3: closing_price→close_price"
     },
     {
       "id": "biotech_flexible",
-      "content": "The BioTech list is flexible. Always query the companies table where sector = 'BioTech' instead of using a hardcoded list of stock codes.",
+      "content": "The BioTech list is flexible. Always query the v_companies_for_vanna view where primary_industry ILIKE '%BioTech%' or sector = 'BioTech' instead of using a hardcoded list of stock codes.",
       "category": "best_practice"
     },
     {
@@ -202,38 +203,24 @@
       "category": "definition"
     },
     {
-      "id": "event_categories_enum",
-      "content": "Event categories (ENUM): 'Property Acquisition', 'Listing Reform', 'Consultation', 'Regulatory Action', 'Market Initiative', 'Enforcement', 'Other'.",
-      "category": "definition"
+      "id": "segment_types_enum",
+      "content": "Revenue breakdown segment types (ENUM): 'business' (業務分部), 'geography' (地理區域), 'product' (產品類別).",
+      "category": "definition",
+      "note": "v2.3: category_type→segment_type"
     },
     {
-      "id": "property_acquisition_query",
-      "content": "When searching for property purchases, use event_category = 'Property Acquisition'.",
-      "category": "best_practice"
-    },
-    {
-      "id": "listing_reform_query",
-      "content": "When searching for listing reforms, use event_category = 'Listing Reform'.",
-      "category": "best_practice"
-    },
-    {
-      "id": "category_types_enum",
-      "content": "Revenue breakdown category types (ENUM): 'Region', 'Business', 'Product', 'Segment'.",
-      "category": "definition"
-    },
-    {
-      "id": "region_breakdown",
-      "content": "Use category_type = 'Region' for geographic breakdown (e.g., Canada, Asia, Australia).",
+      "id": "geography_breakdown",
+      "content": "Use segment_type = 'geography' for geographic breakdown (e.g., Canada, Asia, Australia, Greater Bay Area).",
       "category": "best_practice"
     },
     {
       "id": "business_breakdown",
-      "content": "Use category_type = 'Business' for business segment breakdown (e.g., Retail, Wholesale).",
+      "content": "Use segment_type = 'business' for business segment breakdown (e.g., Retail, Wholesale, Infrastructure).",
       "category": "best_practice"
     },
     {
       "id": "currency_grouping",
-      "content": "CURRENCY WARNING: When summing amounts from revenue_breakdown or debt_maturity tables, ALWAYS GROUP BY currency.",
+      "content": "CURRENCY WARNING: When summing amounts from revenue_breakdown, ALWAYS GROUP BY currency or filter by a specific currency.",
       "category": "critical"
     },
     {
@@ -243,8 +230,9 @@
     },
     {
       "id": "currency_example",
-      "content": "Example: SELECT SUM(amount), currency FROM debt_maturity GROUP BY currency;",
-      "category": "example"
+      "content": "Example: SELECT SUM(revenue_amount), currency FROM revenue_breakdown GROUP BY currency;",
+      "category": "example",
+      "note": "v2.3: amount→revenue_amount"
     },
     {
       "id": "fiscal_periods",
@@ -262,14 +250,10 @@
       "category": "convention"
     },
     {
-      "id": "revenue_categories",
-      "content": "Revenue breakdown categories can be by region (e.g., 'Canada', 'Asia', 'Australia') or by business segment (e.g., 'Retail', 'Wholesale').",
-      "category": "definition"
-    },
-    {
       "id": "trust_holdings",
-      "content": "Trust holdings are recorded with both the trust name and the trustee name. For example, 'Li Ka-Shing Unity Trust' with trustee 'Li Ka-Shing Unity Trustee Company Limited'.",
-      "category": "example"
+      "content": "Trust holdings are recorded with both the trust name (trust_name) and the trustee name (trustee_name). For example, 'Li Ka-Shing Unity Trust' with trustee 'Li Ka-Shing Unity Trustee Company Limited'.",
+      "category": "example",
+      "note": "v2.3: 新增trust_name和trustee_name欄位"
     },
     {
       "id": "principal_banker",
@@ -282,24 +266,15 @@
       "category": "definition"
     },
     {
-      "id": "macro_data_null_company",
-      "content": "listing_applications table contains macro-level market data. company_id can be NULL for SFC-level statistics.",
-      "category": "definition"
-    },
-    {
       "id": "fallback_rule",
       "content": "當用戶詢問以下類型的問題，或者在專用表中找不到答案時，請務必使用 document_pages 表：未分類的政策（例如：AI政策、ESG政策）、公司願景、戰略方向、某個特定關鍵字或概念的提及、風險因素、未來展望、任何在專用表中找不到的內容。",
       "category": "fallback"
     },
     {
       "id": "document_pages_usage",
-      "content": "CRITICAL: When querying document_pages, you MUST JOIN documents to filter by company.\n\nExample:\nSELECT dp.* FROM document_pages dp\nJOIN documents d ON dp.document_id = d.id\nWHERE d.owner_company_id = (SELECT id FROM companies WHERE stock_code = '00700');\n\nDO NOT use: WHERE company_id = ... (company_id field was removed in v2.3)",
-      "category": "fallback"
-    },
-    {
-      "id": "document_pages_examples",
-      "content": "CRITICAL: When querying document_pages, you MUST JOIN documents to filter by company.\n\nExample:\nSELECT dp.* FROM document_pages dp\nJOIN documents d ON dp.document_id = d.id\nWHERE d.owner_company_id = (SELECT id FROM companies WHERE stock_code = '00700');\n\nDO NOT use: WHERE company_id = ... (company_id field was removed in v2.3)",
-      "category": "fallback"
+      "content": "CRITICAL: When querying document_pages, you MUST JOIN documents to filter by company.\n\nExample:\nSELECT dp.* FROM document_pages dp\nJOIN documents d ON dp.document_id = d.id\nWHERE d.owner_company_id = (SELECT id FROM companies WHERE stock_code = '00700');\n\nDO NOT use: WHERE company_id = ... (company_id field does not exist in document_pages)",
+      "category": "fallback",
+      "note": "v2.3: document_pages沒有company_id，必須JOIN documents"
     },
     {
       "id": "vanna_role",
@@ -308,12 +283,12 @@
     },
     {
       "id": "companies_view_preferred",
-      "content": "IMPORTANT: When querying company names, prefer the v_companies_resolved view over companies table. It automatically selects the most reliable name (index > extracted) using COALESCE logic.",
+      "content": "IMPORTANT: When querying company names or industries, prefer the v_companies_for_vanna view over companies table. It automatically selects the most reliable industry using COALESCE logic.",
       "category": "critical"
     },
     {
       "id": "company_name_columns_explained",
-      "content": "Company name sources: 'name_en_index' = from Hang Seng Index report (authoritative), 'name_en_extracted' = from annual report PDF (may have variations). Always use display_name_en from v_companies_resolved for consistent results.",
+      "content": "Company name sources: 'name_en' and 'name_zh' are unified columns. Use v_companies_for_vanna for consistent results.",
       "category": "definition"
     },
     {
@@ -324,14 +299,12 @@
     {
       "id": "index_report_characteristics",
       "content": "Index reports (report_type = 'index_report') have: owner_company_id IS NULL (no single parent company), multiple companies in document_companies with relation_type = 'index_constituent', confirmed_industry set for all constituents (Rule A).",
-      "category": "definition",
-      "note": "v2.3: dynamic_attributes deleted, index_theme moved to companies.extra_data"
+      "category": "definition"
     },
     {
       "id": "annual_report_characteristics",
       "content": "Annual reports (report_type = 'annual_report') have: owner_company_id defined (single parent company), usually single company or subsidiaries, ai_extracted_industries for each company (Rule B).",
-      "category": "definition",
-      "note": "v2.3: parent_company renamed to owner_company_id"
+      "category": "definition"
     },
     {
       "id": "document_companies_join",
@@ -340,18 +313,50 @@
     },
     {
       "id": "get_dynamic_keys",
-      "content": "To discover all available dynamic attribute keys (v2.3): SELECT DISTINCT jsonb_object_keys(extra_data) AS key FROM companies WHERE extra_data IS NOT NULL;",
+      "content": "To discover all available dynamic attribute keys in extra_data (v2.3): SELECT DISTINCT jsonb_object_keys(extra_data) AS key FROM companies WHERE extra_data IS NOT NULL;",
+      "category": "example"
+    },
+    {
+      "id": "get_document_dynamic_keys",
+      "content": "To discover all available dynamic attribute keys in documents.dynamic_attributes (v2.3): SELECT DISTINCT jsonb_object_keys(dynamic_attributes) AS key FROM documents WHERE dynamic_attributes IS NOT NULL;",
       "category": "example"
     },
     {
       "id": "review_queue_types",
-      "content": "review_queue review_type options: 'industry' (uncertain industry), 'company' (uncertain company name), 'classification' (uncertain report type), 'other'.",
+      "content": "review_queue review_type options: 'industry_extraction' (uncertain industry), 'company_name' (uncertain company name), 'classification' (uncertain report type), 'other'.",
       "category": "definition"
     },
     {
       "id": "just_in_time_schema_injection",
       "content": "When user asks about dynamic attributes (like 'Q3 reports'), Agent should first call get_dynamic_keys tool to discover available keys, then inject into Vanna prompt with JSONB query syntax.",
       "category": "best_practice"
+    },
+    {
+      "id": "column_name_changes_v2_3",
+      "content": "CRITICAL v2.3 Column Name Changes:\n- market_data: trade_date→data_date, closing_price→close_price, opening_price→open_price, trading_volume→volume\n- revenue_breakdown: category→segment_name, category_type→segment_type, amount→revenue_amount\n- key_personnel: person_name→name_en, person_name_zh→name_zh, committee→committee_membership\n- document_pages: removed doc_id and year (JOIN documents instead)\n- raw_artifacts: removed company_id (JOIN documents instead)",
+      "category": "critical"
+    },
+    {
+      "id": "key_personnel_query_pattern",
+      "content": "Example query for key_personnel (v2.3): SELECT name_en, name_zh, role, board_role, committee_membership FROM key_personnel WHERE company_id = 1 AND is_current = TRUE;",
+      "category": "example",
+      "note": "v2.3: 使用name_en/zh, committee_membership"
+    },
+    {
+      "id": "market_data_query_pattern",
+      "content": "Example query for market_data (v2.3): SELECT data_date, close_price, volume, turnover, market_cap, pe_ratio FROM market_data WHERE company_id = 1 AND data_date BETWEEN '2023-01-01' AND '2023-12-31';",
+      "category": "example",
+      "note": "v2.3: 使用data_date, close_price, volume"
+    },
+    {
+      "id": "perfect_traceability",
+      "content": "raw_artifacts table supports perfect traceability. If Qwen-VL misread a number, you can find the original image via artifact_id and file_path to verify.",
+      "category": "definition"
+    },
+    {
+      "id": "entity_relations_graph",
+      "content": "entity_relations table supports Graph-based queries. Example: Find all board appointments for a person: SELECT * FROM entity_relations WHERE source_entity_type = 'person' AND source_entity_name ILIKE '%John%' AND relation_type = 'appointed';",
+      "category": "example"
     }
   ]
 }

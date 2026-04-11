@@ -1,6 +1,6 @@
 {
-  "description": "DDL Whitelist for Vanna - Allowed Tables and Columns",
-  "version": "2.1.0",
+  "description": "DDL Whitelist for Vanna - Allowed Tables and Columns (Schema v2.3)",
+  "version": "2.3.0",
   "allowed_tables": [
     {
       "name": "v_companies_for_vanna",
@@ -14,7 +14,7 @@
         "primary_industry",
         "created_at"
       ],
-      "note": "⭐ CRITICAL: 永遠使用這個視圖來查詢公司的行業，它已經自動解決了行業雙軌制 (Index vs AI)。"
+      "note": "⭐ CRITICAL: 永遠使用這個視圖來查詢公司的行業，它已經自動解決了行業雙軌制 (Index vs AI)。primary_industry會優先使用confirmed_industry， fallback到ai_extracted_industries。"
     },
     {
       "name": "v_documents_for_vanna",
@@ -32,7 +32,45 @@
         "doc_theme",
         "doc_region"
       ],
-      "note": "⭐ CRITICAL: 永遠使用這個視圖來查詢文檔，它已經攤平了 JSONB 並關聯了母公司。"
+      "note": "⭐ CRITICAL: 永遠使用這個視圖來查詢文檔，它已經攤平了 JSONB (dynamic_attributes) 並關聯了母公司名稱。"
+    },
+    {
+      "name": "document_summary",
+      "allowed_columns": [
+        "id",
+        "filename",
+        "report_type",
+        "year",
+        "processing_status",
+        "uploaded_at",
+        "index_theme",
+        "owner_company_name",
+        "mentioned_companies_count"
+      ],
+      "note": "⭐ 文檔摘要視圖，適合快速概覽。"
+    },
+    {
+      "name": "companies",
+      "allowed_columns": [
+        "id",
+        "stock_code",
+        "name_en",
+        "name_zh",
+        "sector",
+        "is_industry_confirmed",
+        "confirmed_industry",
+        "ai_extracted_industries",
+        "auditor",
+        "auditor_opinion",
+        "ultimate_controlling_shareholder",
+        "principal_banker",
+        "extra_data",
+        "listing_status",
+        "listing_date",
+        "created_at",
+        "updated_at"
+      ],
+      "note": "公司主表。對於行業查詢，請使用 v_companies_for_vanna 而不是直接查詢此表。extra_data 是 JSONB 動態屬性。"
     },
     {
       "name": "documents",
@@ -45,10 +83,15 @@
         "year",
         "processing_status",
         "dynamic_attributes",
+        "file_path",
+        "file_hash",
+        "total_chunks",
+        "total_artifacts",
         "uploaded_at",
-        "created_at"
+        "created_at",
+        "updated_at"
       ],
-      "note": "文檔主表。report_type 区分 'annual_report' 或 'index_report'。owner_company_id 对于 Index Report 可为 NULL。"
+      "note": "文檔主表。report_type區分 'annual_report' 或 'index_report'。index_report的owner_company_id為NULL。dynamic_attributes是JSONB擴展欄位。"
     },
     {
       "name": "document_companies",
@@ -61,7 +104,7 @@
         "extraction_source",
         "created_at"
       ],
-      "note": "純橋樑表，用 relation_type 區分提及類型 (如 index_constituent, subsidiary, competitor)。"
+      "note": "文檔-公司關聯橋樑表。relation_type區分提及類型 (index_constituent, subsidiary, mentioned, competitor)。extraction_source區分index_rule(權威)和ai_predict(AI預測)。"
     },
     {
       "name": "document_processing_history",
@@ -74,7 +117,7 @@
         "error_message",
         "created_at"
       ],
-      "note": "Tracks document processing stages"
+      "note": "文檔處理歷史追蹤表。stage包括upload, ocr, extraction, embedding等。"
     },
     {
       "name": "review_queue",
@@ -90,9 +133,10 @@
         "human_decision",
         "reviewer_id",
         "reviewed_at",
-        "created_at"
+        "created_at",
+        "updated_at"
       ],
-      "note": "Human review queue for uncertain AI decisions"
+      "note": "人工審核隊列表。status包括pending, in_review, approved, rejected, escalated。priority 1-10，1最高。"
     },
     {
       "name": "vanna_training_data",
@@ -104,28 +148,10 @@
         "documentation",
         "quality_score",
         "is_verified",
-        "created_at"
+        "created_at",
+        "updated_at"
       ],
-      "note": "Vanna training data storage"
-    },
-    {
-      "name": "companies",
-      "allowed_columns": [
-        "id",
-        "stock_code",
-        "name_en",
-        "name_zh",
-        "sector",
-        "auditor",
-        "auditor_opinion",
-        "ultimate_controlling_shareholder",
-        "principal_banker",
-        "extra_data",
-        "listing_status",
-        "listing_date",
-        "created_at"
-      ],
-      "note": "公司主表。对于行业查询，请使用 v_companies_for_vanna 而不是直接查询此表。"
+      "note": "Vanna Text-to-SQL訓練數據表。"
     },
     {
       "name": "financial_metrics",
@@ -141,45 +167,74 @@
         "unit",
         "standardized_value",
         "standardized_currency",
-        "category",
-        "source_file",
-        "source_page"
+        "source_document_id",
+        "source_page",
+        "source_table_id",
+        "extraction_confidence",
+        "metadata"
       ],
-      "critical_note": "For cross-company comparisons (ranking, top N), ALWAYS use standardized_value. NEVER compare raw value directly as units differ across companies."
+      "critical_note": "⭐ CRITICAL: 跨公司比較排名時，必須使用 standardized_value (已轉換為 HKD)。不可用 raw value，因為單位不同 (RMB '000 vs HKD Million vs USD)。"
     },
     {
       "name": "market_data",
       "allowed_columns": [
         "id",
         "company_id",
-        "trade_date",
-        "closing_price",
-        "opening_price",
+        "data_date",
+        "period_type",
+        "open_price",
         "high_price",
         "low_price",
-        "issued_shares",
-        "trading_volume",
+        "close_price",
+        "adj_close_price",
+        "volume",
+        "turnover",
+        "market_cap",
+        "pe_ratio",
+        "pb_ratio",
+        "dividend_yield",
         "source"
-      ]
+      ],
+      "note": "⭐ v2.3更新：欄位名稱變更！trade_date→data_date, closing_price→close_price, trading_volume→volume。新增adj_close_price, turnover, pe_ratio, pb_ratio, dividend_yield。"
+    },
+    {
+      "name": "revenue_breakdown",
+      "allowed_columns": [
+        "id",
+        "company_id",
+        "year",
+        "segment_name",
+        "segment_type",
+        "revenue_amount",
+        "revenue_percentage",
+        "currency",
+        "source_document_id",
+        "notes"
+      ],
+      "note": "⭐ v2.3更新：欄位名稱變更！category→segment_name, category_type→segment_type, amount→revenue_amount。segment_type包括business, geography, product。"
     },
     {
       "name": "key_personnel",
       "allowed_columns": [
         "id",
         "company_id",
+        "document_id",
         "year",
-        "person_name",
-        "person_name_zh",
+        "name_en",
+        "name_zh",
+        "position_title_en",
+        "position_title_zh",
+        "position_type",
         "role",
-        "role_zh",
-        "committee",
-        "committee_position",
+        "board_role",
+        "committee_membership",
+        "appointment_date",
+        "resignation_date",
+        "is_current",
         "biography",
-        "biography_zh",
-        "age",
-        "source_file",
         "source_page"
-      ]
+      ],
+      "note": "⭐ v2.3更新：欄位名稱變更！person_name→name_en, person_name_zh→name_zh, committee→committee_membership(JSONB)。新增position_title_en/zh, position_type, board_role。"
     },
     {
       "name": "shareholding_structure",
@@ -198,95 +253,93 @@
         "source_document_id",
         "notes"
       ],
-      "note": "⭐ CRITICAL: Use shareholding_structure for shareholder queries, NOT shareholdings (old table name)"
-    },
-    {
-      "name": "specific_events",
-      "allowed_columns": [
-        "id",
-        "company_id",
-        "event_category",
-        "event_title",
-        "event_detail",
-        "event_date",
-        "effective_date",
-        "announcement_date",
-        "metric_value",
-        "metric_unit",
-        "source_file",
-        "source_page"
-      ]
-    },
-    {
-      "name": "revenue_breakdown",
-      "allowed_columns": [
-        "id",
-        "company_id",
-        "year",
-        "category",
-        "category_type",
-        "percentage",
-        "amount",
-        "currency",
-        "sub_category",
-        "sub_percentage",
-        "source_file",
-        "source_page"
-      ]
-    },
-    {
-      "name": "debt_maturity",
-      "allowed_columns": [
-        "id",
-        "company_id",
-        "year",
-        "maturity_year",
-        "amount",
-        "currency",
-        "debt_type",
-        "source_file",
-        "source_page"
-      ]
-    },
-    {
-      "name": "listing_applications",
-      "allowed_columns": [
-        "id",
-        "company_id",
-        "year",
-        "application_count",
-        "approved_count",
-        "rejected_count",
-        "source_file",
-        "source_page"
-      ]
+      "note": "⭐ v2.3新增：trust_name和trustee_name欄位支援信託資訊。shareholder_type包括individual, corporation, government。"
     },
     {
       "name": "document_pages",
       "allowed_columns": [
         "id",
-        "doc_id",
-        "year",
+        "document_id",
         "page_num",
         "markdown_content",
-        "content_type",
+        "ocr_confidence",
+        "has_tables",
         "has_images",
-        "has_charts",
-        "source_file"
-      ]
+        "embedding_vector",
+        "metadata"
+      ],
+      "note": "⭐ v2.3更新：刪除doc_id和year欄位（需通過JOIN documents取得）。新增ocr_confidence, embedding_vector(VECTOR(1536)), metadata。必須JOIN documents來filter by owner_company_id。"
+    },
+    {
+      "name": "document_chunks",
+      "allowed_columns": [
+        "id",
+        "document_id",
+        "chunk_index",
+        "chunk_type",
+        "content",
+        "page_number",
+        "bounding_box",
+        "embedding_vector",
+        "metadata"
+      ],
+      "note": "文檔切片表，用於RAG檢索。chunk_type包括text, table, image。"
+    },
+    {
+      "name": "document_tables",
+      "allowed_columns": [
+        "id",
+        "document_id",
+        "chunk_id",
+        "table_index",
+        "table_type",
+        "title",
+        "headers",
+        "rows",
+        "page_number",
+        "bounding_box",
+        "metadata"
+      ],
+      "note": "文檔表格提取表。table_type包括balance_sheet, income_statement, cash_flow等。"
     },
     {
       "name": "raw_artifacts",
       "allowed_columns": [
         "id",
         "artifact_id",
-        "doc_id",
-        "company_id",
+        "document_id",
         "artifact_type",
         "content",
-        "source_file",
-        "source_page"
-      ]
+        "file_path",
+        "page_num",
+        "bbox",
+        "parsed_data",
+        "parsing_status",
+        "parsing_error",
+        "metadata"
+      ],
+      "note": "⭐ v2.3更新：刪除company_id欄位（需通過document_id JOIN documents）。artifact_type包括text_chunk, table, image_screenshot, chart。支援完美溯源。"
+    },
+    {
+      "name": "entity_relations",
+      "allowed_columns": [
+        "id",
+        "document_id",
+        "source_entity_type",
+        "source_entity_id",
+        "source_entity_name",
+        "target_entity_type",
+        "target_entity_id",
+        "target_entity_name",
+        "relation_type",
+        "relation_strength",
+        "event_date",
+        "event_year",
+        "source_page",
+        "source_artifact_id",
+        "extraction_confidence"
+      ],
+      "note": "實體關係抽取表，支援Graph-based查詢。relation_type包括appointed, resigned, acquired, subsidiary_of。"
     }
   ],
   "forbidden_keywords": [
@@ -294,7 +347,9 @@
     "TRUNCATE",
     "DELETE FROM companies",
     "DELETE FROM financial_metrics",
+    "DELETE FROM documents",
     "UPDATE companies SET",
+    "UPDATE financial_metrics SET",
     "INSERT INTO companies",
     "ALTER TABLE"
   ],
