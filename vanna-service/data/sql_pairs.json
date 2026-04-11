@@ -1,7 +1,52 @@
 {
   "description": "SQL Training Pairs for Vanna - Question-SQL Examples",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "pairs": [
+    {
+      "id": "revenue_canada_page_001",
+      "question": "What is the % of total revenue from Canada based on the chart of p.6?",
+      "sql": "SELECT category, percentage, amount, currency FROM revenue_breakdown WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND year = 2023 AND category = 'Canada' AND category_type = 'Region' AND source_page = 6;",
+      "tags": [
+        "revenue_breakdown",
+        "page_number",
+        "source_page"
+      ],
+      "note": "CRITICAL: User asked 'p.6', must add WHERE source_page = 6"
+    },
+    {
+      "id": "executive_directors_page_001",
+      "question": "Can you list the executive directors (p 2)?",
+      "sql": "SELECT person_name, person_name_zh, role, committee FROM key_personnel WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND role ILIKE '%Executive Director%' AND source_page = 2 ORDER BY person_name;",
+      "tags": [
+        "key_personnel",
+        "page_number",
+        "source_page"
+      ],
+      "note": "CRITICAL: User asked 'p 2', must add WHERE source_page = 2"
+    },
+    {
+      "id": "profit_loss_page_001",
+      "question": "Please provide the profit and loss figures with 5 comparative periods (p 273)?",
+      "sql": "SELECT year, metric_name, metric_name_zh, value, unit FROM financial_metrics WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND metric_name IN ('Revenue', 'Profit', 'Loss') AND fiscal_period = 'FY' AND year >= 2019 AND source_page = 273 ORDER BY year DESC, metric_name;",
+      "tags": [
+        "financial_metrics",
+        "page_number",
+        "source_page"
+      ],
+      "note": "CRITICAL: User asked 'p 273', must add WHERE source_page = 273"
+    },
+    {
+      "id": "shareholding_trust_001",
+      "question": "What is the percentage of shareholding of Li Ka-Shing Unity Trustee Company Limited as trustee of The Li Ka-Shing Unity Trust? (p 94)",
+      "sql": "SELECT shareholder_name, trust_name, trustee_name, percentage FROM shareholding_structure WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND year = 2023 AND trustee_name ILIKE '%Li Ka-Shing Unity Trustee%' AND trust_name ILIKE '%Li Ka-Shing Unity Trust%';",
+      "tags": [
+        "shareholding_structure",
+        "trust",
+        "trustee",
+        "page_number"
+      ],
+      "note": "⭐ Updated v2.3: Uses trust_name and trustee_name fields for trust structure queries"
+    },
     {
       "id": "executive_directors_001",
       "question": "Can you list the executive directors?",

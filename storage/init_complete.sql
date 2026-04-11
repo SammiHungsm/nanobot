@@ -499,6 +499,9 @@ CREATE INDEX IF NOT EXISTS idx_personnel_is_current ON key_personnel(is_current)
 -- ============================================================
 -- 13. 股東結構表 (Shareholding Structure)
 -- ============================================================
+-- ============================================================
+-- 13. 股東結構表 (Shareholding Structure)
+-- ============================================================
 CREATE TABLE IF NOT EXISTS shareholding_structure (
     id SERIAL PRIMARY KEY,
     company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
@@ -507,6 +510,10 @@ CREATE TABLE IF NOT EXISTS shareholding_structure (
     -- 股東信息
     shareholder_name VARCHAR(255),
     shareholder_type VARCHAR(50),  -- individual, corporation, government, etc.
+    
+    -- 🌟 新增：信託信息 (Trust Info)
+    trust_name VARCHAR(255),       -- 信託名稱 (例如: The Li Ka-Shing Unity Trust)
+    trustee_name VARCHAR(255),     -- 受託人名稱 (例如: Li Ka-Shing Unity Trustee Company Limited)
     
     -- 持股信息
     shares_held NUMERIC(20, 2),
@@ -528,6 +535,8 @@ CREATE TABLE IF NOT EXISTS shareholding_structure (
 CREATE INDEX IF NOT EXISTS idx_shareholding_company_id ON shareholding_structure(company_id);
 CREATE INDEX IF NOT EXISTS idx_shareholding_year ON shareholding_structure(year);
 CREATE INDEX IF NOT EXISTS idx_shareholding_type ON shareholding_structure(shareholder_type);
+CREATE INDEX IF NOT EXISTS idx_shareholding_trust_name ON shareholding_structure(trust_name);
+CREATE INDEX IF NOT EXISTS idx_shareholding_trustee_name ON shareholding_structure(trustee_name);
 
 
 -- ============================================================

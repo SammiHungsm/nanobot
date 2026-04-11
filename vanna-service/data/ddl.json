@@ -41,9 +41,10 @@
       "enabled": true
     },
     {
-      "name": "shareholdings",
-      "ddl": "CREATE TABLE shareholdings (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER NOT NULL REFERENCES companies(id),\n    year INTEGER NOT NULL,\n    shareholder_name VARCHAR(255) NOT NULL,\n    shareholder_name_zh VARCHAR(255),\n    shareholder_type VARCHAR(50),\n    percentage_held DECIMAL(10, 4),\n    shares_held BIGINT,\n    trust_name VARCHAR(255),\n    trustee_name VARCHAR(255),\n    source_file VARCHAR(500),\n    source_page INTEGER,\n    UNIQUE(company_id, year, shareholder_name)\n);",
-      "enabled": true
+      "name": "shareholding_structure",
+      "ddl": "CREATE TABLE shareholding_structure (\n    id SERIAL PRIMARY KEY,\n    company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,\n    year INTEGER NOT NULL,\n    shareholder_name VARCHAR(255),\n    shareholder_type VARCHAR(50),\n    trust_name VARCHAR(255),\n    trustee_name VARCHAR(255),\n    shares_held NUMERIC(20, 2),\n    percentage NUMERIC(6, 4),\n    is_controlling BOOLEAN DEFAULT FALSE,\n    is_institutional BOOLEAN DEFAULT FALSE,\n    source_document_id INTEGER REFERENCES documents(id) ON DELETE SET NULL,\n    notes TEXT,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n    CONSTRAINT unique_shareholder UNIQUE (company_id, year, shareholder_name)\n);",
+      "enabled": true,
+      "note": "⭐ Updated v2.3: Added trust_name and trustee_name for trust structure queries"
     },
     {
       "name": "specific_events",

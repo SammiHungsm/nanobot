@@ -182,21 +182,23 @@
       ]
     },
     {
-      "name": "shareholdings",
+      "name": "shareholding_structure",
       "allowed_columns": [
         "id",
         "company_id",
         "year",
         "shareholder_name",
-        "shareholder_name_zh",
         "shareholder_type",
-        "percentage_held",
-        "shares_held",
         "trust_name",
         "trustee_name",
-        "source_file",
-        "source_page"
-      ]
+        "shares_held",
+        "percentage",
+        "is_controlling",
+        "is_institutional",
+        "source_document_id",
+        "notes"
+      ],
+      "note": "⭐ CRITICAL: Use shareholding_structure for shareholder queries, NOT shareholdings (old table name)"
     },
     {
       "name": "specific_events",

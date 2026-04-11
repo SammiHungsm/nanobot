@@ -1,7 +1,17 @@
 {
   "description": "Documentation Training Data for Vanna - Business Logic",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "items": [
+    {
+      "id": "source_page_mapping",
+      "content": "CRITICAL: When a user asks for data 'on page X', 'p.X', 'p X', 'page X', or '(p X)', you MUST add a filter for source_page. Example: WHERE source_page = 6; This applies to financial_metrics, revenue_breakdown, and other tables with source_page column.",
+      "category": "critical"
+    },
+    {
+      "id": "page_number_patterns",
+      "content": "Page number patterns: 'p.6', 'p 6', '(p 6)', 'page 6', 'on page 6'. Always extract the number and add WHERE source_page = X to your SQL query.",
+      "category": "definition"
+    },
     {
       "id": "use_new_company_view",
       "content": "CRITICAL: When the user asks about a company's industry, sector, or name, ALWAYS query the 'v_companies_for_vanna' view. NEVER query the 'companies' table directly for industries.",
