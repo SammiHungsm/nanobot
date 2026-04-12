@@ -618,20 +618,29 @@ class DBClient:
         extracted_data: Dict[str, Any],
         source_file: str,
         source_page: int,
-        category_type: str = "Region",
-        currency: str = "HKD"
+        segment_type: str = "business",  # 🌟 Schema v2.3: category_type -> segment_type
+        currency: str = "HKD",
+        source_document_id: int = None  # 🌟 Schema v2.3: 替代 source_file/source_page
     ) -> int:
         """
-        插入 Revenue Breakdown 數據（使用實體對齊）
+        插入 Revenue Breakdown 數據（Schema v2.3 完全對齊）
+        
+        🌟 Schema v2.3 變更：
+        - category -> segment_name
+        - category_type -> segment_type
+        - percentage -> revenue_percentage
+        - amount -> revenue_amount
+        - source_file/source_page -> source_document_id
         
         Args:
             company_id: 公司 ID
             year: 年份
             extracted_data: 提取的數據 Dict
-            source_file: 源文件名
-            source_page: 源頁碼
-            category_type: 分類類型
+            source_file: 源文件名（保留向後兼容）
+            source_page: 源頁碼（保留向後兼容）
+            segment_type: 分類類型 (business/geography/product)
             currency: 貨幣
+            source_document_id: documents 表的 Integer ID
             
         Returns:
             int: 插入的記錄數量
@@ -642,42 +651,46 @@ class DBClient:
         try:
             inserted_count = 0
             
-            for category, data in extracted_data.items():
+            # 🌟 如果没有 source_document_id，尝试从 source_file 推断
+            if source_document_id is None and source_file:
+                logger.warning("⚠️ source_document_id 未传入，Revenue Breakdown 将无法追溯")
+            
+            # 🌟 遍历 extracted_data 中的所有条目
+            for segment_name, data in extracted_data.items():
                 percentage = data.get("percentage")
                 amount = data.get("amount")
                 
-                # 🚀 實體對齊：統一地區名稱
-                canonical_en, canonical_zh = resolve_region_name(category)
+                # 🚀 实体对齐：统一地区名称（如果是 geography 类型）
+                if segment_type == "geography":
+                    canonical_en, canonical_zh = resolve_region_name(segment_name)
+                    standardized_segment_name = canonical_en
+                else:
+                    standardized_segment_name = segment_name
                 
-                # 使用標準英文名稱作為 category
-                standardized_category = canonical_en
-                
-                # 使用 UPSERT (ON CONFLICT DO UPDATE)
+                # 🌟 Schema v2.3: 使用新的列名
                 await self.conn.execute(
                     """
                     INSERT INTO revenue_breakdown 
-                    (company_id, year, category, category_type, percentage, amount, currency, source_file, source_page)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                    ON CONFLICT (company_id, year, category, category_type) 
+                    (company_id, year, segment_name, segment_type, revenue_percentage, revenue_amount, currency, source_document_id)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                    ON CONFLICT (company_id, year, segment_name, segment_type) 
                     DO UPDATE SET 
-                        percentage = $5, 
-                        amount = $6,
-                        source_file = $8,
-                        source_page = $9
+                        revenue_percentage = $5, 
+                        revenue_amount = $6,
+                        source_document_id = $8
                     """,
                     company_id,
                     year,
-                    standardized_category,  # 使用標準化名稱
-                    category_type,
-                    percentage,
-                    amount,
+                    standardized_segment_name,  # 🌟 segment_name
+                    segment_type,               # 🌟 segment_type
+                    percentage,                 # 🌟 revenue_percentage
+                    amount,                     # 🌟 revenue_amount
                     currency,
-                    source_file,
-                    source_page
+                    source_document_id          # 🌟 source_document_id (Integer)
                 )
                 inserted_count += 1
             
-            logger.info(f"✅ 已寫入 {inserted_count} 條 Revenue Breakdown 記錄（已標準化地區名稱）")
+            logger.info(f"✅ 已寫入 {inserted_count} 條 Revenue Breakdown 記錄（Schema v2.3）")
             return inserted_count
             
         except Exception as e:
@@ -689,12 +702,12 @@ class DBClient:
         company_id: int,
         year: int
     ) -> List[Dict[str, Any]]:
-        """獲取 Revenue Breakdown 數據"""
+        """獲取 Revenue Breakdown 數據（Schema v2.3）"""
         rows = await self.conn.fetch(
             """
             SELECT * FROM revenue_breakdown 
             WHERE company_id = $1 AND year = $2
-            ORDER BY percentage DESC
+            ORDER BY revenue_percentage DESC
             """,
             company_id,
             year

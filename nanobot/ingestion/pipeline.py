@@ -1,16 +1,14 @@
 """
 Document Pipeline - 主流程協調器
 
-這是整個 ingestion 系統的大腦，協調各個模組完成 PDF 處理流程。
+這是整個 ingestion 系統的大腦，協調各個模組完成 PDF 虄理流程。
 
 職責分離（Separation of Concerns）：
-1. Parser 層 (VisionParser, FastParser, OpenDataLoaderParser)：只負責「看」，輸出原始資料
+1. Parser 層 (OpenDataLoaderParser)：只負責「看」，輸出原始 Artifacts
 2. Agent 層 (FinancialAgent, PageClassifier)：只負責「想」，輸出結構化 JSON
 3. Pipeline 層 (DocumentPipeline)：唯一的大腦，負責資料庫和流程控制
 
-Two-Stage LLM Pipeline:
-1. Stage 1 (便宜 & 快速): PageClassifier 語義分類
-2. Stage 2 (昂貴 & 精準): Vision Parser + Financial Agent 只處理相關頁面
+🔧 重構後：不再使用 PyMuPDF 自己切 PDF，完全依賴 OpenDataLoader 解析結果
 
 流程：
 1. Parser: 解析 PDF → Markdown/文字/Artifacts (使用 OpenDataLoaderParser)
@@ -33,8 +31,7 @@ from typing import Dict, Any, Optional, List, Tuple, Callable
 from datetime import datetime
 from loguru import logger
 
-# 導入各個模組（Parser 層）
-from .parsers.vision_parser import VisionParser, FastParser
+# 導入 Parser 層
 from .parsers.opendataloader_parser import OpenDataLoaderParser
 
 # 導入各個模組（Agent 層）
@@ -221,8 +218,7 @@ class DocumentPipeline:
         
         # 初始化 Parser 層
         self.db = DBClient(self.db_url)
-        self.vision_parser = VisionParser()
-        self.fast_parser = FastParser()
+        # 🔧 移除 VisionParser 和 FastParser，不再自己切 PDF
         self.opendataloader_parser = OpenDataLoaderParser() if use_opendataloader else None
         
         # 初始化 Agent 層
@@ -411,7 +407,8 @@ class DocumentPipeline:
         company_id: int,
         doc_id: str,
         progress_callback: Callable = None,
-        year: int = None  # 🌟 新增：年份参数（由主流程传入）
+        year: int = None,  # 🌟 新增：年份参数（由主流程传入）
+        artifacts: List[Dict[str, Any]] = None  # 🌟 新增：OpenDataLoader 解析结果
     ) -> Dict[str, Any]:
         """
         智能結構化提取
@@ -420,6 +417,7 @@ class DocumentPipeline:
         - save_all_pages_to_fallback_table 已抽離到 process_pdf_full Step 4.5
         - 確保所有文檔（包括指數報告）都會保存兜底數據
         - 此函數只負責結構化提取
+        - 🔧 移除 PyMuPDF 自己切 PDF 的邏輯，完全依賴 OpenDataLoader artifacts
         
         Args:
             pdf_path: PDF 路徑
@@ -427,6 +425,7 @@ class DocumentPipeline:
             doc_id: 文檔 ID
             progress_callback: 進度回調
             year: 年份（由主流程传入）
+            artifacts: OpenDataLoader 解析结果（替代 PyMuPDF 切 PDF）
             
         Returns:
             Dict: 提取結果統計
@@ -445,37 +444,52 @@ class DocumentPipeline:
             "errors": []
         }
         
+        # 🌟 如果没有 artifacts，跳过提取（不再自己切 PDF）
+        if not artifacts:
+            logger.warning("⚠️ 沒有 artifacts，跳過結構化提取（不再使用 PyMuPDF 自己切 PDF）")
+            result["errors"].append("No artifacts available")
+            return result
+        
         try:
-            # 🌟 Step 1 已移除：年份由主流程傳入 (process_pdf_full Step 4.5)
-            # 不再從資料庫查詢年份
-            
-            # 🌟 Step 2 已移除：保存兜底表已抽離到 process_pdf_full Step 4.5
-            # 確保指數報告也能保存全文檢索數據
-            
-            # 🌟 Step 3: 混合路由 (Hybrid Routing) - 結合特徵掃描與 LLM 分類
-            # 注意：進度回調調整為從 37% 開始（原來 Step 1/2 佔用的進度已移除） (Hybrid Routing) - 結合特徵掃描與 LLM 分類
+            # 🌟 Step 3: 在 artifacts 中搜索關鍵字（不再使用 PyMuPDF）
             if progress_callback:
-                progress_callback(37.0, "混合路由掃描目標頁面...")
+                progress_callback(37.0, "在 artifacts 中搜索目標頁面...")
             
             revenue_pages = set()
             
-            # 方法 A：企業級多維度特徵掃描 (抓出圖表、表格與關鍵字)
-            # 使用 FastParser.scan_for_keywords 的三重策略：
-            # - 正規化模糊搜尋 (Normalized Text Search)
-            # - 視覺特徵偵測 (Visual Feature Detection - 針對圖表)
-            # - 表格特徵偵測 (Table Feature Detection)
-            keyword_pages = FastParser.scan_for_keywords(
-                pdf_path,
-                keywords=[
-                    "revenue breakdown", "geographical", "geographic", 
-                    "region", "segment", "business segment",
-                    "收入分佈", "地區收入", "業務分佈", "地理分佈",
-                    "歐洲", "美洲", "中國", "亞洲", "香港",
-                    "turnover", "sales by", "income by"
-                ]
-            )
-            revenue_pages.update(keyword_pages)
-            logger.info(f"   📊 特徵掃描找到 {len(keyword_pages)} 個候選頁面: {keyword_pages}")
+            # 🌟 方法 A：在 artifacts 中搜索關鍵字（替代 FastParser.scan_for_keywords）
+            keywords = [
+                "revenue breakdown", "geographical", "geographic", 
+                "region", "segment", "business segment",
+                "收入分佈", "地區收入", "業務分佈", "地理分佈",
+                "歐洲", "美洲", "中國", "亞洲", "香港",
+                "turnover", "sales by", "income by"
+            ]
+            
+            for artifact in artifacts:
+                artifact_type = artifact.get("type")
+                page_num = artifact.get("page_num")
+                
+                # 只在有文字或表格的區塊搜尋
+                if artifact_type == "text_chunk":
+                    content = str(artifact.get("content", "")).lower()
+                    for keyword in keywords:
+                        if keyword.lower() in content:
+                            revenue_pages.add(page_num)
+                            logger.debug(f"   Page {page_num}: text_chunk 命中 '{keyword}'")
+                            break
+                
+                elif artifact_type == "table":
+                    # 表格內容可能在 content_json 中
+                    table_json = artifact.get("content_json", {})
+                    content = json.dumps(table_json, ensure_ascii=False).lower()
+                    for keyword in keywords:
+                        if keyword.lower() in content:
+                            revenue_pages.add(page_num)
+                            logger.debug(f"   Page {page_num}: table 命中 '{keyword}'")
+                            break
+            
+            logger.info(f"   📊 Artifacts 搜索找到 {len(revenue_pages)} 個候選頁面: {sorted(revenue_pages)}")
             
             # 方法 B：LLM 語義分類 (作為輔助補強，不當作唯一依賴)
             # 注意：LLM 分類可能因為 FastParser 抓出空白文字而失敗
@@ -499,20 +513,61 @@ class DocumentPipeline:
                 logger.warning("⚠️ 混合路由找不到任何候選頁面，放棄結構化提取（但兜底資料已保存）")
                 return result
             
-            logger.info(f"   🎯 混合路由總共找到 {len(revenue_pages)} 個 Revenue Breakdown 候選頁面: {revenue_pages}")
+            logger.info(f"   🎯 總共找到 {len(revenue_pages)} 個 Revenue Breakdown 候選頁面: {sorted(revenue_pages)}")
             
-            # Step 4: 對每個頁面進行結構化提取 (Zone 1)
-            for i, page_num in enumerate(revenue_pages):
+            if not revenue_pages:
+                logger.warning("⚠️ 找不到任何候選頁面，放棄結構化提取")
+                return result
+            
+            # 🌟 Step 4: 從 artifacts 中提取候選頁面內容，調用 LLM 提取結構化數據
+            for i, page_num in enumerate(sorted(revenue_pages)):
                 if progress_callback:
                     progress = 40.0 + (i + 1) / max(len(revenue_pages), 1) * 40.0
                     progress_callback(progress, f"提取 Page {page_num}...")
                 
-                extracted = await self.extract_revenue_from_page(
-                    pdf_path, page_num, company_id, year, doc_id
-                )
+                # 🌟 從 artifacts 中提取該頁面的所有內容
+                page_artifacts = [a for a in artifacts if a.get("page_num") == page_num]
                 
-                if extracted:
-                    result["revenue_breakdown"]["extracted"] += extracted
+                if not page_artifacts:
+                    logger.warning(f"   ⚠️ Page {page_num} 在 artifacts 中找不到，跳過")
+                    continue
+                
+                # 合併該頁面的所有文本和表格
+                page_content = self._merge_page_artifacts(page_artifacts)
+                
+                if not page_content or len(page_content.strip()) < 50:
+                    logger.warning(f"   ⚠️ Page {page_num} 內容過短，跳過")
+                    continue
+                
+                logger.info(f"   📊 提取 Page {page_num} ({len(page_content)} chars)...")
+                
+                # 🌟 調用 LLM 提取 Revenue Breakdown (不再使用 Vision Parser)
+                try:
+                    extracted_data = await self.agent.extract_revenue_breakdown(page_content)
+                    
+                    if extracted_data:
+                        # 验证百分比总和
+                        total_pct = sum(
+                            item.get("percentage", 0) 
+                            for item in extracted_data.values()
+                        )
+                        
+                        if 99.0 <= total_pct <= 101.0:
+                            # 🌟 入库
+                            inserted = await self._insert_revenue_breakdown(
+                                company_id, year, extracted_data, 
+                                Path(pdf_path).name, page_num
+                            )
+                            result["revenue_breakdown"]["extracted"] += inserted
+                            logger.info(f"   ✅ Page {page_num} 提取成功: {inserted} 瀦記錄")
+                        else:
+                            logger.warning(f"   ⚠️ Page {page_num} 百分比總和 {total_pct}% 不為 100%，跳過")
+                    else:
+                        logger.warning(f"   ⚠️ Page {page_num} LLM 提取失敗")
+                        
+                except Exception as e:
+                    logger.error(f"   ❌ Page {page_num} 提取失敗: {e}")
+                    result["errors"].append(f"Page {page_num}: {str(e)}")
             
             return result
             
@@ -521,167 +576,173 @@ class DocumentPipeline:
             result["errors"].append(str(e))
             return result
     
-    async def extract_revenue_from_page(
-        self,
-        pdf_path: str,
-        page_num: int,
-        company_id: int,
-        year: int,
-        doc_id: str,
-        max_retries: int = 2
-    ) -> int:
+    def _merge_page_artifacts(self, page_artifacts: List[Dict[str, Any]]) -> str:
         """
-        從特定頁面提取 Revenue Breakdown
+        合併一個頁面的所有 artifacts 為文本
         
         Args:
-            pdf_path: PDF 路徑
-            page_num: 頁碼
-            company_id: 公司 ID
-            year: 年份
-            doc_id: 文檔 ID
-            max_retries: 最大重試次數
+            page_artifacts: 該頁面的所有 artifacts
             
         Returns:
-            int: 插入的記錄數
+            str: 合併後的文本內容
         """
-        logger.info(f"   📊 提取 Page {page_num}...")
+        text_parts = []
         
-        for attempt in range(max_retries):
-            try:
-                # Step 1: Vision → Markdown
-                md_save_path = self.data_dir / "debug" / f"page_{page_num}_markdown.txt"
-                markdown = await self.vision_parser.to_markdown(
-                    pdf_path, page_num, str(md_save_path)
-                )
-                
-                if not markdown:
-                    logger.warning(f"   ⚠️ Markdown 轉換失敗，重試...")
-                    continue
-                
-                # 🌟 Step 1.5: 雙重寫入 (Dual-Write) - 保存原始 Markdown 到兜底表
-                # 這是 Zone 2，確保所有數據都不會流失
-                await self.db.insert_document_page(
-                    company_id=company_id,
-                    doc_id=doc_id,
-                    year=year,
-                    page_num=page_num,
-                    markdown_content=markdown,
-                    source_file=Path(pdf_path).name,
-                    content_type="markdown",
-                    has_images=True,  # 使用了 Vision 解析，通常有圖表
-                    has_charts=True
-                )
-                logger.info(f"   💾 Page {page_num} 已寫入 document_pages 兜底表 (Zone 2)")
-                
-                # Step 2: Markdown → JSON (Zone 1 結構化提取)
-                extracted_data = await self.agent.extract_revenue_breakdown(markdown)
-                
-                if not extracted_data:
-                    logger.warning(f"   ⚠️ JSON 提取失敗，但原始 Markdown 已保存，可通過全文搜索查詢")
-                    continue
-                
-                # Step 3: 驗證
-                validation = validate_all(extracted_data, "revenue_breakdown")
-                
-                if not validation.is_valid:
-                    logger.warning(f"   ⚠️ 驗證失敗: {validation.message}，但原始 Markdown 已保存")
-                    continue
-                
-                # Step 4: 入庫
-                inserted = await self.db.insert_revenue_breakdown(
-                    company_id=company_id,
-                    year=year,
-                    extracted_data=extracted_data,
-                    source_file=Path(pdf_path).name,
-                    source_page=page_num
-                )
-                
-                logger.info(f"   ✅ Page {page_num} 提取成功: {inserted} 條記錄")
-                return inserted
-                
-            except Exception as e:
-                logger.error(f"   ❌ 提取失敗 (attempt {attempt + 1}): {e}")
-                continue
+        for artifact in page_artifacts:
+            artifact_type = artifact.get("type")
+            
+            if artifact_type == "text_chunk":
+                content = artifact.get("content", "")
+                if content:
+                    text_parts.append(content)
+            
+            elif artifact_type == "table":
+                table_json = artifact.get("content_json", {})
+                table_md = self._json_table_to_markdown(table_json)
+                if table_md:
+                    text_parts.append(table_md)
         
-        return 0
+        return "\n\n".join(text_parts)
+    
+    async def _insert_revenue_breakdown(
+        self,
+        company_id: int,
+        year: int,
+        extracted_data: Dict[str, Any],
+        source_file: str,
+        source_page: int,
+        source_document_id: int = None  # 🌟 Schema v2.3: 需要 document_id (Integer)
+    ) -> int:
+        """
+        将 Revenue Breakdown 数据写入数据库（Schema v2.3）
+        
+        Args:
+            company_id: 公司 ID
+            year: 年份
+            extracted_data: 提取的数据
+            source_file: 源文件名（向后兼容）
+            source_page: 源页码（向后兼容）
+            source_document_id: documents 表的 Integer ID
+            
+        Returns:
+            int: 插入的记录数
+        """
+        try:
+            inserted_count = 0
+            
+            for category, data in extracted_data.items():
+                percentage = data.get("percentage")
+                amount = data.get("amount")
+                
+                # 🌟 Schema v2.3: 使用新的参数名
+                await self.db.insert_revenue_breakdown(
+                    company_id=company_id,
+                    year=year,
+                    extracted_data={category: data},  # 传递单条数据
+                    source_file=source_file,
+                    source_page=source_page,
+                    segment_type="business",  # 🌟 新参数
+                    currency="HKD",
+                    source_document_id=source_document_id  # 🌟 新参数
+                )
+                inserted_count += 1
+            
+            logger.debug(f"   💾 已寫入 {inserted_count} 瀦 Revenue Breakdown 記錄")
+            return inserted_count
+            
+        except Exception as e:
+            logger.error(f"   ❌ Revenue Breakdown 入庫失敗: {e}")
+            return 0
     
     async def save_all_pages_to_fallback_table(
         self,
         pdf_path: str,
         company_id: int,
         doc_id: str,
-        year: int
+        year: int,
+        artifacts: List[Dict[str, Any]] = None  # 🌟 新增：OpenDataLoader 解析结果
     ) -> int:
         """
         Save all PDF pages to document_pages table (Zone 2 fallback).
         
-        Uses hybrid parsing:
-        - Complex pages (charts/images) → VisionParser
-        - Simple pages → FastParser
+        🔧 重构：不再使用 PyMuPDF 自己切 PDF，完全依赖 OpenDataLoader artifacts
         
         Args:
             pdf_path: PDF file path
             company_id: Company ID
             doc_id: Document ID
             year: Document year
+            artifacts: OpenDataLoader 解析结果
             
         Returns:
             int: Number of pages saved
         """
-        logger.info(f"   Saving all pages to fallback table (hybrid parsing mode)...")
+        logger.info(f"   Saving pages to fallback table from artifacts...")
         
-        total_pages = FastParser.get_page_count(pdf_path)
-        if total_pages == 0:
-            logger.warning("   Unable to get PDF page count")
+        if not artifacts:
+            logger.warning("   ⚠️ 没有 artifacts，跳过保存")
             return 0
         
-        saved_count = 0
-        vision_count = 0
         source_file = Path(pdf_path).name
+        saved_count = 0
         
-        for page_num in range(1, total_pages + 1):
+        # 🌟 从 artifacts 中按页面分组
+        pages_content: Dict[int, Dict[str, Any]] = {}
+        
+        for artifact in artifacts:
+            page_num = artifact.get("page_num", 1)
+            artifact_type = artifact.get("type")
+            
+            if page_num not in pages_content:
+                pages_content[page_num] = {
+                    "text_chunks": [],
+                    "tables": [],
+                    "images": [],
+                    "has_charts": False
+                }
+            
+            if artifact_type == "text_chunk":
+                content = artifact.get("content", "")
+                if content:
+                    pages_content[page_num]["text_chunks"].append(content)
+            
+            elif artifact_type == "table":
+                table_json = artifact.get("content_json", {})
+                pages_content[page_num]["tables"].append(table_json)
+                pages_content[page_num]["has_charts"] = True
+            
+            elif artifact_type == "image":
+                pages_content[page_num]["images"].append(artifact)
+                pages_content[page_num]["has_charts"] = True
+        
+        # 🌟 将每页内容合并为 markdown 格式
+        for page_num, page_data in pages_content.items():
             try:
-                import fitz
-                doc = fitz.open(pdf_path)
-                page = doc.load_page(page_num - 1)
+                # 合并所有文本块
+                text_content = "\n\n".join(page_data["text_chunks"])
                 
-                is_complex = VisionParser.is_complex_page(page)
+                # 如果有表格，将表格 JSON 转为 markdown 表格
+                for table_json in page_data["tables"]:
+                    table_md = self._json_table_to_markdown(table_json)
+                    if table_md:
+                        text_content += "\n\n" + table_md
                 
-                if is_complex:
-                    markdown_content = await self.vision_parser.to_markdown(
-                        pdf_path, page_num, 
-                        save_debug_path=None
-                    )
-                    
-                    if markdown_content and len(markdown_content.strip()) > 10:
-                        content_type = "vision_markdown"
-                        vision_count += 1
-                    else:
-                        markdown_content = FastParser.extract_text(pdf_path, page_num)
-                        content_type = "text"
-                    
-                    doc.close()
-                    
-                else:
-                    markdown_content = FastParser.extract_text(pdf_path, page_num)
-                    content_type = "text"
-                    doc.close()
-                
-                if not markdown_content or len(markdown_content.strip()) < 10:
+                if not text_content or len(text_content.strip()) < 10:
                     continue
                 
-                has_charts = is_complex or any(kw in markdown_content.lower() for kw in 
-                    ['chart', 'figure', 'pie', 'bar', 'graph', '圖', '表'])
+                content_type = "opendataloader_text"
+                if page_data["tables"] or page_data["images"]:
+                    content_type = "opendataloader_hybrid"
                 
                 success = await self.db.insert_document_page(
                     company_id=company_id,
                     doc_id=doc_id,
                     year=year,
                     page_num=page_num,
-                    markdown_content=markdown_content,
+                    markdown_content=text_content,
                     source_file=source_file,
                     content_type=content_type,
-                    has_charts=has_charts
+                    has_charts=page_data["has_charts"]
                 )
                 
                 if success:
@@ -691,8 +752,45 @@ class DocumentPipeline:
                 logger.warning(f"   ⚠️ Page {page_num} 保存失敗: {e}")
                 continue
         
-        logger.info(f"   Saved {saved_count}/{total_pages} pages (Vision: {vision_count})")
+        logger.info(f"   ✅ Saved {saved_count}/{len(pages_content)} pages from artifacts")
         return saved_count
+    
+    def _json_table_to_markdown(self, table_json: Dict[str, Any]) -> Optional[str]:
+        """
+        将 OpenDataLoader 表格 JSON 转换为 Markdown 表格
+        
+        Args:
+            table_json: OpenDataLoader 表格数据
+            
+        Returns:
+            str: Markdown 表格字符串
+        """
+        try:
+            # OpenDataLoader 表格结构可能在不同的字段中
+            content = table_json.get("content", "")
+            if isinstance(content, str) and content.strip():
+                return content
+            
+            # 尝试从其他字段提取
+            rows = table_json.get("rows", table_json.get("data", []))
+            if not rows or not isinstance(rows, list):
+                return None
+            
+            # 构建简单的 markdown 表格
+            md_lines = []
+            for i, row in enumerate(rows[:20]):  # 限制行数
+                if isinstance(row, list):
+                    cells = [str(cell) if cell else "" for cell in row]
+                    md_lines.append("| " + " | ".join(cells) + " |")
+                    if i == 0:
+                        # 添加表头分隔线
+                        md_lines.append("| " + " | ".join(["---"] * len(cells)) + " |")
+            
+            return "\n".join(md_lines) if md_lines else None
+            
+        except Exception as e:
+            logger.debug(f"   ⚠️ 表格转换失败: {e}")
+            return None
     
     # ===========================================
     # 輔助方法
@@ -706,39 +804,7 @@ class DocumentPipeline:
                 sha256.update(chunk)
         return sha256.hexdigest()
     
-    async def _extract_all_pages_text(
-        self,
-        pdf_path: str,
-        preview_chars: int = 400
-    ) -> Dict[int, str]:
-        """
-        提取 PDF 所有頁面的文字 (用於 LLM 分類)
-        
-        Args:
-            pdf_path: PDF 路徑
-            preview_chars: 每頁提取的字符數 (用於節省 Token)
-            
-        Returns:
-            Dict[int, str]: {page_num: "頁面文字..."}
-        """
-        pages_text = {}
-        
-        try:
-            total_pages = FastParser.get_page_count(pdf_path)
-            logger.info(f"   📄 提取 {total_pages} 頁文字用於 LLM 分類...")
-            
-            for page_num in range(1, total_pages + 1):
-                text = FastParser.extract_text(pdf_path, page_num)
-                if text and len(text.strip()) > 10:
-                    # 取頁面開頭部分 (通常包含標題和關鍵內容)
-                    pages_text[page_num] = text[:preview_chars]
-            
-            logger.info(f"   ✅ 已提取 {len(pages_text)} 頁文字")
-            
-        except Exception as e:
-            logger.error(f"   ❌ 提取頁面文字失敗: {e}")
-        
-        return pages_text
+    # 🔧 已移除 _extract_all_pages_text - 不再使用 PyMuPDF 自己切 PDF
     
     async def _create_document(
         self,
@@ -762,20 +828,23 @@ class DocumentPipeline:
     async def _extract_and_create_company(
         self,
         pdf_path: str,
-        doc_id: str
+        doc_id: str,
+        artifacts: List[Dict[str, Any]] = None  # 🌟 新增：OpenDataLoader 解析结果
     ) -> Optional[int]:
         """
-        🎯 Vision 提取公司信息（替代 FastParser）
+        🎯 從封面提取公司信息
         
-        核心改進：
-        1. 將 PDF 封面（第 1 頁）轉成高解析度圖片
-        2. 使用 Vision LLM 同時執行 OCR + 語義提取
-        3. 解決港股年報封面文字被向量化或嵌入圖片的問題
+        🔧 重構：不再使用 PyMuPDF 自己切 PDF，完全依賴 OpenDataLoader artifacts
         
+        Args:
+            pdf_path: PDF 路徑
+            doc_id: 文檔 ID
+            artifacts: OpenDataLoader 解析结果
+            
         Returns:
             int: 公司 ID
         """
-        logger.info(f"🎯 正在透過 Vision 從封面提取公司元數據...")
+        logger.info(f"🎯 正在從封面提取公司元數據...")
         
         stock_code = None
         year = None
@@ -783,30 +852,34 @@ class DocumentPipeline:
         name_zh = None
         
         # ==========================================
-        # 🌟 方案 A: Vision 提取（優先，解決 OCR 層問題）
+        # 🌟 方案 A: 從 artifacts 提取（優先）
         # ==========================================
         
-        # Step 1: 將封面（第 1 頁）轉成高解析度圖片
-        cover_image_base64 = self.vision_parser.convert_page_to_image_base64(
-            pdf_path, 
-            page_num=1, 
-            zoom=2.0  # 高解析度
-        )
-        
-        if cover_image_base64:
-            # Step 2: 使用 Vision Agent 提取
-            metadata = await self.agent.extract_company_metadata_with_vision(cover_image_base64)
+        if artifacts:
+            # 提取前 2 頁的所有文本内容
+            front_pages_artifacts = [a for a in artifacts if a.get("page_num") in [1, 2]]
             
-            if metadata:
-                stock_code = metadata.get("stock_code")
-                year = metadata.get("year")
-                name_en = metadata.get("name_en")
-                name_zh = metadata.get("name_zh")
-                logger.info(f"✅ Vision 提取成功: Stock={stock_code}, Year={year}")
+            if front_pages_artifacts:
+                front_pages_text = self._merge_page_artifacts(front_pages_artifacts)
+                
+                if front_pages_text and len(front_pages_text.strip()) > 50:
+                    logger.info(f"   📄 使用 artifacts 前 2 頁提取公司信息...")
+                    
+                    # 調用 LLM 提取公司信息
+                    metadata = await self.agent.extract_company_metadata_from_cover(front_pages_text)
+                    
+                    if metadata:
+                        stock_code = metadata.get("stock_code")
+                        year = metadata.get("year")
+                        name_en = metadata.get("name_en")
+                        name_zh = metadata.get("name_zh")
+                        logger.info(f"   ✅ Artifacts 提取成功: Stock={stock_code}, Year={year}")
+                    else:
+                        logger.warning("   ⚠️ Artifacts 提取失敗，嘗試 Fallback...")
             else:
-                logger.warning("⚠️ Vision 提取失敗，嘗試 Fallback...")
+                logger.warning("   ⚠️ Artifacts 中找不到前 2 頁內容，嘗試 Fallback...")
         else:
-            logger.warning("⚠️ 無法獲取封面圖片，嘗試 Fallback...")
+            logger.warning("   ⚠️ 沒有 artifacts，嘗試 Fallback...")
         
         # ==========================================
         # 🌟 方案 B: Fallback - 從文件名提取
@@ -815,7 +888,7 @@ class DocumentPipeline:
         if not stock_code or not year:
             import re
             filename = Path(pdf_path).stem
-            logger.info(f"   📄 Vision 提取失敗，嘗試從文件名提取: {filename}")
+            logger.info(f"   📄 提取失敗，嘗試從文件名提取: {filename}")
             
             # 提取 stock_code (格式: stock_XXXXX)
             stock_match = re.search(r'stock_(\d{4,5})', filename)
@@ -833,29 +906,7 @@ class DocumentPipeline:
                     break
         
         # ==========================================
-        # 🌟 方案 C: 嘗試 FastParser（最後手段）
-        # ==========================================
-        
-        if not stock_code:
-            logger.info("   📄 Vision 和文件名都失敗，嘗試 FastParser...")
-            front_pages_text = ""
-            total_pages = FastParser.get_page_count(pdf_path)
-            
-            for page_num in range(1, min(3, total_pages + 1)):
-                text = FastParser.extract_text(pdf_path, page_num)
-                if text:
-                    front_pages_text += text + "\n"
-            
-            if front_pages_text:
-                metadata = await self.agent.extract_company_metadata_from_cover(front_pages_text)
-                if metadata:
-                    stock_code = metadata.get("stock_code") or stock_code
-                    year = metadata.get("year") or year
-                    name_en = metadata.get("name_en") or name_en
-                    name_zh = metadata.get("name_zh") or name_zh
-        
-        # ==========================================
-        # 驗證必要欄位
+        # 验证必要字段
         # ==========================================
         
         if not stock_code:
@@ -925,8 +976,10 @@ class DocumentPipeline:
         
         此方法取代舊的 OpenDataLoaderProcessor，使用清晰的分層架構：
         1. OpenDataLoaderParser - 解析 PDF → Artifacts
-        2. VisionParser + FinancialAgent - 結構化提取
+        2. FinancialAgent - 結構化提取（從 Artifacts 中提取）
         3. DBClient - 數據入庫
+        
+        🔧 不再使用 PyMuPDF 自己切 PDF，完全依賴 OpenDataLoader 解析結果
         
         Args:
             pdf_path: PDF 檔案路徑
@@ -998,13 +1051,13 @@ class DocumentPipeline:
             # 指數報告涵蓋多間公司，不應該有單一母公司 (company_id)
             # 提取母公司會導致 AI 將「恒生指數公司」等發行商當成財報公司，污染數據庫
             if not company_id and not is_index_report:
-                company_id = await self._extract_and_create_company(pdf_path, doc_id)
+                company_id = await self._extract_and_create_company(pdf_path, doc_id, artifacts=artifacts)
                 if company_id:
                     logger.info(f"✅ 已關聯公司: ID={company_id}")
                 else:
                     logger.warning("⚠️ 無法提取公司信息")
             elif is_index_report:
-                logger.info("ℹ️ 指數報告無需提取母公司，跳過 Vision 提取 (報告涵蓋多間成分股公司)")
+                logger.info("ℹ️ 指數報告無需提取母公司，跳過提取 (報告涵蓋多間成分股公司)")
                 company_id = None  # 確保 company_id 保持 None
             
             # 🌟 Step 4.5: 保存所有頁面到兜底表 (Zone 2) - 所有文檔都必須執行！
@@ -1024,7 +1077,8 @@ class DocumentPipeline:
             }
             
             saved_pages = await self.save_all_pages_to_fallback_table(
-                pdf_path, company_id, doc_id, doc_year  # company_id 可以是 None，DB 已支援
+                pdf_path, company_id, doc_id, doc_year,
+                artifacts=artifacts  # 🌟 传递 artifacts，不再使用 PyMuPDF
             )
             stats["document_pages_saved"] = saved_pages
             
@@ -1034,11 +1088,12 @@ class DocumentPipeline:
                 if progress_callback:
                     progress_callback(70.0, "智能提取結構化數據...")
                 
-                # 🌟 传入年份参数（已由 Step 4.5 获取）
+                # 🌟 传入年份和 artifacts 参数
                 extraction_result = await self.smart_extract(
                     pdf_path, company_id, doc_id, 
                     lambda p, m: progress_callback(70 + p * 0.2, m) if progress_callback else None,
-                    year=doc_year  # 🌟 传入年份
+                    year=doc_year,
+                    artifacts=artifacts  # 🌟 传递 artifacts，不再使用 PyMuPDF
                 )
                 stats["structured_extraction"] = extraction_result
             elif is_index_report:
@@ -1117,7 +1172,7 @@ class DocumentPipeline:
                     )
                 
                 elif artifact_type == "image":
-                    # 🔧 修復：實際保存圖片文件
+                    # 🔧 修復：實際保存圖片文件（只依赖 OpenDataLoader 提供的数据）
                     image_dir = doc_dir / "images"
                     image_dir.mkdir(parents=True, exist_ok=True)
                     
@@ -1125,7 +1180,7 @@ class DocumentPipeline:
                     image_path = image_dir / image_filename
                     image_saved = False
                     
-                    # 嘗試從 artifact 中提取圖片數據
+                    # 🌟 只从 artifact 中提取图片数据（不再从 PDF 自己切）
                     image_data = artifact.get("image_data")
                     
                     if image_data:
@@ -1154,42 +1209,9 @@ class DocumentPipeline:
                         except Exception as e:
                             logger.warning(f"⚠️ 圖片保存失敗：{e}")
                     
-                    # 🔧 如果 OpenDataLoader 沒有提供圖片數據，從 PDF 提取
-                    if not image_saved and pdf_path and os.path.exists(pdf_path):
-                        try:
-                            import fitz
-                            doc = fitz.open(pdf_path)
-                            page_num = artifact.get("page_num", 1)
-                            
-                            if 1 <= page_num <= len(doc):
-                                page = doc.load_page(page_num - 1)
-                                bounding_box = metadata.get("bounding_box")
-                                
-                                if bounding_box and len(bounding_box) == 4:
-                                    # 使用 bounding box 裁切圖片
-                                    x0, y0, x1, y1 = bounding_box
-                                    rect = fitz.Rect(x0, y0, x1, y1)
-                                    mat = fitz.Matrix(2.0, 2.0)
-                                    pix = page.get_pixmap(matrix=mat, clip=rect)
-                                    
-                                    with open(image_path, 'wb') as f:
-                                        f.write(pix.tobytes("png"))
-                                    image_saved = True
-                                    logger.info(f"🖼️ 圖片已從 PDF 提取 (bbox): {image_path}")
-                                else:
-                                    # 沒有 bounding box，保存整個頁面
-                                    mat = fitz.Matrix(2.0, 2.0)
-                                    pix = page.get_pixmap(matrix=mat)
-                                    
-                                    with open(image_path, 'wb') as f:
-                                        f.write(pix.tobytes("png"))
-                                    image_saved = True
-                                    logger.info(f"🖼️ 圖片已從 PDF 提取 (full page): {image_path}")
-                            
-                            doc.close()
-                            
-                        except Exception as e:
-                            logger.warning(f"⚠️ 從 PDF 提取圖片失敗：{e}")
+                    # 🔧 移除 PDF fallback - 不再自己切 PDF
+                    if not image_saved:
+                        logger.warning(f"⚠️ OpenDataLoader 未提供圖片數據，跳過保存: {image_filename}")
                     
                     # 記錄到 raw_artifacts
                     await self.db.insert_raw_artifact(

@@ -122,11 +122,14 @@ class OpenDataLoaderParser:
                 
                 # 🔧 修復：使用正確的 Python API（根據官方文檔）
                 # 參數必須是 snake_case，不是 kebab-case
+                # ⚠️ 重要：不要傳 pages="all"，CLI 不接受這個格式
+                #    --pages 的默認值就是所有頁面，不傳參數即可
+                #    如果要指定頁面，格式是 "1,3,5-7"
                 convert(
                     input_path=pdf_path,          # 可以是 str 或 list
                     output_dir=temp_dir,          # 目錄路徑
                     format="json",                # 輸出格式
-                    pages="all",                  # 所有頁面
+                    # pages=None,                 # ❌ 不傳 pages，默處理所有頁面
                     image_output="embedded",      # Base64 data URIs
                     image_format="png"            # 圖片格式
                 )

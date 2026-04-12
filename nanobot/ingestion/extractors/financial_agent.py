@@ -48,16 +48,16 @@ except ImportError:
 # ===========================================
 
 class RevenueItem(BaseModel):
-    """收入項目"""
-    category: str = Field(..., description="分類名稱，如 'Europe', 'Mainland China'")
-    category_type: Optional[str] = Field(None, description="分類類型，如 'Region', 'Business Segment'")
-    percentage: Optional[float] = Field(None, description="百分比")
-    amount: Optional[float] = Field(None, description="金額")
+    """收入項目 (Schema v2.3)"""
+    segment_name: str = Field(..., description="分類名稱，如 'Europe', 'Mainland China'")
+    segment_type: Optional[str] = Field(None, description="分類類型，如 'geography', 'business'")
+    revenue_percentage: Optional[float] = Field(None, description="百分比")
+    revenue_amount: Optional[float] = Field(None, description="金額")
     currency: Optional[str] = Field(None, description="貨幣單位")
 
 
 class RevenueBreakdownResponse(BaseModel):
-    """收入分佈響應"""
+    """收入分佈響應 (Schema v2.3)"""
     items: List[RevenueItem] = Field(default_factory=list, description="收入項目列表")
     total_percentage: Optional[float] = Field(None, description="總百分比（應接近 100%）")
 
@@ -72,11 +72,13 @@ class CompanyInfo(BaseModel):
 
 
 class KeyPersonnelItem(BaseModel):
-    """高管項目"""
-    person_name: str = Field(..., description="姓名")
-    person_name_zh: Optional[str] = Field(None, description="中文姓名")
-    role: Optional[str] = Field(None, description="職位")
-    committee: Optional[str] = Field(None, description="委員會")
+    """高管項目 (Schema v2.3)"""
+    name_en: str = Field(..., description="英文姓名")
+    name_zh: Optional[str] = Field(None, description="中文姓名")
+    position_title_en: Optional[str] = Field(None, description="職位名稱")
+    role: Optional[str] = Field(None, description="簡化版角色，如 Chairman, CEO")
+    board_role: Optional[str] = Field(None, description="董事角色，如 chairman, ceo, independent_director")
+    committee_membership: Optional[List[str]] = Field(None, description="所屬委員會列表，如 ['audit', 'remuneration']")
     biography: Optional[str] = Field(None, description="簡歷")
 
 
@@ -309,19 +311,19 @@ class FinancialAgent:
         # 獲取 prompt
         system_prompt = get_prompt("revenue_breakdown")
         
-        # 增強 prompt：強調 JSON 格式
+        # 增強 prompt：強調 JSON 格式 (Schema v2.3)
         enhanced_system_prompt = f"""{system_prompt}
 
 IMPORTANT: You MUST respond with valid JSON only. No markdown, no explanations, just pure JSON.
 
-Expected format:
+Expected format (Schema v2.3):
 {{
   "items": [
     {{
-      "category": "Europe",
-      "category_type": "Region",
-      "percentage": 15.0,
-      "amount": 12345.67,
+      "segment_name": "Europe",
+      "segment_type": "geography",
+      "revenue_percentage": 15.0,
+      "revenue_amount": 12345.67,
       "currency": "HKD"
     }}
   ],
@@ -552,14 +554,16 @@ Expected JSON format:
 
 IMPORTANT: You MUST respond with valid JSON only.
 
-Expected format:
+Expected format (Schema v2.3):
 {{
   "items": [
     {{
-      "person_name": "John Doe",
-      "person_name_zh": "張三",
-      "role": "Executive Director",
-      "committee": "Audit Committee",
+      "name_en": "John Doe",
+      "name_zh": "張三",
+      "position_title_en": "Executive Director",
+      "role": "CEO",
+      "board_role": "ceo",
+      "committee_membership": ["audit", "remuneration"],
       "biography": "..."
     }}
   ]

@@ -137,13 +137,13 @@ class GetDBSchemaTool(Tool):
                     "success": True,
                     "tables": tables_info,
                     "query_hint": """
-📌 可用的主要表:
-- documents: 文檔主表 (含 JSONB 動態屬性)
-- document_companies: 關聯公司表
-- document_chunks: 文檔切片
-- document_tables: 提取的表格
-- document_processing_history: 處理歷史
-- data_review_queue: 人工審核隊列
+📌 可用的主要表 (Schema v2.3):
+- documents: 文檔主表 (owner_company_id, file_size_bytes)
+- document_companies: 關聯公司表 (橋樑表)
+- document_pages: 兜底表 (Zone 2, 只依賴 document_id)
+- financial_metrics: 扁平化財務指標表
+- revenue_breakdown: 收入分解表 (segment_name, segment_type)
+- review_queue: 人工審核隊列 (priority INTEGER 1-10)
 """
                 }
                 
@@ -279,33 +279,41 @@ class SmartInsertDocumentTool(Tool):
         try:
             async with db.connection() as conn:
                 async with conn.transaction():
-                    # 🌟 1. 處理母公司 (將動態屬性放入 companies.extra_data)
+                    # 🌟 1. 處理母公司 (只存基本資訊，不存動態屬性)
                     owner_company_id = None
                     if parent_company:
-                        # Upsert 母公司，extra_data 存儲 index_theme 等動態信息
+                        # Upsert 母公司（只存基本資訊）
                         owner_company_id = await conn.fetchval(
                             """
-                            INSERT INTO companies (stock_code, name_en, extra_data) 
-                            VALUES ($1, $2, $3::jsonb)
-                            ON CONFLICT (stock_code) DO UPDATE SET 
-                                extra_data = COALESCE(companies.extra_data, '{}'::jsonb) || $3::jsonb
+                            INSERT INTO companies (stock_code, name_en) 
+                            VALUES ($1, $2)
+                            ON CONFLICT (stock_code) DO UPDATE SET name_en = $2
                             RETURNING id
                             """,
                             "PARENT",  # 临时 stock_code
-                            parent_company,
-                            json.dumps({"index_theme": index_theme, **(dynamic_data or {})})
+                            parent_company
                         )
                     
-                    # 🌟 2. 寫入主 Document (適配 v2.3 欄位)
+                    # 🌟 2. 寫入主 Document (將動態屬性寫入 documents.dynamic_attributes！)
+                    # 🌟 修正：無論有沒有母公司，index_theme 和 dynamic_data 都要存到 documents 表
                     doc_id_str = f"agent_{uuid.uuid4().hex[:8]}"
+                    
+                    # 🌟 組整動態屬性：index_theme + dynamic_data
+                    doc_dynamic_attrs = json.dumps({
+                        "index_theme": index_theme,
+                        "confirmed_doc_industry": confirmed_doc_industry,
+                        "industry_assignment_rule": industry_assignment_rule,
+                        **(dynamic_data or {})
+                    })
+                    
                     doc_result = await conn.fetchrow(
                         """
                         INSERT INTO documents (
-                            doc_id, filename, report_type, owner_company_id, processing_status
-                        ) VALUES ($1, $2, $3, $4, 'pending')
+                            doc_id, filename, report_type, owner_company_id, processing_status, dynamic_attributes
+                        ) VALUES ($1, $2, $3, $4, 'pending', $5::jsonb)
                         RETURNING id
                         """,
-                        doc_id_str, filename, report_type, owner_company_id
+                        doc_id_str, filename, report_type, owner_company_id, doc_dynamic_attrs
                     )
                     doc_id_int = doc_result["id"]
                     
@@ -493,10 +501,9 @@ class UpdateDynamicAttributesTool(Tool):
         """
         更新動態屬性
         
-        🌟 Schema v2.3: 动态属性存储在 companies.extra_data
-        - documents.dynamic_attributes 已删除
-        - 通过 documents.owner_company_id 找到对应的 companies 记录
-        - 更新 companies.extra_data
+        🌟 Schema v2.3: 动态属性存储在 documents.dynamic_attributes
+        - 修正：指数报告的 owner_company_id 为 NULL，不能依赖 companies 表
+        - 直接更新 documents.dynamic_attributes，确保所有报告类型都能正常工作
         """
         from nanobot.ingestion.repository.db_client import DBClient
         
@@ -505,16 +512,17 @@ class UpdateDynamicAttributesTool(Tool):
         
         try:
             async with db.connection() as conn:
-                # 🌟 通过 documents.owner_company_id 找到对应的 company
+                # 🌟 修正：直接更新 documents 表，不依赖 owner_company_id
+                # 🌟 修正：指数报告的 owner_company_id 为 NULL，必须直接更新 documents 表
                 if merge:
                     # 合併現有屬性 (Schema v2.3)
                     result = await conn.fetchrow(
                         """
-                        UPDATE companies 
-                        SET extra_data = COALESCE(extra_data, '{}'::jsonb) || $1::jsonb,
+                        UPDATE documents 
+                        SET dynamic_attributes = COALESCE(dynamic_attributes, '{}'::jsonb) || $1::jsonb,
                             updated_at = NOW()
-                        WHERE id = (SELECT owner_company_id FROM documents WHERE id = $2)
-                        RETURNING extra_data
+                        WHERE id = $2
+                        RETURNING dynamic_attributes
                         """,
                         json.dumps(attributes),
                         document_id
@@ -523,11 +531,11 @@ class UpdateDynamicAttributesTool(Tool):
                     # 替換所有屬性 (Schema v2.3)
                     result = await conn.fetchrow(
                         """
-                        UPDATE companies 
-                        SET extra_data = $1::jsonb,
+                        UPDATE documents 
+                        SET dynamic_attributes = $1::jsonb,
                             updated_at = NOW()
-                        WHERE id = (SELECT owner_company_id FROM documents WHERE id = $2)
-                        RETURNING extra_data
+                        WHERE id = $2
+                        RETURNING dynamic_attributes
                         """,
                         json.dumps(attributes),
                         document_id
@@ -536,7 +544,7 @@ class UpdateDynamicAttributesTool(Tool):
                 return json.dumps({
                     "success": True,
                     "document_id": document_id,
-                    "extra_data": result["extra_data"] if result else None
+                    "dynamic_attributes": result["dynamic_attributes"] if result else None
                 }, indent=2, ensure_ascii=False)
                 
         except Exception as e:
@@ -567,24 +575,16 @@ class CreateReviewRecordTool(Tool):
         return {
             "type": "object",
             "properties": {
-                "document_id": {
-                    "type": "integer",
-                    "description": "ID of the document needing review"
-                },
-                "review_type": {
-                    "type": "string",
-                    "enum": ["industry_assignment", "company_extraction", "data_quality", "other"],
-                    "description": "Type of review needed"
-                },
+                "document_id": {"type": "integer", "description": "ID of the document needing review"},
+                "review_type": {"type": "string", "enum": ["industry_assignment", "company_extraction", "data_quality", "other"]},
                 "priority": {
-                    "type": "string",
-                    "enum": ["low", "medium", "high", "urgent"],
-                    "description": "Priority level",
-                    "default": "medium"
+                    "type": "integer", 
+                    "description": "Priority level from 1 (highest) to 10 (lowest)",
+                    "default": 5
                 },
-                "notes": {
+                "issue_description": {
                     "type": "string",
-                    "description": "Notes about what needs review"
+                    "description": "Description of what needs review (AI suggestion or issue)"
                 }
             },
             "required": ["document_id", "review_type"]
@@ -598,8 +598,8 @@ class CreateReviewRecordTool(Tool):
         self,
         document_id: int,
         review_type: str,
-        priority: str = "medium",
-        notes: Optional[str] = None
+        priority: int = 5,
+        issue_description: Optional[str] = None
     ) -> str:
         """創建審核記錄"""
         from nanobot.ingestion.repository.db_client import DBClient
@@ -609,28 +609,27 @@ class CreateReviewRecordTool(Tool):
         
         try:
             async with db.connection() as conn:
+                # 🌟 Schema v2.3: 表名 review_queue，欄位 priority(整數), issue_description
+                # 🌟 Schema v2.3: 移除 ON CONFLICT，因為可能同一份文件有多個審核事項
                 result = await conn.fetchrow(
                     """
-                    INSERT INTO data_review_queue (document_id, review_type, priority, notes)
-                    VALUES ($1, $2, $3, $4)
-                    ON CONFLICT (document_id) DO UPDATE SET
-                        review_type = EXCLUDED.review_type,
-                        priority = EXCLUDED.priority,
-                        notes = EXCLUDED.notes,
-                        status = 'pending'
+                    INSERT INTO review_queue (document_id, review_type, priority, issue_description, status)
+                    VALUES ($1, $2, $3, $4, 'pending')
                     RETURNING id, status
                     """,
                     document_id,
                     review_type,
                     priority,
-                    notes
+                    issue_description
                 )
                 
                 return json.dumps({
                     "success": True,
                     "review_id": result["id"],
                     "document_id": document_id,
-                    "status": result["status"]
+                    "status": result["status"],
+                    "priority": priority,
+                    "review_type": review_type
                 }, indent=2, ensure_ascii=False)
                 
         except Exception as e:
