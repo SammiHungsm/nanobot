@@ -2,15 +2,21 @@
 Batch PDF Processor
 
 功能：
-1. 監控目錄中的新 PDF 文件
-2. 批量調用 DocumentPipeline 處理
-3. 支持並行處理和進度追蹤
-4. 失敗重試機制
+1. 监控目录中的新 PDF 文件
+2. 批量调用 DocumentPipeline 处理
+3. 支持并行处理和进度追踪
+4. 失败重试机制
+
+🌟 Schema v2.3 完全对齐：
+- UUID doc_id (防止碰撞)
+- company_id=None (AI 自动从封面提取)
+- process_pdf_full (支持新参数)
 """
 
 import os
 import asyncio
 import aiofiles
+import uuid  # 🌟 新增 UUID 支持
 from pathlib import Path
 from typing import List, Optional
 from datetime import datetime
@@ -117,50 +123,58 @@ class BatchPDFProcessor:
     
     async def _process_single(self, pdf_path: Path) -> dict:
         """
-        處理單一 PDF
+        处理单一 PDF
+        
+        🌟 Schema v2.3 对齐：
+        - UUID doc_id (防止碰撞)
+        - company_id=None (AI 自动从封面提取)
+        - process_pdf_full (支持新参数)
         
         Args:
-            pdf_path: PDF 文件路徑
+            pdf_path: PDF 文件路径
             
         Returns:
-            處理結果
+            处理结果
         """
-        logger.info(f"📄 處理：{pdf_path.name}")
+        logger.info(f"📄 处理：{pdf_path.name}")
         
         try:
-            # 生成 Doc ID (使用文件名 + Hash)
-            import hashlib
-            file_hash = hashlib.md5(str(pdf_path).encode()).hexdigest()[:8]
-            doc_id = f"{pdf_path.stem}_{file_hash}"
+            # 🌟 修正 1：使用 UUID 确保 doc_id 绝对唯一，防止檔名碰撞
+            unique_hash = uuid.uuid4().hex[:8]
+            safe_stem = pdf_path.stem.replace(" ", "_")
+            doc_id = f"{safe_stem}_{unique_hash}"
             
-            # 默認 Company ID (TODO: 從文件名解析或使用配置文件)
-            company_id = 1  # 默認第一個公司
+            # 🌟 修正 2：移除写死的 company_id=1，设为 None 交给 Pipeline 智能提取
+            # AI Vision 会从封面自动提取真正的 company_id
+            company_id = None
             
-            # 處理
-            result = await self.processor.process_pdf(
+            # 🌟 修正 3：改用 process_pdf_full，并传递 v2.3 需要的新参数
+            result = await self.processor.process_pdf_full(
                 pdf_path=str(pdf_path),
                 company_id=company_id,
-                doc_id=doc_id
+                doc_id=doc_id,
+                is_index_report=False,  # 预设批量处理当作一般年报 (路线 B)
+                replace=False
             )
             
             if result.get("status") == "completed":
                 logger.success(f"✅ 完成：{pdf_path.name}")
             elif result.get("status") == "skipped":
-                logger.warning(f"⏭️ 跳過：{pdf_path.name}")
+                logger.warning(f"⏭️ 跳过：{pdf_path.name}")
             else:
-                logger.error(f"❌ 失敗：{pdf_path.name} - {result.get('error')}")
+                logger.error(f"❌ 失败：{pdf_path.name} - {result.get('error')}")
             
             return result
             
         except Exception as e:
-            logger.error(f"❌ 異常：{pdf_path.name} - {e}")
+            logger.error(f"❌ 异常：{pdf_path.name} - {e}")
             import traceback
             traceback.print_exc()
             return {"status": "failed", "error": str(e)}
     
     async def watch_directory(self, interval: int = 60):
         """
-        監控目錄 (Watch Mode)
+        監控目錄
         
         Args:
             interval: 檢查間隔 (秒)
@@ -203,7 +217,8 @@ async def main():
     
     db_url = os.getenv(
         "DATABASE_URL",
-        "postgresql://postgres:postgres_password_change_me@localhost:5433/annual_reports"
+        # 🌟 修正 4：确保 Port 号码为 5432 (Docker 內部通讯用)
+        "postgresql://postgres:postgres_password_change_me@localhost:5432/annual_reports"
     )
     data_dir = os.getenv("DATA_DIR", "./data/raw")
     input_dir = os.getenv("PDF_INPUT_DIR", "./data/pdfs")

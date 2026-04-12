@@ -25,10 +25,12 @@ class GetDynamicKeysTool(Tool):
     """
     [Tool] 獲取所有 JSONB 動態屬性的 Keys
     
+    🌟 Schema v2.3: 动态属性存储在 companies.extra_data
+    
     功能：
-    - 掃描 documents 表的 dynamic_attributes 欄位
+    - 扫描 companies 表的 extra_data 欄位
     - 返回所有出現過的 Key
-    - 用於 Just-in-Time Schema Injection
+    - 用于 Just-in-Time Schema Injection
     """
     
     @property
@@ -40,7 +42,7 @@ class GetDynamicKeysTool(Tool):
         return (
             "Discover all dynamic attribute keys stored in JSONB columns. "
             "Use this before generating SQL queries that might need to access hidden attributes. "
-            "Returns a list of all keys that have been used in dynamic_attributes."
+            "🌟 Schema v2.3: Dynamic attributes are stored in companies.extra_data."
         )
     
     @property
@@ -50,13 +52,13 @@ class GetDynamicKeysTool(Tool):
             "properties": {
                 "table_name": {
                     "type": "string",
-                    "description": "Table to scan for JSONB keys (default: 'documents')",
-                    "default": "documents"
+                    "description": "Table to scan for JSONB keys (default: 'companies')",
+                    "default": "companies"
                 },
                 "column_name": {
                     "type": "string", 
-                    "description": "JSONB column to scan (default: 'dynamic_attributes')",
-                    "default": "dynamic_attributes"
+                    "description": "JSONB column to scan (default: 'extra_data')",
+                    "default": "extra_data"
                 }
             }
         }
@@ -67,8 +69,8 @@ class GetDynamicKeysTool(Tool):
     
     async def execute(
         self,
-        table_name: str = "documents",
-        column_name: str = "dynamic_attributes"
+        table_name: str = "companies",  # 🌟 Schema v2.3: 改為 companies
+        column_name: str = "extra_data"  # 🌟 Schema v2.3: 改為 extra_data
     ) -> str:
         """執行動態 Key 發現"""
         from nanobot.ingestion.repository.db_client import DBClient
@@ -125,20 +127,21 @@ class GetDynamicKeysTool(Tool):
                     "sample_values": sample_values,
                     "key_frequency": key_frequency,
                     "query_hint": f"""
-📌 Vanna SQL Query Hint:
+📌 Vanna SQL Query Hint (Schema v2.3):
 當查詢動態屬性時，請使用 PostgreSQL JSONB 語法：
 
--- 提取單一值
-SELECT dynamic_attributes->>'{discovered_keys[0] if discovered_keys else 'key_name'}' 
-FROM documents;
+-- 提取單一值 (companies.extra_data)
+SELECT extra_data->>'{discovered_keys[0] if discovered_keys else 'key_name'}' 
+FROM companies;
 
--- 條件查詢
-SELECT * FROM documents 
-WHERE dynamic_attributes->>'key_name' = 'value';
+-- 查询关联公司（JOIN documents）
+SELECT c.name_en, c.extra_data->>'index_theme' 
+FROM companies c
+JOIN documents d ON d.owner_company_id = c.id;
 
 -- 檢查 Key 是否存在
-SELECT * FROM documents 
-WHERE dynamic_attributes ? 'key_name';
+SELECT * FROM companies 
+WHERE extra_data ? 'key_name';
 """
                 }
                 
@@ -310,56 +313,57 @@ class PrepareVannaPromptTool(Tool):
         
         try:
             async with db.connection() as conn:
-                # 獲取動態 Keys
+                # 🌟 Schema v2.3: 获取 companies.extra_data 的动态 Keys
                 keys_rows = await conn.fetch(
                     """
-                    SELECT DISTINCT jsonb_object_keys(dynamic_attributes) AS key
-                    FROM documents
-                    WHERE dynamic_attributes IS NOT NULL
+                    SELECT DISTINCT jsonb_object_keys(extra_data) AS key
+                    FROM companies
+                    WHERE extra_data IS NOT NULL
                     """
                 )
                 
                 dynamic_keys = [row["key"] for row in keys_rows]
                 
-                # 獲取 ai_extracted_industries 的樣本
+                # 🌟 Schema v2.3: 获取 ai_extracted_industries 的樣本 (document_companies)
                 industry_samples = await conn.fetch(
                     """
-                    SELECT DISTINCT jsonb_array_elements_text(ai_extracted_industries) AS industry
-                    FROM documents
-                    WHERE ai_extracted_industries IS NOT NULL
+                    SELECT DISTINCT jsonb_array_elements_text(extracted_industries) AS industry
+                    FROM document_companies
+                    WHERE extracted_industries IS NOT NULL
                     LIMIT 20
                     """
                 )
                 
                 industries = [row["industry"] for row in industry_samples]
                 
-                # 構建增強 Prompt
+                # 構建增強 Prompt (Schema v2.3)
                 enhanced_prompt = f"""
 用戶問題: {user_question}
 
-📌 重要：資料庫包含以下動態屬性 (存儲在 JSONB 欄位中):
+📌 重要：資料庫 Schema v2.3 (動態屬性存儲在 JSONB 欄位中):
 
-**documents 表動態屬性 (dynamic_attributes):**
+**companies 表動態屬性 (extra_data):**
 {json.dumps(dynamic_keys, indent=2, ensure_ascii=False)}
 
-**已發現的行業 (ai_extracted_industries):**
+**document_companies 表 AI 提取行業 (extracted_industries):**
 {json.dumps(industries, indent=2, ensure_ascii=False)}
 
-**PostgreSQL JSONB 查詢語法提示:**
+**PostgreSQL JSONB 查詢語法提示 (Schema v2.3):**
 ```sql
--- 提取動態屬性值
-SELECT dynamic_attributes->>'key_name' FROM documents;
+-- 提取動態屬性值 (companies.extra_data)
+SELECT extra_data->>'key_name' FROM companies;
 
--- 條件查詢動態屬性
-SELECT * FROM documents 
-WHERE dynamic_attributes->>'index_theme' = 'Hang Seng Biotech Index';
+-- 查询关联公司（JOIN documents）
+SELECT c.name_en, c.extra_data->>'index_theme', d.filename
+FROM companies c
+JOIN documents d ON d.owner_company_id = c.id;
 
--- 查詢 JSON 數組中的值
-SELECT * FROM documents 
-WHERE ai_extracted_industries ? 'Biotech';
+-- 查询 JSON 数组中的行业值 (document_companies)
+SELECT * FROM document_companies 
+WHERE extracted_industries ? 'Biotech';
 
 -- 檢查 Key 是否存在
-SELECT * FROM documents WHERE dynamic_attributes ? 'key_name';
+SELECT * FROM companies WHERE extra_data ? 'key_name';
 ```
 
 {additional_context}

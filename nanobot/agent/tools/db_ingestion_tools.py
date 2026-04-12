@@ -251,7 +251,14 @@ class SmartInsertDocumentTool(Tool):
         sub_companies: Optional[List[Dict[str, Any]]] = None
     ) -> str:
         """
-        執行智能寫入
+        執行智能寫入 (Schema v2.3 完全對齊)
+        
+        🌟 Schema v2.3 變更：
+        - documents.parent_company → 刪除（改用 owner_company_id）
+        - documents.index_theme → 刪除（改用 companies.extra_data）
+        - documents.confirmed_industry → 刪除（改用 document_companies）
+        - documents.dynamic_attributes → 刪除（改用 companies.extra_data）
+        - documents.status → processing_status
         
         Args:
             filename: 文件名
@@ -260,10 +267,11 @@ class SmartInsertDocumentTool(Tool):
             index_theme: 指數主題 (指數報告用)
             confirmed_doc_industry: 確認的行業 (規則 A)
             industry_assignment_rule: 行業分配規則 ('A' 或 'B')
-            dynamic_data: 動態屬性 (JSONB)
+            dynamic_data: 動態屬性 (存入 companies.extra_data)
             sub_companies: 子公司/成分股列表
         """
         from nanobot.ingestion.repository.db_client import DBClient
+        import uuid
         
         db = DBClient()
         await db.connect()
@@ -271,90 +279,82 @@ class SmartInsertDocumentTool(Tool):
         try:
             async with db.connection() as conn:
                 async with conn.transaction():
-                    # 1. 寫入主 Document
+                    # 🌟 1. 處理母公司 (將動態屬性放入 companies.extra_data)
+                    owner_company_id = None
+                    if parent_company:
+                        # Upsert 母公司，extra_data 存儲 index_theme 等動態信息
+                        owner_company_id = await conn.fetchval(
+                            """
+                            INSERT INTO companies (stock_code, name_en, extra_data) 
+                            VALUES ($1, $2, $3::jsonb)
+                            ON CONFLICT (stock_code) DO UPDATE SET 
+                                extra_data = COALESCE(companies.extra_data, '{}'::jsonb) || $3::jsonb
+                            RETURNING id
+                            """,
+                            "PARENT",  # 临时 stock_code
+                            parent_company,
+                            json.dumps({"index_theme": index_theme, **(dynamic_data or {})})
+                        )
+                    
+                    # 🌟 2. 寫入主 Document (適配 v2.3 欄位)
+                    doc_id_str = f"agent_{uuid.uuid4().hex[:8]}"
                     doc_result = await conn.fetchrow(
                         """
                         INSERT INTO documents (
-                            filename, report_type, is_index_report, 
-                            parent_company, index_theme, confirmed_industry,
-                            dynamic_attributes, status
-                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
+                            doc_id, filename, report_type, owner_company_id, processing_status
+                        ) VALUES ($1, $2, $3, $4, 'pending')
                         RETURNING id
                         """,
-                        filename,
-                        report_type,
-                        report_type == "index_report",
-                        parent_company,
-                        index_theme,
-                        confirmed_doc_industry,
-                        json.dumps(dynamic_data) if dynamic_data else None
+                        doc_id_str, filename, report_type, owner_company_id
                     )
+                    doc_id_int = doc_result["id"]
                     
-                    doc_id = doc_result["id"]
-                    logger.info(f"📄 Inserted document {doc_id}: {filename}")
-                    
+                    # 🌟 3. 寫入關聯公司 (document_companies 橋樑表)
                     companies_inserted = 0
-                    
-                    # 2. 寫入關聯公司 (應用行業分配規則)
                     if sub_companies:
                         for comp in sub_companies:
                             company_name = comp.get("name")
-                            stock_code = comp.get("stock_code")
+                            stock_code = comp.get("stock_code") or f"UNKNOWN_{uuid.uuid4().hex[:4]}"
                             ai_industries = comp.get("ai_industries", [])
                             
-                            # 規則 A: 強制使用確認的行業
-                            if industry_assignment_rule == "A" and confirmed_doc_industry:
-                                assigned_industry = confirmed_doc_industry
-                                ai_suggested = None
-                                industry_source = "confirmed"
+                            is_rule_a = (industry_assignment_rule == "A" and confirmed_doc_industry)
                             
-                            # 規則 B: 使用 AI 提取的行業
-                            else:
-                                assigned_industry = None
-                                ai_suggested = json.dumps(ai_industries) if ai_industries else None
-                                industry_source = "ai_extracted"
+                            # Upsert 公司實體 (Schema v2.3)
+                            comp_id = await conn.fetchval(
+                                """
+                                INSERT INTO companies (
+                                    stock_code, name_en, confirmed_industry, is_industry_confirmed
+                                ) VALUES ($1, $2, $3, $4)
+                                ON CONFLICT (stock_code) DO UPDATE SET name_en = $2
+                                RETURNING id
+                                """,
+                                stock_code, company_name,
+                                confirmed_doc_industry if is_rule_a else None,
+                                is_rule_a
+                            )
                             
+                            # 建立多對多關聯 (document_companies)
                             await conn.execute(
                                 """
                                 INSERT INTO document_companies (
-                                    document_id, company_name, stock_code,
-                                    assigned_industry, ai_suggested_industries, industry_source
-                                ) VALUES ($1, $2, $3, $4, $5, $6)
+                                    document_id, company_id, relation_type,
+                                    extracted_industries, extraction_source
+                                ) VALUES ($1, $2, 'mentioned', $3::jsonb, $4)
                                 """,
-                                doc_id,
-                                company_name,
-                                stock_code,
-                                assigned_industry,
-                                ai_suggested,
-                                industry_source
+                                doc_id_int, comp_id,
+                                json.dumps(ai_industries) if not is_rule_a else None,
+                                "confirmed" if is_rule_a else "ai_predict"
                             )
-                            
                             companies_inserted += 1
-                    
-                    # 3. 寫入處理歷史
-                    await conn.execute(
-                        """
-                        INSERT INTO document_processing_history (
-                            document_id, action, status, notes
-                        ) VALUES ($1, 'smart_insert', 'completed', $2)
-                        """,
-                        doc_id,
-                        f"Rule {industry_assignment_rule} applied. {companies_inserted} companies inserted."
-                    )
                     
                     result = {
                         "success": True,
-                        "document_id": doc_id,
-                        "filename": filename,
-                        "report_type": report_type,
-                        "industry_assignment_rule": industry_assignment_rule,
+                        "document_id": doc_id_str,
                         "companies_inserted": companies_inserted,
-                        "confirmed_industry": confirmed_doc_industry,
-                        "message": f"Successfully inserted document {doc_id} with {companies_inserted} companies using Rule {industry_assignment_rule}"
+                        "rule_applied": industry_assignment_rule,
+                        "confirmed_industry": confirmed_doc_industry
                     }
-                    
-                    logger.info(f"✅ Smart insert complete: {result['message']}")
-                    return json.dumps(result, indent=2, ensure_ascii=False)
+                    return json.dumps(result, ensure_ascii=False)
                     
         except Exception as e:
             logger.error(f"❌ Smart insert failed: {e}")
@@ -411,7 +411,7 @@ class UpdateDocumentStatusTool(Tool):
         status: str,
         notes: Optional[str] = None
     ) -> str:
-        """更新文檔狀態"""
+        """更新文檔狀態 (Schema v2.3: processing_status)"""
         from nanobot.ingestion.repository.db_client import DBClient
         
         db = DBClient()
@@ -419,34 +419,12 @@ class UpdateDocumentStatusTool(Tool):
         
         try:
             async with db.connection() as conn:
-                # 更新主表狀態
+                # 🌟 更新主表狀態 (Schema v2.3: processing_status, not status)
                 await conn.execute(
-                    "UPDATE documents SET status = $1, updated_at = NOW() WHERE id = $2",
+                    "UPDATE documents SET processing_status = $1, updated_at = NOW() WHERE id = $2",
                     status,
                     document_id
                 )
-                
-                # 寫入歷史
-                await conn.execute(
-                    """
-                    INSERT INTO document_processing_history (document_id, action, status, notes)
-                    VALUES ($1, 'status_update', $2, $3)
-                    """,
-                    document_id,
-                    status,
-                    notes
-                )
-                
-                # 如果需要審核，加入審核隊列
-                if status == "review":
-                    await conn.execute(
-                        """
-                        INSERT INTO data_review_queue (document_id, review_type, priority)
-                        VALUES ($1, 'industry_assignment', 'medium')
-                        ON CONFLICT (document_id) DO NOTHING
-                        """,
-                        document_id
-                    )
                 
                 result = {
                     "success": True,
@@ -512,7 +490,14 @@ class UpdateDynamicAttributesTool(Tool):
         attributes: Dict[str, Any],
         merge: bool = True
     ) -> str:
-        """更新動態屬性"""
+        """
+        更新動態屬性
+        
+        🌟 Schema v2.3: 动态属性存储在 companies.extra_data
+        - documents.dynamic_attributes 已删除
+        - 通过 documents.owner_company_id 找到对应的 companies 记录
+        - 更新 companies.extra_data
+        """
         from nanobot.ingestion.repository.db_client import DBClient
         
         db = DBClient()
@@ -520,28 +505,29 @@ class UpdateDynamicAttributesTool(Tool):
         
         try:
             async with db.connection() as conn:
+                # 🌟 通过 documents.owner_company_id 找到对应的 company
                 if merge:
-                    # 合併現有屬性
+                    # 合併現有屬性 (Schema v2.3)
                     result = await conn.fetchrow(
                         """
-                        UPDATE documents 
-                        SET dynamic_attributes = COALESCE(dynamic_attributes, '{}'::jsonb) || $1::jsonb,
+                        UPDATE companies 
+                        SET extra_data = COALESCE(extra_data, '{}'::jsonb) || $1::jsonb,
                             updated_at = NOW()
-                        WHERE id = $2
-                        RETURNING dynamic_attributes
+                        WHERE id = (SELECT owner_company_id FROM documents WHERE id = $2)
+                        RETURNING extra_data
                         """,
                         json.dumps(attributes),
                         document_id
                     )
                 else:
-                    # 替換所有屬性
+                    # 替換所有屬性 (Schema v2.3)
                     result = await conn.fetchrow(
                         """
-                        UPDATE documents 
-                        SET dynamic_attributes = $1::jsonb,
+                        UPDATE companies 
+                        SET extra_data = $1::jsonb,
                             updated_at = NOW()
-                        WHERE id = $2
-                        RETURNING dynamic_attributes
+                        WHERE id = (SELECT owner_company_id FROM documents WHERE id = $2)
+                        RETURNING extra_data
                         """,
                         json.dumps(attributes),
                         document_id
@@ -550,7 +536,7 @@ class UpdateDynamicAttributesTool(Tool):
                 return json.dumps({
                     "success": True,
                     "document_id": document_id,
-                    "dynamic_attributes": result["dynamic_attributes"]
+                    "extra_data": result["extra_data"] if result else None
                 }, indent=2, ensure_ascii=False)
                 
         except Exception as e:

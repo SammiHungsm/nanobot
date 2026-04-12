@@ -7,13 +7,15 @@ OpenDataLoader Parser - 純 Parser 層
 - 不涉及 LLM 提取
 
 這是 Parser 層，只負責「看」。
+
+參考：https://github.com/opendataloader-project/opendataloader-pdf
 """
 
 import os
 import json
 import asyncio
 import tempfile
-import re
+import shutil
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from loguru import logger
@@ -25,6 +27,11 @@ class OpenDataLoaderParser:
     
     純 Parser：輸入 PDF，輸出 Artifacts。
     不碰資料庫，不碰 LLM。
+    
+    根據官方文檔：
+    - Python API: opendataloader_pdf.convert()
+    - 參數：input_path, output_dir, format, image_output, image_format
+    - 支持批量處理：input_path 可以是 list
     """
     
     def __init__(self):
@@ -42,7 +49,7 @@ class OpenDataLoaderParser:
         Returns:
             List[Dict]: Artifacts 列表
         """
-        logger.info(f"📖 OpenDataLoader 正在解析: {pdf_path}")
+        logger.info(f"📖 OpenDataLoader 正在解析：{pdf_path}")
         
         # 同步解析（OpenDataLoader 是同步的）
         result_json = self._run_opendataloader(pdf_path, doc_id)
@@ -64,7 +71,7 @@ class OpenDataLoaderParser:
         Returns:
             List[Dict]: Artifacts 列表
         """
-        logger.info(f"📖 OpenDataLoader 正在異步解析: {pdf_path}")
+        logger.info(f"📖 OpenDataLoader 正在異步解析：{pdf_path}")
         
         # 使用 to_thread 將阻塞操作放到背景
         result_json = await asyncio.to_thread(self._run_opendataloader, pdf_path, doc_id)
@@ -79,6 +86,20 @@ class OpenDataLoaderParser:
         """
         執行 OpenDataLoader 解析
         
+        🔧 根據官方 GitHub 文檔修復 API 調用：
+        https://github.com/opendataloader-project/opendataloader-pdf
+        
+        Python API:
+        ```python
+        opendataloader_pdf.convert(
+            input_path=["file1.pdf", "folder/"],  # 可以是 list 或 str
+            output_dir="output/",
+            format="markdown,json",  # 逗号分隔
+            image_output="embedded",  # 或 "external"
+            image_format="png"
+        )
+        ```
+        
         Args:
             pdf_path: PDF 文件路徑
             doc_id: 文檔 ID
@@ -89,42 +110,80 @@ class OpenDataLoaderParser:
         import traceback
         
         with tempfile.TemporaryDirectory() as temp_dir:
-            out_path = Path(temp_dir) / f"{doc_id or 'output'}.json"
+            temp_path = Path(temp_dir)
             
             try:
                 from opendataloader_pdf import convert
                 
-                # 嘗試使用關鍵字參數
-                try:
-                    convert(pdf_path, output_path=str(out_path), output_format="json", pages="all")
-                except TypeError:
-                    # Fallback: 位置參數
-                    convert(pdf_path, str(out_path))
+                logger.debug(f"🔧 調用 OpenDataLoader convert() API")
+                logger.debug(f"   input_path: {pdf_path}")
+                logger.debug(f"   output_dir: {temp_dir}")
+                logger.debug(f"   format: json")
                 
-                if out_path.exists():
-                    if out_path.is_dir():
-                        json_files = list(out_path.glob("*.json"))
-                        if json_files:
-                            with open(json_files[0], 'r', encoding='utf-8') as f:
-                                return json.load(f)
-                        else:
-                            logger.error(f"❌ 目錄中找不到 JSON 文件")
-                            return {}
+                # 🔧 修復：使用正確的 Python API（根據官方文檔）
+                # 參數必須是 snake_case，不是 kebab-case
+                convert(
+                    input_path=pdf_path,          # 可以是 str 或 list
+                    output_dir=temp_dir,          # 目錄路徑
+                    format="json",                # 輸出格式
+                    pages="all",                  # 所有頁面
+                    image_output="embedded",      # Base64 data URIs
+                    image_format="png"            # 圖片格式
+                )
+                
+                # 查找輸出的 JSON 文件
+                # OpenDataLoader 會以 PDF 文件名命名輸出文件
+                pdf_name = Path(pdf_path).stem
+                expected_output = temp_path / f"{pdf_name}.json"
+                
+                # 如果找不到，嘗試其他可能的文件名
+                if not expected_output.exists():
+                    json_files = list(temp_path.glob("*.json"))
+                    if json_files:
+                        expected_output = json_files[0]
+                        logger.debug(f"📄 找到 JSON 文件：{expected_output.name}")
                     else:
-                        with open(out_path, 'r', encoding='utf-8') as f:
-                            return json.load(f)
+                        logger.error("❌ 找不到任何 JSON 輸出文件")
+                        return {}
+                
+                # 讀取 JSON
+                if expected_output.exists():
+                    with open(expected_output, 'r', encoding='utf-8') as f:
+                        result = json.load(f)
+                    logger.debug(f"✅ 成功讀取 JSON: {expected_output.name}")
+                    return result
                 else:
                     logger.error("❌ 轉換完成，但找不到輸出文件")
                     return {}
                     
+            except ImportError as ie:
+                logger.error(f"❌ opendataloader_pdf 未安裝：{ie}")
+                logger.error("💡 請運行：pip install opendataloader-pdf")
+                traceback.print_exc()
+                return {}
             except Exception as e:
-                logger.error(f"❌ OpenDataLoader 解析失敗: {e}")
+                logger.error(f"❌ OpenDataLoader 解析失敗：{e}")
                 traceback.print_exc()
                 return {}
     
     def _convert_to_artifacts(self, result_json: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
         將 OpenDataLoader 輸出轉換為標準 Artifacts 格式
+        
+        OpenDataLoader 輸出結構（根據 schema.json）：
+        ```json
+        {
+            "kids": [
+                {
+                    "type": "table|image|paragraph|heading|list",
+                    "page number": 1,
+                    "bounding box": {...},
+                    "content": "...",
+                    "data": "base64..."  // for images (embedded mode)
+                }
+            ]
+        }
+        ```
         
         Args:
             result_json: OpenDataLoader 原始輸出
@@ -138,12 +197,13 @@ class OpenDataLoaderParser:
         if isinstance(result_json, list):
             content_blocks = result_json
         elif isinstance(result_json, dict):
+            # 優先級：kids > pages > content > elements
             if "kids" in result_json:
                 content_blocks = result_json["kids"]
-            elif "content" in result_json:
-                content_blocks = result_json["content"]
             elif "pages" in result_json:
                 content_blocks = result_json["pages"]
+            elif "content" in result_json:
+                content_blocks = result_json["content"]
             elif "elements" in result_json:
                 content_blocks = result_json["elements"]
             else:
@@ -155,11 +215,14 @@ class OpenDataLoaderParser:
             logger.warning("⚠️ OpenDataLoader 返回空內容")
             return artifacts
         
+        logger.debug(f"📊 處理 {len(content_blocks)} 個內容塊")
+        
         for i, block in enumerate(content_blocks):
             if not isinstance(block, dict):
                 continue
             
             block_type = block.get("type", "unknown")
+            # 支持不同的 page number 字段名
             page_num = block.get("page number", block.get("page", block.get("page_num", 1)))
             
             if block_type == "table":
@@ -176,32 +239,24 @@ class OpenDataLoaderParser:
                 })
             
             elif block_type == "image":
-                # 🔧 修復：提取圖片數據（base64 或路徑）
+                # 🔧 根據 schema.json 提取圖片數據
+                # embedded mode: "data" 字段包含 Base64 data URI
+                # external mode: "source" 字段包含文件路徑
                 image_data = None
-                image_format = "png"
+                image_format = block.get("format", "png")
+                bounding_box = block.get("bounding box")
                 
-                # 檢查 OpenDataLoader 是否提供了圖片數據
-                if "source" in block:
+                # 優先檢查 "data" 字段（embedded 模式的 Base64）
+                if "data" in block and block["data"]:
+                    image_data = block["data"]  # Base64 data URI
+                    logger.debug(f"✅ 找到嵌入圖片數據 (embedded mode)")
+                
+                # Fallback: 檢查 "source" 是否是 data URI
+                elif "source" in block:
                     image_source = block["source"]
-                    # 如果是 base64 編碼
-                    if isinstance(image_source, str) and (image_source.startswith("data:image") or len(image_source) > 100):
+                    if isinstance(image_source, str) and image_source.startswith("data:image"):
                         image_data = image_source
-                        # 嘗試從 data URI 中提取格式
-                        if image_source.startswith("data:image/"):
-                            format_match = re.search(r"data:image/(\w+);", image_source)
-                            if format_match:
-                                image_format = format_match.group(1)
-                    # 如果是文件路徑
-                    elif isinstance(image_source, str) and os.path.exists(image_source):
-                        image_data = image_source
-                        image_format = os.path.splitext(image_source)[1].lstrip(".")
-                
-                # 檢查是否有嵌入的圖片數據（某些版本的 OpenDataLoader）
-                if not image_data and "image_data" in block:
-                    image_data = block["image_data"]
-                
-                if not image_data and "data" in block:
-                    image_data = block["data"]
+                        logger.debug(f"✅ 找到 source 中的 data URI")
                 
                 artifact = {
                     "type": "image",
@@ -209,14 +264,14 @@ class OpenDataLoaderParser:
                     "metadata": {
                         "source": "opendataloader",
                         "image_source": block.get("source"),
-                        "bounding_box": block.get("bounding box"),
+                        "bounding_box": bounding_box,
                         "id": block.get("id"),
                         "image_format": image_format,
-                        "has_image_data": image_data is not None
+                        "has_image_data": image_data is not None,
+                        "extraction_mode": "embedded" if image_data else "pending"
                     }
                 }
                 
-                # 如果有圖片數據，保存到 artifact 中
                 if image_data:
                     artifact["image_data"] = image_data
                     artifact["image_format"] = image_format
@@ -278,50 +333,3 @@ class OpenDataLoaderParser:
                     })
         
         return artifacts
-    
-    @staticmethod
-    def get_page_count(pdf_path: str) -> int:
-        """獲取 PDF 頁數"""
-        try:
-            import fitz
-            doc = fitz.open(pdf_path)
-            count = len(doc)
-            doc.close()
-            return count
-        except:
-            return 0
-    
-    @staticmethod
-    def find_pages_with_keywords(artifacts: List[Dict[str, Any]], keywords: List[str]) -> List[int]:
-        """
-        在 Artifacts 中搜尋包含關鍵字的頁面
-        
-        Args:
-            artifacts: Artifacts 列表
-            keywords: 關鍵字列表
-            
-        Returns:
-            List[int]: 頁碼列表
-        """
-        candidate_pages = set()
-        
-        for artifact in artifacts:
-            artifact_type = artifact.get("type")
-            page_num = artifact.get("page_num")
-            
-            if artifact_type == "text_chunk":
-                content = str(artifact.get("content", "")).lower()
-                for keyword in keywords:
-                    if keyword.lower() in content:
-                        candidate_pages.add(page_num)
-                        break
-            
-            elif artifact_type == "table":
-                table_json = artifact.get("content_json", {})
-                content = json.dumps(table_json, ensure_ascii=False).lower()
-                for keyword in keywords:
-                    if keyword.lower() in content:
-                        candidate_pages.add(page_num)
-                        break
-        
-        return sorted(list(candidate_pages))

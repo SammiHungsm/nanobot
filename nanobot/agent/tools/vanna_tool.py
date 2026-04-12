@@ -220,104 +220,146 @@ class VannaSQL:
             return {'status': 'failed', 'error': str(e)}
     
     def _get_table_ddl(self) -> List[str]:
-        """Get DDL statements for all tables (updated for new schema)"""
+        """Get DDL statements for all tables (Schema v2.3 适配)"""
         # Use training_data.py for comprehensive DDL
         try:
             from vanna_backend.training_data import ddl_statements
             return ddl_statements
         except ImportError:
-            # Fallback to basic schema
+            # 🌟 Fallback: Schema v2.3 基础结构
             return [
                 """
+                -- 🌟 Schema v2.3: documents 表
                 CREATE TABLE documents (
                     id SERIAL PRIMARY KEY,
+                    doc_id VARCHAR(255) UNIQUE,
                     filename VARCHAR(500) NOT NULL,
                     report_type VARCHAR(50) DEFAULT 'annual_report',
-                    is_index_report BOOLEAN DEFAULT FALSE,
-                    parent_company VARCHAR(255),
-                    index_theme VARCHAR(255),
-                    confirmed_industry VARCHAR(100),
-                    dynamic_attributes JSONB DEFAULT '{}',
-                    ai_extracted_industries JSONB DEFAULT '[]',
-                    status VARCHAR(50) DEFAULT 'pending',
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    owner_company_id INTEGER REFERENCES companies(id),
+                    year INTEGER,
+                    processing_status VARCHAR(50) DEFAULT 'pending',
+                    uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
-                CREATE INDEX idx_documents_dynamic_attributes ON documents USING GIN (dynamic_attributes);
                 """,
                 """
+                -- 🌟 Schema v2.3: companies 表
+                CREATE TABLE companies (
+                    id SERIAL PRIMARY KEY,
+                    stock_code VARCHAR(50) UNIQUE,
+                    name_en VARCHAR(255),
+                    name_zh VARCHAR(255),
+                    confirmed_industry VARCHAR(100),
+                    is_industry_confirmed BOOLEAN DEFAULT FALSE,
+                    ai_extracted_industries JSONB,
+                    sector VARCHAR(100),
+                    extra_data JSONB DEFAULT '{}'::jsonb
+                );
+                CREATE INDEX idx_companies_extra_data ON companies USING GIN (extra_data);
+                """,
+                """
+                -- 🌟 Schema v2.3: document_companies 多對多關聯表
                 CREATE TABLE document_companies (
                     id SERIAL PRIMARY KEY,
-                    document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-                    company_name VARCHAR(255) NOT NULL,
-                    stock_code VARCHAR(50),
-                    assigned_industry VARCHAR(100),
-                    ai_suggested_industries JSONB DEFAULT '[]',
-                    industry_source VARCHAR(50) DEFAULT 'ai_extracted',
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    document_id INTEGER NOT NULL REFERENCES documents(id),
+                    company_id INTEGER NOT NULL REFERENCES companies(id),
+                    relation_type VARCHAR(50) DEFAULT 'mentioned',
+                    extracted_industries JSONB,
+                    extraction_source VARCHAR(50) DEFAULT 'ai_predict',
+                    UNIQUE(document_id, company_id)
+                );
+                """,
+                """
+                -- 🌟 Schema v2.3: financial_metrics 表
+                CREATE TABLE financial_metrics (
+                    id SERIAL PRIMARY KEY,
+                    company_id INTEGER NOT NULL REFERENCES companies(id),
+                    year INTEGER NOT NULL,
+                    metric_name VARCHAR(100) NOT NULL,
+                    metric_name_zh VARCHAR(100),
+                    value NUMERIC(20, 2),
+                    standardized_value NUMERIC(20, 2),
+                    standardized_currency VARCHAR(10) DEFAULT 'HKD',
+                    CONSTRAINT unique_metric UNIQUE (company_id, year, metric_name)
                 );
                 """,
             ]
     
     def _get_schema_docs(self) -> List[str]:
-        """Get schema documentation (updated for JSONB support)"""
+        """Get schema documentation (Schema v2.3 适配)"""
         try:
             from vanna_backend.training_data import get_all_documentation
             return get_all_documentation()
         except ImportError:
-            # Fallback to basic documentation
+            # 🌟 Fallback: Schema v2.3 文档
             return [
                 """
-                CRITICAL: The 'documents' table contains a JSONB column 'dynamic_attributes'.
-                This column stores dynamic metadata extracted by AI (e.g., 'index_quarter', 'is_audited').
+                🌟 CRITICAL: Schema v2.3 变更
+                - documents.dynamic_attributes → 已删除，改为 companies.extra_data
+                - documents.ai_extracted_industries → 已删除，改为 document_companies.extracted_industries
                 
-                To query JSONB values, use PostgreSQL JSONB operators:
-                - SELECT dynamic_attributes->>'key_name' FROM documents;
-                - WHERE dynamic_attributes->>'index_quarter' = 'Q3';
-                - WHERE dynamic_attributes ? 'key_name';
+                To query JSONB values in v2.3:
+                - SELECT extra_data->>'key_name' FROM companies;
+                - WHERE c.extra_data->>'index_quarter' = 'Q3';
+                - WHERE dc.extracted_industries ? 'Biotech';
                 """,
                 """
-                Industry Assignment Rules:
-                - Rule A (Index Reports): All companies get the same confirmed_industry
-                - Rule B (Annual Reports): AI extracts industries per company
+                Industry Assignment Rules (Schema v2.3):
+                - Rule A (Index Reports): companies.is_industry_confirmed = TRUE, 使用 confirmed_industry
+                - Rule B (Annual Reports): companies.is_industry_confirmed = FALSE, 使用 ai_extracted_industries
                 
-                For index reports, parent_company is NULL, and index_theme defines the index name.
+                多對多關聯查詢需要 JOIN document_companies:
+                SELECT d.filename, c.name_en FROM documents d
+                JOIN document_companies dc ON dc.document_id = d.id
+                JOIN companies c ON dc.company_id = c.id;
                 """
             ]
     
     def _get_example_queries(self) -> List[tuple]:
-        """Get example SQL queries for training (updated for JSONB)"""
+        """Get example SQL queries for training (Schema v2.3 适配)"""
         try:
             from vanna_backend.training_data import get_all_question_sql_pairs
             return get_all_question_sql_pairs()
         except ImportError:
-            # Fallback examples with JSONB queries
+            # 🌟 Fallback: Schema v2.3 示例查询
             return [
-                # Basic queries
+                # 基础查询
                 (
-                    "SELECT id, filename, report_type, created_at FROM documents ORDER BY created_at DESC",
+                    "SELECT id, doc_id, filename, report_type FROM documents ORDER BY uploaded_at DESC",
                     "List all documents in the database"
                 ),
-                # Index reports
+                # 指数报告查询 (v2.3)
                 (
-                    "SELECT id, filename, index_theme, confirmed_industry FROM documents WHERE is_index_report = TRUE",
-                    "Show all index reports"
+                    "SELECT d.filename, c.name_en, c.confirmed_industry FROM documents d JOIN companies c ON d.owner_company_id = c.id WHERE d.report_type = 'index_report'",
+                    "Show all index reports with their companies"
                 ),
-                # JSONB queries (critical for Vanna to learn JSONB syntax)
+                # JSONB 查询 (v2.3: companies.extra_data)
                 (
-                    "SELECT id, filename, dynamic_attributes->>'index_quarter' AS quarter FROM documents WHERE dynamic_attributes->>'index_quarter' = 'Q3'",
-                    "Find all reports for quarter Q3"
-                ),
-                (
-                    "SELECT id, filename FROM documents WHERE dynamic_attributes->>'is_audited' = 'true'",
-                    "Find all audited reports"
+                    "SELECT name_en, stock_code, extra_data->>'index_quarter' AS quarter FROM companies WHERE extra_data->>'index_quarter' = 'Q3'",
+                    "Find all companies with Q3 quarter data"
                 ),
                 (
-                    "SELECT dc.company_name, dc.stock_code, dc.assigned_industry FROM document_companies dc JOIN documents d ON dc.document_id = d.id WHERE d.index_theme = 'Hang Seng Biotech Index'",
-                    "List all companies in the Hang Seng Biotech Index"
+                    "SELECT name_en, extra_data->>'is_audited' FROM companies WHERE extra_data->>'is_audited' = 'true'",
+                    "Find all audited companies"
                 ),
+                # 多对多关联查询 (v2.3)
                 (
-                    "SELECT id, filename, ai_extracted_industries FROM documents WHERE ai_extracted_industries ? 'Biotech'",
-                    "Find documents where AI extracted 'Biotech' as a potential industry"
+                    "SELECT d.filename, c.name_en, c.stock_code, dc.extraction_source FROM documents d JOIN document_companies dc ON dc.document_id = d.id JOIN companies c ON dc.company_id = c.id WHERE c.confirmed_industry = 'Biotech'",
+                    "List all documents mentioning Biotech companies"
+                ),
+                # 行业查询 (v2.3: document_companies.extracted_industries)
+                (
+                    "SELECT c.name_en, dc.extracted_industries FROM document_companies dc JOIN companies c ON dc.company_id = c.id WHERE dc.extracted_industries ? 'Biotech'",
+                    "Find companies where AI extracted 'Biotech' as a potential industry"
+                ),
+                # 确认行业查询 (v2.3)
+                (
+                    "SELECT name_en, stock_code, confirmed_industry FROM companies WHERE is_industry_confirmed = TRUE",
+                    "Find companies with confirmed industry (Rule A)"
+                ),
+                # 财务数据查询 (v2.3)
+                (
+                    "SELECT c.name_en, fm.year, fm.metric_name, fm.standardized_value FROM financial_metrics fm JOIN companies c ON fm.company_id = c.id WHERE fm.metric_name = 'Total Revenue' ORDER BY fm.standardized_value DESC LIMIT 10",
+                    "Show top 10 companies by revenue"
                 ),
             ]
     
@@ -329,9 +371,13 @@ class VannaSQL:
         """
         Discover all dynamic keys stored in JSONB columns.
         
+        🌟 Schema v2.3 适配:
+        - documents.dynamic_attributes → 已删除，改为 companies.extra_data
+        - documents.ai_extracted_industries → 已删除，改为 document_companies.extracted_industries
+        
         This is the "Just-in-Time Schema Injection" step:
-        - Scan documents.dynamic_attributes for all keys
-        - Scan document_companies.ai_suggested_industries for values
+        - Scan companies.extra_data for all keys
+        - Scan document_companies.extracted_industries for values
         - Return discovered keys for prompt enhancement
         
         Returns:
@@ -343,40 +389,40 @@ class VannaSQL:
             # Connect to PostgreSQL
             conn = await asyncpg.connect(self.database_url)
             
-            # Get all dynamic keys from documents
+            # 🌟 修正 1: 从 companies.extra_data 获取 Keys (Schema v2.3)
             keys_rows = await conn.fetch(
                 """
-                SELECT DISTINCT jsonb_object_keys(dynamic_attributes) AS key
-                FROM documents
-                WHERE dynamic_attributes IS NOT NULL 
-                AND dynamic_attributes != '{}'::jsonb
+                SELECT DISTINCT jsonb_object_keys(extra_data) AS key
+                FROM companies
+                WHERE extra_data IS NOT NULL 
+                AND extra_data != '{}'::jsonb
                 ORDER BY key
                 """
             )
             
             discovered_keys = [row["key"] for row in keys_rows]
             
-            # Get sample values for each key
+            # 🌟 修正 2: 从 companies 获取样本值 (Schema v2.3)
             sample_values = {}
             for key in discovered_keys[:10]:
                 sample = await conn.fetchrow(
                     f"""
-                    SELECT dynamic_attributes->>'{key}' AS sample_value
-                    FROM documents
-                    WHERE dynamic_attributes->>'{key}' IS NOT NULL
+                    SELECT extra_data->>'{key}' AS sample_value
+                    FROM companies
+                    WHERE extra_data->>'{key}' IS NOT NULL
                     LIMIT 1
                     """
                 )
                 if sample:
                     sample_values[key] = sample["sample_value"]
             
-            # Get frequency count
+            # Get frequency count (companies.extra_data)
             frequency_rows = await conn.fetch(
                 """
-                SELECT jsonb_object_keys(dynamic_attributes) AS key, COUNT(*) as count
-                FROM documents
-                WHERE dynamic_attributes IS NOT NULL
-                GROUP BY jsonb_object_keys(dynamic_attributes)
+                SELECT jsonb_object_keys(extra_data) AS key, COUNT(*) as count
+                FROM companies
+                WHERE extra_data IS NOT NULL
+                GROUP BY jsonb_object_keys(extra_data)
                 ORDER BY count DESC
                 LIMIT 20
                 """
@@ -384,12 +430,12 @@ class VannaSQL:
             
             key_frequency = {row["key"]: row["count"] for row in frequency_rows}
             
-            # Get AI extracted industries
+            # 🌟 修正 3: 从 document_companies.extracted_industries 获取行业 (Schema v2.3)
             industry_rows = await conn.fetch(
                 """
-                SELECT DISTINCT jsonb_array_elements_text(ai_extracted_industries) AS industry
-                FROM documents
-                WHERE ai_extracted_industries IS NOT NULL
+                SELECT DISTINCT jsonb_array_elements_text(extracted_industries) AS industry
+                FROM document_companies
+                WHERE extracted_industries IS NOT NULL
                 LIMIT 20
                 """
             )
@@ -407,7 +453,7 @@ class VannaSQL:
                 "status": "success"
             }
             
-            logger.info(f"🔍 Discovered {len(discovered_keys)} dynamic keys")
+            logger.info(f"🔍 Discovered {len(discovered_keys)} dynamic keys from companies.extra_data")
             return result
             
         except Exception as e:
@@ -421,6 +467,10 @@ class VannaSQL:
     def build_enhanced_prompt(self, question: str, dynamic_info: Dict[str, Any]) -> str:
         """
         Build enhanced prompt with dynamic schema information.
+        
+        🌟 Schema v2.3 适配:
+        - SQL 示例使用 companies.extra_data 替代 documents.dynamic_attributes
+        - 行业查询使用 document_companies.extracted_industries
         
         Args:
             question: User's natural language question
@@ -436,30 +486,40 @@ class VannaSQL:
         prompt = f"""
 用戶問題: {question}
 
-📌 重要提示：資料庫包含以下動態屬性 (存儲在 JSONB 欄位中):
+📌 重要提示：資料庫 v2.3 包含以下動態屬性 (存儲在 JSONB 欄位中):
 
-**documents.dynamic_attributes 可用的 Keys:**
+**companies.extra_data 可用的 Keys:**
 {json.dumps(discovered_keys, indent=2, ensure_ascii=False)}
 
 **樣本值:**
 {json.dumps(sample_values, indent=2, ensure_ascii=False)}
 
-**已發現的 AI 提取行業:**
+**已發現的 AI 提取行業 (在 document_companies.extracted_industries):**
 {json.dumps(discovered_industries, indent=2, ensure_ascii=False)}
 
-**PostgreSQL JSONB 查詢語法 (必須使用):**
+**PostgreSQL JSONB 查詢語法 (必須使用 Schema v2.3):**
 ```sql
 -- 提取單一值 (返回 text)
-SELECT dynamic_attributes->>'key_name' FROM documents;
+SELECT extra_data->>'key_name' FROM companies;
 
--- 條件查詢 JSONB 值
-SELECT * FROM documents WHERE dynamic_attributes->>'index_quarter' = 'Q3';
+-- 結合文檔與公司屬性查詢
+SELECT d.filename, c.name_en, c.extra_data->>'index_theme' 
+FROM documents d JOIN companies c ON d.owner_company_id = c.id
+WHERE c.extra_data->>'index_quarter' = 'Q3';
 
 -- 檢查 Key 是否存在
-SELECT * FROM documents WHERE dynamic_attributes ? 'key_name';
+SELECT * FROM companies WHERE extra_data ? 'key_name';
 
--- 查詢 JSON 數組
-SELECT * FROM documents WHERE ai_extracted_industries ? 'Biotech';
+-- 查詢 JSON 數組中的行業 (document_companies)
+SELECT dc.document_id, c.name_en, dc.extraction_source
+FROM document_companies dc
+JOIN companies c ON dc.company_id = c.id
+WHERE dc.extracted_industries ? 'Biotech';
+
+-- 查詢確認行業 (companies.confirmed_industry)
+SELECT c.name_en, c.stock_code, c.confirmed_industry
+FROM companies c
+WHERE c.is_industry_confirmed = TRUE;
 ```
 
 請根據以上信息生成正確的 SQL 查詢。如果問題涉及動態屬性，務必使用 JSONB 語法。
@@ -470,6 +530,10 @@ SELECT * FROM documents WHERE ai_extracted_industries ? 'Biotech';
     async def generate_sql_with_dynamic_schema(self, question: str) -> Optional[str]:
         """
         Generate SQL with Just-in-Time Schema Injection.
+        
+        🌟 Schema v2.3 适配:
+        - 动态属性存储在 companies.extra_data
+        - 行业存储在 document_companies.extracted_industries
         
         This method:
         1. First discovers all dynamic keys in the database
@@ -483,7 +547,7 @@ SELECT * FROM documents WHERE ai_extracted_industries ? 'Biotech';
             SQL query string or None if generation fails
         """
         try:
-            # Step 1: Discover dynamic keys
+            # Step 1: Discover dynamic keys (v2.3: companies.extra_data)
             dynamic_info = await self.discover_dynamic_keys()
             
             # Step 2: Build enhanced prompt
@@ -500,10 +564,12 @@ SELECT * FROM documents WHERE ai_extracted_industries ? 'Biotech';
             
             sql = self.vn.generate_sql(question=enhanced_question)
             
-            # Validate JSONB syntax if question involves dynamic attributes
-            if "dynamic_attributes" in str(dynamic_info.get("discovered_keys", [])):
-                if "->>" not in sql and "?" not in sql:
-                    logger.warning("Generated SQL may not have correct JSONB syntax")
+            # 🌟 Validate JSONB syntax for v2.3 (companies.extra_data)
+            if "extra_data" in str(dynamic_info.get("discovered_keys", [])) or \
+               "confirmed_industry" in question.lower() or \
+               "extracted_industries" in question.lower():
+                if "->>" not in sql and "?" not in sql and "JOIN" not in sql:
+                    logger.warning("Generated SQL may not have correct JSONB syntax for Schema v2.3")
             
             logger.info(f"Generated SQL with dynamic schema: {sql[:200]}...")
             return sql

@@ -691,28 +691,28 @@ IMPORTANT: You MUST respond with valid JSON only. Extract all visible data from 
             # - qwen3.5 → qwen-vl-max 或 qwen-vl-plus
             # - gpt-4 → gpt-4-vision-preview 或 gpt-4o
             # - glm-4 → glm-4v
-            vision_model = self.model
+            vision_model = self._get_model()
             
             # 嘗試映射到 Vision 模型
-            if "qwen" in self.model.lower():
+            if "qwen" in vision_model.lower():
                 # Qwen 系列：嘗試切換到 VL 模型
-                if "qwen3" in self.model.lower():
-                    vision_model = self.model.replace("qwen3", "qwen-vl")
-                elif "qwen2" in self.model.lower():
-                    vision_model = self.model.replace("qwen2", "qwen-vl")
+                if "qwen3" in vision_model.lower():
+                    vision_model = vision_model.replace("qwen3", "qwen-vl")
+                elif "qwen2" in vision_model.lower():
+                    vision_model = vision_model.replace("qwen2", "qwen-vl")
                 else:
                     vision_model = "qwen-vl-max"
-            elif "gpt-4" in self.model.lower() and "vision" not in self.model.lower():
+            elif "gpt-4" in vision_model.lower() and "vision" not in vision_model.lower():
                 # OpenAI GPT-4 系列
-                if "gpt-4o-mini" in self.model.lower():
+                if "gpt-4o-mini" in vision_model.lower():
                     vision_model = "gpt-4o"  # mini 不支持 vision，切換到 4o
-                elif "gpt-4-turbo" in self.model.lower():
+                elif "gpt-4-turbo" in vision_model.lower():
                     vision_model = "gpt-4-turbo"  # turbo 本身支持 vision
                 else:
                     vision_model = "gpt-4-vision-preview"
-            elif "glm" in self.model.lower():
+            elif "glm" in vision_model.lower():
                 # GLM 系列
-                if "glm-4" in self.model.lower():
+                if "glm-4" in vision_model.lower():
                     vision_model = "glm-4v"
             
             logger.info(f"👁️ 正在使用 Vision LLM ({vision_model}) 扫描封面...")

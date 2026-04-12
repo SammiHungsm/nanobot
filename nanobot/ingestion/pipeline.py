@@ -613,53 +613,74 @@ class DocumentPipeline:
         year: int
     ) -> int:
         """
-        🛡️ 保存所有 PDF 頁面到兜底表 (Zone 2)
+        Save all PDF pages to document_pages table (Zone 2 fallback).
         
-        這是「雙軌制」的關鍵步驟：確保所有原始內容都被保存，
-        即使無法提取結構化數據，Vanna 仍然可以通過全文搜索找到答案。
+        Uses hybrid parsing:
+        - Complex pages (charts/images) → VisionParser
+        - Simple pages → FastParser
         
         Args:
-            pdf_path: PDF 路徑
-            company_id: 公司 ID
-            doc_id: 文檔 ID
-            year: 年份
+            pdf_path: PDF file path
+            company_id: Company ID
+            doc_id: Document ID
+            year: Document year
             
         Returns:
-            int: 成功保存的頁面數
+            int: Number of pages saved
         """
-        logger.info(f"   📄 正在保存所有頁面到兜底表...")
+        logger.info(f"   Saving all pages to fallback table (hybrid parsing mode)...")
         
         total_pages = FastParser.get_page_count(pdf_path)
         if total_pages == 0:
-            logger.warning("   ⚠️ 無法獲取 PDF 頁數")
+            logger.warning("   Unable to get PDF page count")
             return 0
         
         saved_count = 0
+        vision_count = 0
         source_file = Path(pdf_path).name
         
         for page_num in range(1, total_pages + 1):
             try:
-                # 使用 FastParser 快速提取文字
-                text_content = FastParser.extract_text(pdf_path, page_num)
+                import fitz
+                doc = fitz.open(pdf_path)
+                page = doc.load_page(page_num - 1)
                 
-                if not text_content or len(text_content.strip()) < 10:
-                    # 跳過空白或太短的頁面
+                is_complex = VisionParser.is_complex_page(page)
+                
+                if is_complex:
+                    markdown_content = await self.vision_parser.to_markdown(
+                        pdf_path, page_num, 
+                        save_debug_path=None
+                    )
+                    
+                    if markdown_content and len(markdown_content.strip()) > 10:
+                        content_type = "vision_markdown"
+                        vision_count += 1
+                    else:
+                        markdown_content = FastParser.extract_text(pdf_path, page_num)
+                        content_type = "text"
+                    
+                    doc.close()
+                    
+                else:
+                    markdown_content = FastParser.extract_text(pdf_path, page_num)
+                    content_type = "text"
+                    doc.close()
+                
+                if not markdown_content or len(markdown_content.strip()) < 10:
                     continue
                 
-                # 檢測頁面類型（是否包含圖表）
-                # 這裡用簡單的啟發式規則判斷
-                has_charts = any(kw in text_content.lower() for kw in 
+                has_charts = is_complex or any(kw in markdown_content.lower() for kw in 
                     ['chart', 'figure', 'pie', 'bar', 'graph', '圖', '表'])
                 
-                # 保存到兜底表
                 success = await self.db.insert_document_page(
                     company_id=company_id,
                     doc_id=doc_id,
                     year=year,
                     page_num=page_num,
-                    markdown_content=text_content,
+                    markdown_content=markdown_content,
                     source_file=source_file,
-                    content_type="text",
+                    content_type=content_type,
                     has_charts=has_charts
                 )
                 
@@ -670,7 +691,7 @@ class DocumentPipeline:
                 logger.warning(f"   ⚠️ Page {page_num} 保存失敗: {e}")
                 continue
         
-        logger.info(f"   ✅ 已保存 {saved_count}/{total_pages} 頁到 document_pages 表")
+        logger.info(f"   Saved {saved_count}/{total_pages} pages (Vision: {vision_count})")
         return saved_count
     
     # ===========================================
@@ -956,7 +977,7 @@ class DocumentPipeline:
                 logger.info(f"   ✅ OpenDataLoader 解析完成: {len(artifacts)} 個 artifacts")
                 
                 # Step 3.1: 保存 Artifacts 到文件和數據庫
-                await self._save_opendataloader_artifacts(artifacts, doc_id, company_id)
+                await self._save_opendataloader_artifacts(artifacts, doc_id, company_id, pdf_path)
                 
                 # Step 3.2: 保存 output.json 供 WebUI 預覽
                 output_json_path = self.data_dir / doc_id / "output.json"
@@ -1056,7 +1077,8 @@ class DocumentPipeline:
         self,
         artifacts: List[Dict[str, Any]],
         doc_id: str,
-        company_id: Optional[int]
+        company_id: Optional[int],
+        pdf_path: str = None  # 🔧 新增：PDF 路徑參數
     ):
         """
         保存 OpenDataLoader Artifacts 到數據庫
@@ -1099,7 +1121,7 @@ class DocumentPipeline:
                     image_dir = doc_dir / "images"
                     image_dir.mkdir(parents=True, exist_ok=True)
                     
-                    image_filename = f"image_{idx:04d}.{metadata.get('image_format', 'png')}"
+                    image_filename = f"image_{idx:04d}.png"
                     image_path = image_dir / image_filename
                     image_saved = False
                     
@@ -1108,9 +1130,7 @@ class DocumentPipeline:
                     
                     if image_data:
                         try:
-                            # 如果是 base64 編碼（包含 data URI prefix）
                             if isinstance(image_data, str) and image_data.startswith("data:image"):
-                                # 提取 base64 部分
                                 base64_data = image_data.split(",", 1)[1] if "," in image_data else image_data
                                 import base64
                                 image_bytes = base64.b64decode(base64_data)
@@ -1120,7 +1140,6 @@ class DocumentPipeline:
                                 image_saved = True
                                 logger.debug(f"✅ 已保存圖片 (base64): {image_path}")
                             
-                            # 如果是純 base64 字符串
                             elif isinstance(image_data, str) and len(image_data) > 100:
                                 import base64
                                 try:
@@ -1130,20 +1149,49 @@ class DocumentPipeline:
                                     image_saved = True
                                     logger.debug(f"✅ 已保存圖片 (base64): {image_path}")
                                 except Exception:
-                                    # 可能不是 base64，而是文件路徑
                                     pass
                             
-                            # 如果是文件路徑
-                            elif isinstance(image_data, str) and os.path.exists(image_data):
-                                import shutil
-                                shutil.copy2(image_data, image_path)
-                                image_saved = True
-                                logger.debug(f"✅ 已保存圖片 (copy): {image_path}")
-                                
                         except Exception as e:
                             logger.warning(f"⚠️ 圖片保存失敗：{e}")
                     
-                    # 記錄到 raw_artifacts（無論圖片是否成功保存）
+                    # 🔧 如果 OpenDataLoader 沒有提供圖片數據，從 PDF 提取
+                    if not image_saved and pdf_path and os.path.exists(pdf_path):
+                        try:
+                            import fitz
+                            doc = fitz.open(pdf_path)
+                            page_num = artifact.get("page_num", 1)
+                            
+                            if 1 <= page_num <= len(doc):
+                                page = doc.load_page(page_num - 1)
+                                bounding_box = metadata.get("bounding_box")
+                                
+                                if bounding_box and len(bounding_box) == 4:
+                                    # 使用 bounding box 裁切圖片
+                                    x0, y0, x1, y1 = bounding_box
+                                    rect = fitz.Rect(x0, y0, x1, y1)
+                                    mat = fitz.Matrix(2.0, 2.0)
+                                    pix = page.get_pixmap(matrix=mat, clip=rect)
+                                    
+                                    with open(image_path, 'wb') as f:
+                                        f.write(pix.tobytes("png"))
+                                    image_saved = True
+                                    logger.info(f"🖼️ 圖片已從 PDF 提取 (bbox): {image_path}")
+                                else:
+                                    # 沒有 bounding box，保存整個頁面
+                                    mat = fitz.Matrix(2.0, 2.0)
+                                    pix = page.get_pixmap(matrix=mat)
+                                    
+                                    with open(image_path, 'wb') as f:
+                                        f.write(pix.tobytes("png"))
+                                    image_saved = True
+                                    logger.info(f"🖼️ 圖片已從 PDF 提取 (full page): {image_path}")
+                            
+                            doc.close()
+                            
+                        except Exception as e:
+                            logger.warning(f"⚠️ 從 PDF 提取圖片失敗：{e}")
+                    
+                    # 記錄到 raw_artifacts
                     await self.db.insert_raw_artifact(
                         artifact_id=f"{doc_id}_image_{idx:04d}",
                         doc_id=doc_id,
@@ -1160,7 +1208,7 @@ class DocumentPipeline:
                     if image_saved:
                         logger.debug(f"🖼️ 圖片已保存：{image_path}")
                     else:
-                        logger.warning(f"⚠️ 圖片無數據，僅記錄 metadata: {image_filename}")
+                        logger.warning(f"⚠️ 圖片無法保存，僅記錄 metadata: {image_filename}")
                 
                 # text_chunk 已保存在 output.json 中，無需單獨入庫
                 

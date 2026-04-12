@@ -205,51 +205,76 @@ Input: PDF first 1-2 pages content
 
 ---
 
-## Database Schema Reference
+## Database Schema Reference (v2.3)
 
-### documents table:
+### documents table (v2.3):
 | Column | Type | Description |
 |--------|------|-------------|
-| id | SERIAL | Primary key |
+| id | SERIAL | Primary key (Integer) |
+| doc_id | VARCHAR(255) | Unique string ID |
+| owner_company_id | INTEGER | FK to companies (for annual reports) |
 | filename | VARCHAR(500) | File name |
 | report_type | VARCHAR(50) | 'annual_report' or 'index_report' |
-| is_index_report | BOOLEAN | True for index reports |
-| parent_company | VARCHAR(255) | Parent company (for annual reports) |
-| index_theme | VARCHAR(255) | Index theme (for index reports) |
-| confirmed_industry | VARCHAR(100) | Confirmed industry (Rule A) |
-| ai_extracted_industries | JSONB | AI extracted industries (Rule B) |
-| dynamic_attributes | JSONB | Flexible metadata |
+| processing_status | VARCHAR(50) | 'pending', 'processing', 'completed', 'failed' |
+| year | INTEGER | Report year |
 
-### document_companies table:
+**Note**: `parent_company`, `index_theme`, `confirmed_industry`, `dynamic_attributes` are DELETED in v2.3.
+
+### companies table (v2.3):
 | Column | Type | Description |
 |--------|------|-------------|
 | id | SERIAL | Primary key |
-| document_id | INTEGER | FK to documents |
-| company_name | VARCHAR(255) | Company name |
 | stock_code | VARCHAR(50) | Stock code (e.g., 0700.HK) |
-| assigned_industry | VARCHAR(100) | Assigned industry (Rule A) |
-| ai_suggested_industries | JSONB | AI suggested industries (Rule B) |
-| industry_source | VARCHAR(50) | 'confirmed' or 'ai_extracted' |
+| name_en | VARCHAR(255) | Company name (English) |
+| name_zh | VARCHAR(255) | Company name (Chinese) |
+| confirmed_industry | VARCHAR(100) | Confirmed industry (Rule A) |
+| is_industry_confirmed | BOOLEAN | TRUE if industry is confirmed |
+| ai_extracted_industries | JSONB | AI extracted industries (Rule B) |
+| extra_data | JSONB | Flexible metadata & dynamic attributes |
+
+### document_companies table (v2.3):
+| Column | Type | Description |
+|--------|------|-------------|
+| id | SERIAL | Primary key |
+| document_id | INTEGER | FK to documents(id) |
+| company_id | INTEGER | FK to companies(id) |
+| relation_type | VARCHAR(50) | 'mentioned', 'subsidiary', 'owner' |
+| extracted_industries | JSONB | AI extracted industries (Rule B) |
+| extraction_source | VARCHAR(50) | 'confirmed' or 'ai_predict' |
 
 ---
 
-## JSONB Query Examples
+## JSONB Query Examples (Schema v2.3)
 
 ```sql
--- Extract dynamic attribute
-SELECT dynamic_attributes->>'index_quarter' FROM documents;
+-- Extract dynamic attribute (companies.extra_data)
+SELECT extra_data->>'index_quarter' FROM companies;
 
--- Query by dynamic attribute
-SELECT * FROM documents 
-WHERE dynamic_attributes->>'index_quarter' = 'Q3';
+-- Query by dynamic attribute (companies)
+SELECT c.name_en, c.extra_data->>'index_theme' 
+FROM companies c
+WHERE c.extra_data->>'index_quarter' = 'Q3';
 
--- Check if industry exists in JSON array
-SELECT * FROM document_companies 
-WHERE ai_suggested_industries ? 'Biotech';
+-- Check if industry exists in JSON array (document_companies)
+SELECT dc.document_id, c.name_en 
+FROM document_companies dc
+JOIN companies c ON dc.company_id = c.id
+WHERE dc.extracted_industries ? 'Biotech';
 
--- Check if key exists
-SELECT * FROM documents 
-WHERE dynamic_attributes ? 'base_date';
+-- Check if key exists (companies.extra_data)
+SELECT * FROM companies 
+WHERE extra_data ? 'base_date';
+
+-- Join documents with companies (v2.3)
+SELECT d.filename, c.name_en, c.confirmed_industry
+FROM documents d
+JOIN companies c ON d.owner_company_id = c.id;
+
+-- Multi-company query (document_companies bridge table)
+SELECT d.filename, c.name_en, dc.extraction_source
+FROM documents d
+JOIN document_companies dc ON dc.document_id = d.id
+JOIN companies c ON dc.company_id = c.id;
 ```
 
 ---
