@@ -77,7 +77,7 @@ webui/data/
 postgres_data/
 
 # Vanna training data
-
+data/vanna/
 
 # Raw extracted data
 data/raw/

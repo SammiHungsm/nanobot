@@ -170,32 +170,42 @@ class DBClient:
         name_en: str = None,
         name_zh: str = None,
         name_source: str = "extracted",
-        industry: str = None,
+        industry: str = None,  # 向後兼容，但會映射到 sector
         sector: str = None,
         auditor: str = None,
         auditor_opinion: str = None,
         ultimate_controlling_shareholder: str = None,
-        principal_banker: str = None
+        principal_banker: str = None,
+        # 🌟 新增：指數報告專用參數（Schema v2.3）
+        confirmed_industry: str = None,
+        is_industry_confirmed: bool = False
     ) -> Optional[int]:
         """
-        🎯 漸進式 Upsert 公司信息（Update as need）
+        🎯 漸進式 Upsert 公司信息（Schema v2.3 完全對齊）
         
         核心邏輯：
         1. 如果公司已存在，只更新「空值」欄位（不覆蓋已有數據）
         2. 如果公司不存在，創建新記錄
         3. 名字來源分為 index（恆指報表）和 extracted（PDF 擷取）
         
+        🌟 Schema v2.3 變更：
+        - name_en_index, name_en_extracted → 統一為 name_en
+        - name_zh_extracted → 統一為 name_zh
+        - industry → 已刪除，映射到 sector 或 confirmed_industry
+        
         Args:
             stock_code: 股票代碼（必須）
             name_en: 英文名稱
             name_zh: 中文名稱
             name_source: 名字來源 ('index' 或 'extracted')
-            industry: 行業
+            industry: 行業（向後兼容，映射到 sector）
             sector: 板塊
             auditor: 核數師
             auditor_opinion: 核數師意見
             ultimate_controlling_shareholder: 最終控股股東
             principal_banker: 主要銀行
+            confirmed_industry: 確認行業（規則 A）
+            is_industry_confirmed: 是否已確認行業
             
         Returns:
             int: 公司 ID
@@ -216,25 +226,22 @@ class DBClient:
                 company_id = existing['id']
                 update_fields = {}
                 
-                # 根據名字來源決定更新哪個欄位
-                if name_source == "index":
-                    # 恆指報表的名字是權威的，可以覆蓋
-                    if name_en:
-                        update_fields['name_en_index'] = name_en
-                    if name_zh:
-                        update_fields['name_zh_extracted'] = name_zh  # 恆指也可能有中文名
-                else:
-                    # PDF 擷取的名字只填空值
-                    if name_en and not existing.get('name_en_extracted'):
-                        update_fields['name_en_extracted'] = name_en
-                    if name_zh and not existing.get('name_zh_extracted'):
-                        update_fields['name_zh_extracted'] = name_zh
+                # 🌟 修正：Schema v2.3 只有 name_en 和 name_zh
+                if name_en and not existing.get('name_en'):
+                    update_fields['name_en'] = name_en
+                if name_zh and not existing.get('name_zh'):
+                    update_fields['name_zh'] = name_zh
                 
-                # 其他欄位只更新空值
-                if industry and not existing.get('industry'):
-                    update_fields['industry'] = industry
-                if sector and not existing.get('sector'):
-                    update_fields['sector'] = sector
+                # 🌟 修正：industry 欄位已刪除，映射到 sector 或 confirmed_industry
+                actual_sector = sector or industry
+                if actual_sector and not existing.get('sector'):
+                    update_fields['sector'] = actual_sector
+                
+                # 🌟 新增：確認行業（規則 A）
+                if confirmed_industry and not existing.get('confirmed_industry'):
+                    update_fields['confirmed_industry'] = confirmed_industry
+                    update_fields['is_industry_confirmed'] = is_industry_confirmed
+                
                 if auditor and not existing.get('auditor'):
                     update_fields['auditor'] = auditor
                 if auditor_opinion and not existing.get('auditor_opinion'):
@@ -256,23 +263,16 @@ class DBClient:
                 # 3. 創建新公司
                 insert_data = {
                     'stock_code': normalized_code,
-                    'sector': sector or 'Unknown',
-                    'industry': industry
+                    'sector': sector or industry or 'Unknown',
+                    'name_en': name_en,
+                    'name_zh': name_zh
                 }
                 
-                # 根據名字來源設置欄位
-                if name_source == "index":
-                    if name_en:
-                        insert_data['name_en_index'] = name_en
-                    if name_zh:
-                        insert_data['name_zh_extracted'] = name_zh
-                else:
-                    if name_en:
-                        insert_data['name_en_extracted'] = name_en
-                    if name_zh:
-                        insert_data['name_zh_extracted'] = name_zh
+                # 🌟 新增：確認行業（規則 A）
+                if confirmed_industry:
+                    insert_data['confirmed_industry'] = confirmed_industry
+                    insert_data['is_industry_confirmed'] = is_industry_confirmed
                 
-                # 其他欄位
                 if auditor:
                     insert_data['auditor'] = auditor
                 if auditor_opinion:
@@ -281,6 +281,9 @@ class DBClient:
                     insert_data['ultimate_controlling_shareholder'] = ultimate_controlling_shareholder
                 if principal_banker:
                     insert_data['principal_banker'] = principal_banker
+                
+                # 過濾掉 None 的值
+                insert_data = {k: v for k, v in insert_data.items() if v is not None}
                 
                 company_id = await self.insert_company(insert_data)
                 logger.info(f"✅ 創建新公司: Stock Code={normalized_code}, ID={company_id}")
@@ -704,30 +707,34 @@ class DBClient:
     
     async def insert_document_page(
         self,
-        company_id: int,
+        company_id: int,  # 保留參數但不寫入 db（Schema v2.3 已刪除）
         doc_id: str,
-        year: int,
+        year: int,  # 保留參數但不寫入 db（Schema v2.3 已刪除）
         page_num: int,
         markdown_content: str,
-        source_file: str,
-        content_type: str = "markdown",
+        source_file: str,  # 保留參數但不寫入 db（Schema v2.3 已刪除）
+        content_type: str = "markdown",  # 保留參數但不寫入 db（Schema v2.3 已刪除）
         has_images: bool = False,
         has_charts: bool = False
     ) -> bool:
         """
         插入單個 PDF 頁面的原始 Markdown 到兜底表
         
+        🌟 Schema v2.3 變更：
+        - 已刪除欄位：company_id, doc_id (字串), year, source_file, content_type
+        - 現在只依賴 document_id (Integer) 關聯
+        
         這是「雙軌制」的 Zone 2，確保所有原始數據都被保存，
         供 Vanna 在找不到精準數據時進行全文搜索。
         
         Args:
-            company_id: 公司 ID
-            doc_id: 文檔 ID
-            year: 年份
+            company_id: 公司 ID（參數保留但不寫入）
+            doc_id: 文檔 ID（用於查詢 document_id）
+            year: 年份（參數保留但不寫入）
             page_num: 頁碼
             markdown_content: 原始 Markdown 內容
-            source_file: 源文件名
-            content_type: 內容類型
+            source_file: 源文件名（參數保留但不寫入）
+            content_type: 內容類型（參數保留但不寫入）
             has_images: 是否包含圖片
             has_charts: 是否包含圖表
             
@@ -735,28 +742,27 @@ class DBClient:
             bool: 是否成功
         """
         try:
+            # 🌟 修正：用 doc_id (字串) 查出 document_id (Integer)
+            # 🌟 修正：移除已刪除的欄位 (company_id, year, source_file, content_type)
             await self.conn.execute(
                 """
                 INSERT INTO document_pages 
-                (company_id, doc_id, year, page_num, markdown_content, 
-                 content_type, has_images, has_charts, source_file)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                ON CONFLICT (company_id, year, page_num, source_file) 
+                (document_id, page_num, markdown_content, has_images, has_tables)
+                VALUES (
+                    (SELECT id FROM documents WHERE doc_id = $1), 
+                    $2, $3, $4, $5
+                )
+                ON CONFLICT (document_id, page_num) 
                 DO UPDATE SET 
-                    markdown_content = $5,
-                    content_type = $6,
-                    has_images = $7,
-                    has_charts = $8
+                    markdown_content = $3,
+                    has_images = $4,
+                    has_tables = $5
                 """,
-                company_id,
                 doc_id,
-                year,
                 page_num,
                 markdown_content,
-                content_type,
                 has_images,
-                has_charts,
-                source_file
+                has_charts  # 映射到 has_tables
             )
             
             logger.debug(f"✅ Page {page_num} 已寫入 document_pages 兜底表")
@@ -823,13 +829,15 @@ class DBClient:
         try:
             # 構建 ILIKE 條件
             ilike_conditions = " OR ".join([
-                f"markdown_content ILIKE '%{keyword}%'" 
+                f"dp.markdown_content ILIKE '%{keyword}%'" 
                 for keyword in keywords
             ])
             
+            # 🌟 修正：JOIN documents 表來過濾 company_id 和 year，並獲取 filename 代替 source_file
             sql = f"""
-                SELECT page_num, markdown_content, source_file
-                FROM document_pages
+                SELECT dp.page_num, dp.markdown_content, d.filename as source_file
+                FROM document_pages dp
+                JOIN documents d ON dp.document_id = d.id
                 WHERE ({ilike_conditions})
             """
             
@@ -837,16 +845,16 @@ class DBClient:
             param_idx = 1
             
             if company_id:
-                sql += f" AND company_id = ${param_idx}"
+                sql += f" AND d.owner_company_id = ${param_idx}"
                 params.append(company_id)
                 param_idx += 1
             
             if year:
-                sql += f" AND year = ${param_idx}"
+                sql += f" AND d.year = ${param_idx}"
                 params.append(year)
                 param_idx += 1
             
-            sql += f" ORDER BY page_num LIMIT ${param_idx}"
+            sql += f" ORDER BY dp.page_num LIMIT ${param_idx}"
             params.append(limit)
             
             rows = await self.conn.fetch(sql, *params)
@@ -864,15 +872,16 @@ class DBClient:
         self,
         doc_id: str,
         company_id: Optional[int],  # 這裡傳入的其實是母公司 ID
-        title: str,  # 保留參數以防其他地方報錯，但不寫入 DB
-        file_path: str,
-        file_hash: str,
-        file_size: int,
+        title: str = None,  # 保留參數以防其他地方報錯，但不寫入 DB（向後兼容）
+        filename: str = None,  # 🌟 新增：優先使用此參數
+        file_path: str = None,
+        file_hash: str = None,
+        file_size: int = 0,
         document_type: str = "annual_report"  # 保持參數名不變以防其他地方報錯
     ):
-        """創建文檔記錄 (適配新 Schema)"""
-        # 從 file_path 提取 filename
-        filename = Path(file_path).name
+        """創建文檔記錄 (適配新 Schema v2.3)"""
+        # 🌟 優先使用 filename 參數，如果沒有則從 file_path 提取
+        actual_filename = filename or (Path(file_path).name if file_path else "unknown.pdf")
         
         await self.conn.execute(
             """
@@ -886,7 +895,7 @@ class DBClient:
             """,
             doc_id,
             company_id,  # 寫入 owner_company_id
-            filename,
+            actual_filename,
             file_path,
             file_hash,
             file_size,  # 寫入 file_size_bytes
@@ -901,13 +910,12 @@ class DBClient:
         stats: Dict = None,
         error: str = None
     ):
-        """更新文檔處理狀態"""
+        """更新文檔處理狀態 (Schema v2.3: 只更新 processing_status)"""
         if status == "completed" and stats:
             await self.conn.execute(
                 """
                 UPDATE documents SET
                     processing_status = 'completed',
-                    status = 'completed',
                     processing_completed_at = NOW(),
                     total_chunks = $1,
                     total_artifacts = $2,
@@ -923,7 +931,6 @@ class DBClient:
                 """
                 UPDATE documents SET
                     processing_status = 'failed',
-                    status = 'failed',
                     processing_error = $1,
                     updated_at = NOW()
                 WHERE doc_id = $2
@@ -936,7 +943,6 @@ class DBClient:
                 """
                 UPDATE documents SET
                     processing_status = $1,
-                    status = $1,
                     updated_at = NOW()
                 WHERE doc_id = $2
                 """,
@@ -990,8 +996,15 @@ class DBClient:
         """刪除文檔及其所有相關數據"""
         logger.info(f"🗑️ 正在刪除文檔 {doc_id} 的所有數據...")
         
-        # 刪除相關數據 (document_chunks 已移除 - No RAG Option)
-        await self.conn.execute("DELETE FROM raw_artifacts WHERE doc_id = $1", doc_id)
+        # 先獲取 document.id (raw_artifacts 使用 document_id FK，不是 doc_id)
+        doc_row = await self.conn.fetchrow("SELECT id FROM documents WHERE doc_id = $1", doc_id)
+        if doc_row:
+            document_id = doc_row['id']
+            # 刪除相關數據 (document_chunks 已移除 - No RAG Option)
+            await self.conn.execute("DELETE FROM raw_artifacts WHERE document_id = $1", document_id)
+            await self.conn.execute("DELETE FROM document_companies WHERE document_id = $1", document_id)
+            await self.conn.execute("DELETE FROM document_processing_history WHERE document_id = $1", document_id)
+        
         await self.conn.execute("DELETE FROM documents WHERE doc_id = $1", doc_id)
         
         logger.info(f"✅ 文檔 {doc_id} 已刪除")
@@ -1152,52 +1165,66 @@ class DBClient:
         self,
         artifact_id: str,
         doc_id: str,
-        company_id: Optional[int],
+        company_id: Optional[int],  # 參數保留但不寫入此表（Schema v2.3 已刪除）
         file_type: str,
         file_path: str,
         page_num: int = None,
         metadata: str = None,
-        file_size: int = 0
+        file_size: int = 0  # 參數保留但不寫入此表（Schema v2.3 已刪除）
     ) -> bool:
         """
         插入 Raw Artifact 記錄
         
+        🌟 Schema v2.3 變更：
+        - file_type → artifact_type (值: table, image_screenshot, text_chunk, chart)
+        - file_size_bytes, source_file → 已刪除
+        - doc_id (字串) → document_id (Integer)
+        
         Args:
             artifact_id: Artifact ID
-            doc_id: 文檔 ID
-            company_id: 公司 ID
+            doc_id: 文檔 ID（用於查詢 document_id）
+            company_id: 公司 ID（參數保留但不寫入）
             file_type: 文件類型 (table_json, image, etc.)
             file_path: 文件路徑
             page_num: 頁碼
             metadata: 元數據 JSON 字串
-            file_size: 文件大小
+            file_size: 文件大小（參數保留但不寫入）
             
         Returns:
             bool: 是否成功
         """
         try:
+            # 🌟 修正：轉換 file_type 為 artifact_type
+            artifact_type = "table" if "table" in file_type.lower() else \
+                            "image_screenshot" if "image" in file_type.lower() else \
+                            "text_chunk" if "text" in file_type.lower() else \
+                            "chart" if "chart" in file_type.lower() else \
+                            file_type
+            
+            # 🌟 修正：查出 document_id (Integer)，移除已刪除欄位
             await self.conn.execute(
                 """
                 INSERT INTO raw_artifacts (
-                    artifact_id, doc_id, company_id, file_type,
-                    file_path, file_size_bytes, metadata, page_num, source_file
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    artifact_id, document_id, artifact_type,
+                    file_path, page_num, parsed_data
+                ) VALUES (
+                    $1, 
+                    (SELECT id FROM documents WHERE doc_id = $2), 
+                    $3, $4, $5, $6::jsonb
+                )
                 ON CONFLICT (artifact_id) DO UPDATE SET
-                    file_path = $5,
-                    metadata = $7,
-                    page_num = $8
+                    file_path = $4,
+                    page_num = $5,
+                    parsed_data = $6::jsonb
                 """,
                 artifact_id,
                 doc_id,
-                company_id,
-                file_type,
+                artifact_type,
                 file_path,
-                file_size,
-                metadata,
                 page_num,
-                doc_id
+                metadata or '{}'
             )
-            logger.debug(f"✅ Artifact {artifact_id} 已保存")
+            logger.debug(f"✅ Artifact {artifact_id} ({artifact_type}) 已保存")
             return True
             
         except Exception as e:

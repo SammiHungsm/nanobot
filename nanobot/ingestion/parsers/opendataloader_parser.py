@@ -13,6 +13,7 @@ import os
 import json
 import asyncio
 import tempfile
+import re
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from loguru import logger
@@ -175,16 +176,52 @@ class OpenDataLoaderParser:
                 })
             
             elif block_type == "image":
-                artifacts.append({
+                # 🔧 修復：提取圖片數據（base64 或路徑）
+                image_data = None
+                image_format = "png"
+                
+                # 檢查 OpenDataLoader 是否提供了圖片數據
+                if "source" in block:
+                    image_source = block["source"]
+                    # 如果是 base64 編碼
+                    if isinstance(image_source, str) and (image_source.startswith("data:image") or len(image_source) > 100):
+                        image_data = image_source
+                        # 嘗試從 data URI 中提取格式
+                        if image_source.startswith("data:image/"):
+                            format_match = re.search(r"data:image/(\w+);", image_source)
+                            if format_match:
+                                image_format = format_match.group(1)
+                    # 如果是文件路徑
+                    elif isinstance(image_source, str) and os.path.exists(image_source):
+                        image_data = image_source
+                        image_format = os.path.splitext(image_source)[1].lstrip(".")
+                
+                # 檢查是否有嵌入的圖片數據（某些版本的 OpenDataLoader）
+                if not image_data and "image_data" in block:
+                    image_data = block["image_data"]
+                
+                if not image_data and "data" in block:
+                    image_data = block["data"]
+                
+                artifact = {
                     "type": "image",
                     "page_num": page_num,
                     "metadata": {
                         "source": "opendataloader",
                         "image_source": block.get("source"),
                         "bounding_box": block.get("bounding box"),
-                        "id": block.get("id")
+                        "id": block.get("id"),
+                        "image_format": image_format,
+                        "has_image_data": image_data is not None
                     }
-                })
+                }
+                
+                # 如果有圖片數據，保存到 artifact 中
+                if image_data:
+                    artifact["image_data"] = image_data
+                    artifact["image_format"] = image_format
+                
+                artifacts.append(artifact)
             
             elif block_type in ["paragraph", "heading", "header", "footer"]:
                 text_content = block.get("content", "")

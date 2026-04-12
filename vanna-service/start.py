@@ -16,6 +16,12 @@ Features:
 """
 
 import os
+
+# 🔧 禁用 ChromaDB telemetry（必须在导入 chromadb/vanna 之前设置）
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
+os.environ["CHROMA_TELEMETRY"] = "False"
+os.environ["CHROMA_DISABLE_TELEMETRY"] = "True"  # Extra flag for newer versions
+
 import time
 import json
 from pathlib import Path
@@ -70,7 +76,7 @@ logger.add(
 
 # Global Vanna instance
 vn: Optional[MyVanna] = None
-db_url: str = ""
+db_url: str = os.getenv("DATABASE_URL", "")
 chroma_path: str = "/app/data/chromadb"
 
 # Ensure data directories exist
@@ -274,7 +280,28 @@ def connect_vanna_to_postgres():
         # Get database connection details from DATABASE_URL
         # Format: postgresql://user:password@host:port/dbname
         from urllib.parse import urlparse
+        
+        # 🔧 Debug: Show the actual db_url value
+        logger.info(f"🔍 db_url value: '{db_url}'")
+        
+        if not db_url:
+            logger.error("❌ db_url is empty! Cannot connect Vanna to PostgreSQL")
+            conn.close()
+            return
+        
         parsed = urlparse(db_url)
+        
+        # 🔧 Debug: Show all parsed values
+        logger.info(f"🔍 URL parsed results:")
+        logger.info(f"   hostname: '{parsed.hostname}'")
+        logger.info(f"   port: {parsed.port}")
+        logger.info(f"   username: '{parsed.username}'")
+        logger.info(f"   dbname: '{parsed.path.lstrip('/')}'")
+        
+        if not parsed.hostname:
+            logger.error(f"❌ hostname is None! DATABASE_URL format may be incorrect")
+            conn.close()
+            return
         
         vn.connect_to_postgres(
             host=parsed.hostname,
@@ -290,6 +317,8 @@ def connect_vanna_to_postgres():
         
     except Exception as e:
         logger.error(f"❌ Failed to connect Vanna to PostgreSQL: {e}")
+        import traceback
+        traceback.print_exc()
         return
 
 
@@ -463,7 +492,7 @@ def train_vanna_on_document(doc_id: str) -> bool:
                 table_path = Path(table['file_path'])
                 if table_path.exists():
                     with open(table_path, 'r', encoding='utf-8') as f:
-                    table_data = json.load(f)
+                        table_data = json.load(f)
                     
                     # 將表格結構訓練給 Vanna
                     table_name = f"extracted_{table_path.stem}"
@@ -508,6 +537,7 @@ def train_vanna_on_document(doc_id: str) -> bool:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """FastAPI lifespan manager"""
+    global db_url  # 🔧 Fix: Must declare global to update the module-level variable
     # Startup
     logger.info("🚀 Vanna Service Starting...")
     logger.info("=" * 50)

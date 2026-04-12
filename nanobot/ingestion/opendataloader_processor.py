@@ -261,15 +261,23 @@ class OpenDataLoaderProcessor:
         """刪除現有文檔及其所有相關數據"""
         logger.info(f"🗑️ 正在刪除文檔 {doc_id} 的所有數據...")
         
-        # 1. 刪除 raw_artifacts (document_chunks 已移除 - No RAG Option)
-        artifacts_deleted = await self.db_conn.execute(
-            "DELETE FROM raw_artifacts WHERE doc_id = $1",
-            doc_id
-        )
-        logger.info(f"   📦 已刪除 raw_artifacts")
+        # 先獲取 document.id (raw_artifacts 使用 document_id FK，不是 doc_id)
+        doc_row = await self.db_conn.fetchrow("SELECT id FROM documents WHERE doc_id = $1", doc_id)
+        if doc_row:
+            document_id = doc_row['id']
+            # 1. 刪除 raw_artifacts (document_chunks 已移除 - No RAG Option)
+            await self.db_conn.execute(
+                "DELETE FROM raw_artifacts WHERE document_id = $1",
+                document_id
+            )
+            logger.info(f"   📦 已刪除 raw_artifacts")
+            
+            # 刪除其他關聯表
+            await self.db_conn.execute("DELETE FROM document_companies WHERE document_id = $1", document_id)
+            await self.db_conn.execute("DELETE FROM document_processing_history WHERE document_id = $1", document_id)
         
         # 3. 刪除 documents 主表記錄
-        doc_deleted = await self.db_conn.execute(
+        await self.db_conn.execute(
             "DELETE FROM documents WHERE doc_id = $1",
             doc_id
         )
@@ -285,31 +293,28 @@ class OpenDataLoaderProcessor:
         logger.info(f"✅ 文檔 {doc_id} 已完全刪除")
     
     async def _create_document_record(self, pdf_path: str, company_id: Optional[int], doc_id: str, file_hash: str):
-        """創建文檔記錄 (company_id 可為 NULL)"""
+        """創建文檔記錄 (company_id 可為 NULL) - Schema v2.3"""
         pdf_path_obj = Path(pdf_path)
         filename = pdf_path_obj.name
         
+        # 🌟 Schema v2.3: 使用 owner_company_id, report_type, 只更新 processing_status
         await self.db_conn.execute(
             """
             INSERT INTO documents (
-                doc_id, company_id, filename, title, document_type, 
-                file_path, file_hash, file_size_bytes,
-                processing_status, status, uploaded_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+                doc_id, owner_company_id, filename, file_path, file_hash, 
+                file_size_bytes, report_type, processing_status, uploaded_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
             ON CONFLICT (doc_id) DO UPDATE SET
                 processing_status = 'pending',
-                status = 'pending',
                 updated_at = NOW()
             """,
             doc_id,
-            company_id,  # 可為 NULL
+            company_id,  # 寫入 owner_company_id（可為 NULL）
             filename,
-            pdf_path_obj.stem,  # 使用文件名作為標題
-            "annual_report",
             str(pdf_path_obj.absolute()),
             file_hash,
             pdf_path_obj.stat().st_size,
-            "pending",
+            "annual_report",  # 寫入 report_type
             "pending"
         )
     

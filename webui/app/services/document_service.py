@@ -285,17 +285,11 @@ class DocumentService:
         # 🌟 從資料庫與向量庫中徹底抹除數據（防止 AI 幻覺）
         try:
             await self._ensure_pipeline_connected()
-            if self.pipeline:
-                # 🌟 删除数据库中的关联数据
-                # 1. 删除 raw_artifacts
-                # 2. 删除 document_chunks (如果存在)
-                # 3. 删除 financial_metrics (如果存在)
-                # TODO: 如果 pipeline 有 delete_document 方法，直接调用
-                # await self.pipeline.delete_document(doc_id)
-                
-                # 暂时直接删除（需要 pipeline 支持）
-                logger.info(f"從資料庫與向量庫徹底抹除文檔數據: {doc_id}")
-                self.add_processing_log(f"🧹 清除資料庫關聯數據: {doc_id}", "warning")
+            if self.pipeline and self.pipeline.db:
+                # 🌟 調用 pipeline.db.delete_document() 徹底清除資料庫
+                await self.pipeline.db.delete_document(doc_id)
+                logger.info(f"✅ 已從資料庫徹底清除: {doc_id}")
+                self.add_processing_log(f"🧹 已從資料庫徹底清除: {doc_id}", "info")
         except Exception as e:
             logger.error(f"清除資料庫數據失敗 {doc_id}: {e}")
             self.add_processing_log(f"⚠️ 清除資料庫數據失敗: {doc_id} - {e}", "error")

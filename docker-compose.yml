@@ -119,9 +119,12 @@ services:
     container_name: vanna-service
     volumes:
       - vanna_data:/app/data                    # Named volume for persistence
+      - vanna_onnx_cache:/root/.cache/chroma    # 🔧 持久化 ONNX embedding model (加速啟動)
       - ./data/vanna:/app/data/chromadb         # 🔧 額外掛載 ChromaDB 到本地，方便開發時查看
       - ./config:/app/config
       - ~/.nanobot:/root/.nanobot
+      - ./vanna-service/start.py:/app/start.py:ro  # 🔧 開發模式：掛載 Python 代碼，無需 rebuild
+      - ./vanna-service/vanna_training.py:/app/vanna_training.py:ro
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres_password_change_me}@postgres-financial:5432/${POSTGRES_DB:-annual_reports}
       - VANNA_MODEL=${VANNA_MODEL:-financial-sql}
@@ -130,8 +133,9 @@ services:
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
       - DASHSCOPE_API_BASE=${DASHSCOPE_API_BASE:-https://coding.dashscope.aliyuncs.com/v1}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      # Disable ChromaDB telemetry warnings
+      # 🔧 禁用 ChromaDB telemetry（避免警告）
       - ANONYMIZED_TELEMETRY=False
+      - CHROMA_TELEMETRY=False
     depends_on:
       postgres-financial:
         condition: service_healthy  # ✅ 等待 PostgreSQL 完全启动
@@ -179,6 +183,8 @@ volumes:
   postgres_data:
     driver: local
   vanna_data:
+    driver: local
+  vanna_onnx_cache:                    # 🔧 持久化 ONNX embedding model cache
     driver: local
   pdf_upload_data:
     driver: local

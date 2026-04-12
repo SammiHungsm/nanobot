@@ -410,50 +410,50 @@ class DocumentPipeline:
         pdf_path: str,
         company_id: int,
         doc_id: str,
-        progress_callback: Callable = None
+        progress_callback: Callable = None,
+        year: int = None  # 🌟 新增：年份参数（由主流程传入）
     ) -> Dict[str, Any]:
         """
         智能結構化提取
         
-        自動掃描 PDF，找出包含財務數據的頁面並提取。
+        🌟 重要變更：
+        - save_all_pages_to_fallback_table 已抽離到 process_pdf_full Step 4.5
+        - 確保所有文檔（包括指數報告）都會保存兜底數據
+        - 此函數只負責結構化提取
         
         Args:
             pdf_path: PDF 路徑
             company_id: 公司 ID
             doc_id: 文檔 ID
             progress_callback: 進度回調
+            year: 年份（由主流程传入）
             
         Returns:
             Dict: 提取結果統計
         """
         logger.info(f"🧠 開始智能結構化提取...")
         
+        # 🌟 如果没有传入年份，使用当前年份作为 fallback
+        if not year:
+            year = datetime.now().year
+            logger.warning(f"   ⚠️ 未傳入年份，使用當前年份: {year}")
+        else:
+            logger.info(f"   📅 文檔年份: {year}")
+        
         result = {
             "revenue_breakdown": {"pages": [], "extracted": 0},
-            "document_pages_saved": 0,  # 🌟 新增：記錄保存到兜底表的頁數
             "errors": []
         }
         
         try:
-            # Step 1: 從數據庫獲取年份（已由 _extract_and_create_company 從封面提取）
-            year = await self._get_document_year(doc_id)
-            if not year:
-                year = datetime.now().year  # Fallback
-                logger.warning(f"   ⚠️ 無法從文檔記錄獲取年份，使用當前年份: {year}")
-            else:
-                logger.info(f"   📅 文檔年份: {year}")
+            # 🌟 Step 1 已移除：年份由主流程傳入 (process_pdf_full Step 4.5)
+            # 不再從資料庫查詢年份
             
-            # 🌟 Step 2: 保存所有頁面到兜底表 (Zone 2) - 確保數據不流失
-            if progress_callback:
-                progress_callback(35.0, "保存所有頁面到兜底表...")
-            
-            saved_pages = await self.save_all_pages_to_fallback_table(
-                pdf_path, company_id, doc_id, year
-            )
-            result["document_pages_saved"] = saved_pages
-            logger.info(f"   ✅ 已保存 {saved_pages} 個頁面到 document_pages 兜底表")
+            # 🌟 Step 2 已移除：保存兜底表已抽離到 process_pdf_full Step 4.5
+            # 確保指數報告也能保存全文檢索數據
             
             # 🌟 Step 3: 混合路由 (Hybrid Routing) - 結合特徵掃描與 LLM 分類
+            # 注意：進度回調調整為從 37% 開始（原來 Step 1/2 佔用的進度已移除） (Hybrid Routing) - 結合特徵掃描與 LLM 分類
             if progress_callback:
                 progress_callback(37.0, "混合路由掃描目標頁面...")
             
@@ -893,7 +893,11 @@ class DocumentPipeline:
         company_id: int = None,
         doc_id: str = None,
         progress_callback: Callable = None,
-        replace: bool = False
+        replace: bool = False,
+        # 🌟 新增指數報告參數（接收 WebUI 傳過來的設定）
+        is_index_report: bool = False,
+        index_theme: str = None,
+        confirmed_doc_industry: str = None
     ) -> Dict[str, Any]:
         """
         🌟 完整 PDF 處理流程（整合 OpenDataLoaderParser）
@@ -909,11 +913,21 @@ class DocumentPipeline:
             doc_id: 文檔 ID
             progress_callback: 進度回調
             replace: 是否強制重新處理
+            is_index_report: 是否為指數報告（恆指生技指數等）
+            index_theme: 指數主題 (如 "Hang Seng Biotech Index")
+            confirmed_doc_industry: 報告定義的行業 (如 "Biotech")
+                - 規則 A: 所有成分股都會被強制指派此行業
             
         Returns:
             Dict: 處理結果（兼容 OpenDataLoaderProcessor 返回格式）
         """
         logger.info(f"🚀 DocumentPipeline.process_pdf_full: {pdf_path}")
+        
+        # 🌟 根據文件類型決定處理方式
+        if is_index_report:
+            logger.info(f"📊 路線 A: 指數報告處理 (行業: {confirmed_doc_industry})")
+        else:
+            logger.info(f"📄 路線 B: 一般年報處理 (AI 提取行業)")
         
         try:
             # Step 1: 計算 Hash & 檢查重複
@@ -955,18 +969,32 @@ class DocumentPipeline:
                 logger.warning("⚠️ OpenDataLoaderParser 未啟用")
                 artifacts = []
             
-            # Step 4: 提取公司信息（如果沒有 company_id）
+            # Step 4: 提取公司信息（如果沒有 company_id，且不是指數報告）
             if progress_callback:
                 progress_callback(55.0, "🧠 Vision 提取公司信息...")
             
-            if not company_id:
+            # 🌟 修正：如果是指數報告，絕對不能提取母公司！
+            # 指數報告涵蓋多間公司，不應該有單一母公司 (company_id)
+            # 提取母公司會導致 AI 將「恒生指數公司」等發行商當成財報公司，污染數據庫
+            if not company_id and not is_index_report:
                 company_id = await self._extract_and_create_company(pdf_path, doc_id)
                 if company_id:
                     logger.info(f"✅ 已關聯公司: ID={company_id}")
                 else:
                     logger.warning("⚠️ 無法提取公司信息")
+            elif is_index_report:
+                logger.info("ℹ️ 指數報告無需提取母公司，跳過 Vision 提取 (報告涵蓋多間成分股公司)")
+                company_id = None  # 確保 company_id 保持 None
             
-            # Step 5: 智能結構化提取
+            # 🌟 Step 4.5: 保存所有頁面到兜底表 (Zone 2) - 所有文檔都必須執行！
+            # 這是 Vanna 全文檢索的關鍵數據源，無論是年報還是指數報告都需要
+            if progress_callback:
+                progress_callback(60.0, "保存所有頁面到兜底表(全文檢索用)...")
+            
+            # 獲取年份，若無則用當前年份
+            doc_year = await self._get_document_year(doc_id) or datetime.now().year
+            
+            # 🔧 修復：提前初始化 stats，避免 UnboundLocalError
             stats = {
                 "total_chunks": len([a for a in artifacts if a.get("type") == "text_chunk"]),
                 "total_tables": len([a for a in artifacts if a.get("type") == "table"]),
@@ -974,15 +1002,28 @@ class DocumentPipeline:
                 "total_artifacts": len(artifacts)
             }
             
+            saved_pages = await self.save_all_pages_to_fallback_table(
+                pdf_path, company_id, doc_id, doc_year  # company_id 可以是 None，DB 已支援
+            )
+            stats["document_pages_saved"] = saved_pages
+            
+            # Step 5: 智能結構化提取
+            
             if company_id:
                 if progress_callback:
                     progress_callback(70.0, "智能提取結構化數據...")
                 
+                # 🌟 传入年份参数（已由 Step 4.5 获取）
                 extraction_result = await self.smart_extract(
                     pdf_path, company_id, doc_id, 
-                    lambda p, m: progress_callback(70 + p * 0.2, m) if progress_callback else None
+                    lambda p, m: progress_callback(70 + p * 0.2, m) if progress_callback else None,
+                    year=doc_year  # 🌟 传入年份
                 )
                 stats["structured_extraction"] = extraction_result
+            elif is_index_report:
+                # 🌟 指數報告雖無 company_id，但兜底數據已在 Step 4.5 保存
+                stats["structured_extraction"] = {"status": "skipped", "reason": "index_report_no_single_company"}
+                logger.info("ℹ️ 指數報告跳過結構化提取（無單一母公司）")
             else:
                 stats["structured_extraction"] = {"status": "skipped", "reason": "no company_id"}
             
@@ -1054,16 +1095,72 @@ class DocumentPipeline:
                     )
                 
                 elif artifact_type == "image":
-                    # 圖片元數據記錄（二進制數據由 OpenDataLoader 保存）
+                    # 🔧 修復：實際保存圖片文件
+                    image_dir = doc_dir / "images"
+                    image_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    image_filename = f"image_{idx:04d}.{metadata.get('image_format', 'png')}"
+                    image_path = image_dir / image_filename
+                    image_saved = False
+                    
+                    # 嘗試從 artifact 中提取圖片數據
+                    image_data = artifact.get("image_data")
+                    
+                    if image_data:
+                        try:
+                            # 如果是 base64 編碼（包含 data URI prefix）
+                            if isinstance(image_data, str) and image_data.startswith("data:image"):
+                                # 提取 base64 部分
+                                base64_data = image_data.split(",", 1)[1] if "," in image_data else image_data
+                                import base64
+                                image_bytes = base64.b64decode(base64_data)
+                                
+                                with open(image_path, 'wb') as f:
+                                    f.write(image_bytes)
+                                image_saved = True
+                                logger.debug(f"✅ 已保存圖片 (base64): {image_path}")
+                            
+                            # 如果是純 base64 字符串
+                            elif isinstance(image_data, str) and len(image_data) > 100:
+                                import base64
+                                try:
+                                    image_bytes = base64.b64decode(image_data)
+                                    with open(image_path, 'wb') as f:
+                                        f.write(image_bytes)
+                                    image_saved = True
+                                    logger.debug(f"✅ 已保存圖片 (base64): {image_path}")
+                                except Exception:
+                                    # 可能不是 base64，而是文件路徑
+                                    pass
+                            
+                            # 如果是文件路徑
+                            elif isinstance(image_data, str) and os.path.exists(image_data):
+                                import shutil
+                                shutil.copy2(image_data, image_path)
+                                image_saved = True
+                                logger.debug(f"✅ 已保存圖片 (copy): {image_path}")
+                                
+                        except Exception as e:
+                            logger.warning(f"⚠️ 圖片保存失敗：{e}")
+                    
+                    # 記錄到 raw_artifacts（無論圖片是否成功保存）
                     await self.db.insert_raw_artifact(
                         artifact_id=f"{doc_id}_image_{idx:04d}",
                         doc_id=doc_id,
                         company_id=company_id,
                         file_type="image",
-                        file_path=f"{doc_id}/images/image_{idx:04d}.png",
+                        file_path=str(image_path.relative_to(self.data_dir)) if image_saved else f"{doc_id}/images/{image_filename}",
                         page_num=page_num,
-                        metadata=json_module.dumps(metadata)
+                        metadata=json_module.dumps({
+                            **metadata,
+                            "image_saved": image_saved
+                        })
                     )
+                    
+                    if image_saved:
+                        logger.debug(f"🖼️ 圖片已保存：{image_path}")
+                    else:
+                        logger.warning(f"⚠️ 圖片無數據，僅記錄 metadata: {image_filename}")
                 
                 # text_chunk 已保存在 output.json 中，無需單獨入庫
                 
