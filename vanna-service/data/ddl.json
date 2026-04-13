@@ -115,6 +115,12 @@
       "ddl": "CREATE OR REPLACE VIEW document_summary AS SELECT d.id, d.filename, d.report_type, d.year, d.processing_status, d.uploaded_at, d.dynamic_attributes->>'index_theme' AS index_theme, c_owner.name_en AS owner_company_name, COUNT(dc.id) AS mentioned_companies_count FROM documents d LEFT JOIN companies c_owner ON d.owner_company_id = c_owner.id LEFT JOIN document_companies dc ON d.id = dc.document_id GROUP BY d.id, c_owner.name_en;",
       "enabled": true,
       "note": "🌟 v2.3 文檔摘要視圖：提供文檔基本資訊、母公司名稱、提及公司數量"
+    },
+    {
+      "name": "artifact_relations",
+      "ddl": "CREATE TABLE artifact_relations (id SERIAL PRIMARY KEY, document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE, source_artifact_id VARCHAR(255) NOT NULL REFERENCES raw_artifacts(artifact_id) ON DELETE CASCADE, target_artifact_id VARCHAR(255) NOT NULL REFERENCES raw_artifacts(artifact_id) ON DELETE CASCADE, relation_type VARCHAR(50) DEFAULT 'explained_by', confidence_score FLOAT DEFAULT 1.0, extraction_method VARCHAR(50) DEFAULT 'regex', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, CONSTRAINT unique_artifact_relation UNIQUE (source_artifact_id, target_artifact_id));",
+      "enabled": true,
+      "note": "🌟 v2.3+: 跨模態關聯表，用於將圖表(source)與解釋文字(target)連接，解決跨頁圖文斷裂問題。"
     }
   ]
 }

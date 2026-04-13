@@ -1006,6 +1006,56 @@ CREATE INDEX IF NOT EXISTS idx_er_event_year ON entity_relations(event_year);
 
 
 -- ============================================================
+-- 【表 17: artifact_relations 跨模態關聯表 (Cross-Modal Relations)】
+-- 【功能 Purpose】
+-- 解決「跨頁/跨文件」的圖文關聯斷裂問題，建立 SQL 版輕量級多模態圖譜。
+-- 
+-- 【設計理念 Design Philosophy】
+-- 針對財務報告中「圖表在第 5 頁，解釋在第 50 頁」的痛點。
+-- 透過此橋樑表，將 raw_artifacts 中的圖表 (chart/image) 
+-- 與對應的文字段落 (text_chunk) 進行強關聯。
+-- 
+-- 【關聯 Relationships】
+-- - 關聯至 raw_artifacts (source_artifact_id -> 圖表)
+-- - 關聯至 raw_artifacts (target_artifact_id -> 解釋文字)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS artifact_relations (
+    id SERIAL PRIMARY KEY,
+    document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    
+    -- 【源實體：通常是圖表或圖片】
+    source_artifact_id VARCHAR(255) NOT NULL REFERENCES raw_artifacts(artifact_id) ON DELETE CASCADE,
+    
+    -- 【目標實體：通常是解釋性的文字段落】
+    target_artifact_id VARCHAR(255) NOT NULL REFERENCES raw_artifacts(artifact_id) ON DELETE CASCADE,
+    
+    -- 【關係屬性 Relation Attributes】
+    relation_type VARCHAR(50) DEFAULT 'explained_by', -- explained_by, referenced_in
+    confidence_score FLOAT DEFAULT 1.0, -- 關聯置信度 (如果是 LLM 估計的可以小於 1)
+    extraction_method VARCHAR(50) DEFAULT 'regex', -- regex, llm_inferred, manual
+    
+    -- 【審計欄位 Audit Fields】
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    -- 避免重複關聯
+    CONSTRAINT unique_artifact_relation UNIQUE (source_artifact_id, target_artifact_id)
+);
+
+-- 【索引策略 Index Strategy】
+CREATE INDEX IF NOT EXISTS idx_ar_document_id ON artifact_relations(document_id);
+CREATE INDEX IF NOT EXISTS idx_ar_source_id ON artifact_relations(source_artifact_id);
+CREATE INDEX IF NOT EXISTS idx_ar_target_id ON artifact_relations(target_artifact_id);
+
+-- 【觸發器: artifact_relations 表更新時間】
+DROP TRIGGER IF EXISTS update_artifact_relations_updated_at ON artifact_relations;
+CREATE TRIGGER update_artifact_relations_updated_at
+    BEFORE UPDATE ON artifact_relations
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+
+-- ============================================================
 -- 【實用函數 Utility Functions】
 -- ============================================================
 
@@ -1185,6 +1235,40 @@ SELECT
     created_at
 FROM companies;
 
+
+-- ============================================================
+-- 【視圖: v_tables_with_context_for_vanna 跨模態圖表視圖】
+-- 【功能 Purpose】
+-- 為 Vanna 提供「圖表數字 + 跨頁文字解釋」的統一視圖
+-- 
+-- 【設計理念 Design Philosophy】
+-- 解決「圖表在第 5 頁，解釋在第 50 頁」的痛點：
+-- - 預先將 document_tables 的精準數字
+-- - 與 artifact_relations 關聯的解釋文字 JOIN
+-- - Vanna 只需要簡單查詢，不需要寫複雜的多重 JOIN
+-- 
+-- 【用途 Use Cases】
+-- - 用戶問：「圖 5 的營收為什麼跌？具體跌了多少？」
+-- - Vanna 只需：SELECT table_data, related_explanation FROM v_tables_with_context_for_vanna WHERE table_title LIKE '%圖 5%'
+-- ============================================================
+CREATE OR REPLACE VIEW v_tables_with_context_for_vanna AS
+SELECT 
+    dt.id AS table_id,
+    dt.document_id,
+    dt.table_type,
+    dt.title AS table_title,
+    dt.rows AS table_data,           -- 圖表/表格的精準數字
+    ra_text.content AS related_explanation,  -- 來自第 50 頁的跨頁文字解釋
+    ra_chart.page_num AS chart_page_num,
+    ra_text.page_num AS explanation_page_num,
+    dt.metadata->>'image_path' AS original_image_path
+FROM document_tables dt
+-- 假設 document_tables 的 metadata 中記錄了 source_artifact_id
+LEFT JOIN raw_artifacts ra_chart ON dt.metadata->>'source_artifact_id' = ra_chart.artifact_id
+LEFT JOIN artifact_relations ar ON ra_chart.artifact_id = ar.source_artifact_id
+LEFT JOIN raw_artifacts ra_text ON ar.target_artifact_id = ra_text.artifact_id
+WHERE ar.relation_type = 'explained_by' OR ar.relation_type IS NULL;
+
 -- ============================================================
 -- 【初始化完成通知 Initialization Complete Notice】
 -- ============================================================
@@ -1213,11 +1297,13 @@ BEGIN
     RAISE NOTICE '  - shareholding_structure (股東結構)';
     RAISE NOTICE '  - raw_artifacts (原始提取結果 - 完美溯源)';
     RAISE NOTICE '  - entity_relations (實體關係 - Graph)';
+    RAISE NOTICE '  - artifact_relations (跨模態關聯 - 解決圖文跨頁斷裂)';
     RAISE NOTICE '';
     RAISE NOTICE '【視圖 Views】';
     RAISE NOTICE '  - document_summary (文檔摘要視圖)';
     RAISE NOTICE '  - v_documents_for_vanna (Vanna 文檔視圖)';
     RAISE NOTICE '  - v_companies_for_vanna (Vanna 公司視圖 - 雙軌制行業)';
+    RAISE NOTICE '  - v_tables_with_context_for_vanna (跨模態圖表視圖 - 數字+解釋)';
     RAISE NOTICE '';
     RAISE NOTICE '【核心改進 Key Improvements】';
     RAISE NOTICE '  ✅ 文檔結構優化（移除冗餘欄位）';

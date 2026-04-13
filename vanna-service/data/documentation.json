@@ -357,6 +357,31 @@
       "id": "entity_relations_graph",
       "content": "entity_relations table supports Graph-based queries. Example: Find all board appointments for a person: SELECT * FROM entity_relations WHERE source_entity_type = 'person' AND source_entity_name ILIKE '%John%' AND relation_type = 'appointed';",
       "category": "example"
+    },
+    {
+      "id": "artifact_relations_usage",
+      "content": "CRITICAL: When the user asks for 'text explanation of a chart/image' or 'what does this visual mean', you MUST use the artifact_relations table to bridge the gap. You need to JOIN raw_artifacts (as source_img) -> artifact_relations -> raw_artifacts (as target_text).",
+      "category": "critical"
+    },
+    {
+      "id": "doc_chart_context_resolution_view",
+      "content": "CRITICAL: 當用戶詢問某張圖表或表格的「原因」、「背景」或「前後文」（例如：'圖 5 為什麼下跌？'、'這張圖表的數據含義是什麼？'），你必須直接查詢視圖 `v_tables_with_context_for_vanna`，並且同時 SELECT `table_data`（獲取精準數字）以及 `related_explanation`（獲取跨頁的文字解釋）。不要嘗試自己寫多重 JOIN，因為底層表（raw_artifacts, artifact_relations）已被封禁。",
+      "category": "critical"
+    },
+    {
+      "id": "doc_industry_dual_track",
+      "content": "CRITICAL: 查詢公司的所屬行業時，請務必使用 `v_companies_for_vanna` 視圖中的 `primary_industry` 欄位。該欄位已經自動處理了權威行業（confirmed_industry）與 AI 預測行業（ai_extracted_industries）的優先級邏輯。不要自行編寫 IF/ELSE 或 COALESCE，也不要直接查 companies 表的 JSONB 欄位。",
+      "category": "schema_rule"
+    },
+    {
+      "id": "doc_cross_company_comparison",
+      "content": "CRITICAL: 當需要比較不同公司的財務數據時（例如：'哪間公司的營收最高？'），必須使用 financial_metrics 表的 `standardized_value` 欄位。該欄位已將所有數值標準化為 HKD，確保比較公平。不要使用原始 `value` 欄位，因為不同公司可能使用不同貨幣單位。",
+      "category": "schema_rule"
+    },
+    {
+      "id": "doc_view_preference",
+      "content": "SCHEMA RULE: Vanna 應優先使用以下視圖，而非直接查底層表：\n1. 查公司 → v_companies_for_vanna\n2. 查文檔 → v_documents_for_vanna\n3. 查圖表+解釋 → v_tables_with_context_for_vanna\n4. 查文檔摘要 → document_summary\n\n這些視圖已將複雜的 JSONB 欄位攤平，並處理了 Graph Relation 邏輯。",
+      "category": "schema_rule"
     }
   ]
 }

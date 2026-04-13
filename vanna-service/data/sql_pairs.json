@@ -735,6 +735,66 @@
         "error"
       ],
       "note": "v2.3: 支援完美溯源，可找回原始圖片位置"
+    },
+    {
+      "id": "multimodal_chart_explanation_001",
+      "question": "Find the text explanation for the chart with artifact ID 'chart_001'",
+      "sql": "SELECT target_text.page_num AS text_page_number, target_text.content AS explanation_text FROM raw_artifacts source_img JOIN artifact_relations ar ON source_img.artifact_id = ar.source_artifact_id JOIN raw_artifacts target_text ON ar.target_artifact_id = target_text.artifact_id WHERE source_img.artifact_id = 'chart_001';",
+      "tags": [
+        "artifact_relations",
+        "raw_artifacts",
+        "multimodal",
+        "cross_page"
+      ],
+      "note": "v2.3+: Demonstrates how to retrieve cross-page text explanations for a specific visual artifact."
+    },
+    {
+      "id": "multimodal_chart_with_context_002",
+      "question": "Find the table data and text explanation for chart titled 'Revenue Breakdown'",
+      "sql": "SELECT table_data, related_explanation, chart_page_num, explanation_page_num FROM v_tables_with_context_for_vanna WHERE table_title ILIKE '%Revenue Breakdown%';",
+      "tags": [
+        "v_tables_with_context_for_vanna",
+        "multimodal",
+        "cross_page",
+        "view"
+      ],
+      "note": "v2.3+: Simplified query using pre-joined view. Returns table data + cross-page explanation in one query."
+    },
+    {
+      "id": "chart_context_reason_001",
+      "question": "圖 5 嘅營收點解會跌？具體數字係幾多？",
+      "sql": "SELECT table_data, related_explanation, chart_page_num, explanation_page_num FROM v_tables_with_context_for_vanna WHERE table_title ILIKE '%圖 5%' OR table_title ILIKE '%Figure 5%';",
+      "tags": [
+        "v_tables_with_context_for_vanna",
+        "multimodal",
+        "cross_page",
+        "reasoning"
+      ],
+      "note": "v2.3+: 查詢圖表數據及其背後的文字解釋原因。直接使用 View，無需多重 JOIN。"
+    },
+    {
+      "id": "industry_dual_track_001",
+      "question": "列出所有屬於 Biotech 行業的公司",
+      "sql": "SELECT name_en, name_zh, stock_code, primary_industry FROM v_companies_for_vanna WHERE primary_industry ILIKE '%Biotech%';",
+      "tags": [
+        "v_companies_for_vanna",
+        "industry",
+        "dual_track",
+        "view"
+      ],
+      "note": "v2.3+: 利用雙軌制視圖查詢公司行業。primary_industry 已自動處理權威 vs AI 預測優先級。"
+    },
+    {
+      "id": "chart_jsonb_search_001",
+      "question": "這份文件中，關於亞洲區市場份額的那張圖表，有什麼文字備註或結論嗎？",
+      "sql": "SELECT table_title, table_data, related_explanation FROM v_tables_with_context_for_vanna WHERE table_data::text ILIKE '%亞洲%' OR table_data::text ILIKE '%Asia%';",
+      "tags": [
+        "v_tables_with_context_for_vanna",
+        "jsonb_search",
+        "multimodal",
+        "filter"
+      ],
+      "note": "v2.3+: 透過 JSONB 表格內容反查對應的文字解釋。table_data::text 可用於 JSONB 內容搜索。"
     }
   ]
 }
