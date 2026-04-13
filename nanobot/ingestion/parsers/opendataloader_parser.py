@@ -169,7 +169,7 @@ class OpenDataLoaderParser:
                         hybrid="docling-fast",        # 使用 docling 模型
                         hybrid_mode="auto",           # 🌟 "auto" (dynamic triage) 或 "full" (all pages)
                         hybrid_url="http://localhost:5002",  # 🌟 指向本地 Hybrid 服务器
-                        hybrid_timeout="300000",      # 🌟 300 秒
+                        hybrid_timeout="600000",      # 🌟 600 秒 = 10 分钟（CPU 模式需要更长 timeout）
                         hybrid_fallback=True          # 🌟 如果 Hybrid 失败，fallback 到 Java
                     )
                 
