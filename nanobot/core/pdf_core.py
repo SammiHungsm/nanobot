@@ -254,8 +254,8 @@ class OpenDataLoaderCore:
             # 🎯 修正：改为 "full"，确保表格/图片/扫描件全部强制交给 Backend 处理
             convert_kwargs['hybrid_mode'] = "full"  
             convert_kwargs['hybrid_url'] = self.hybrid_url  # 🌟 从环境变量获取
-            # 🎯 修正：必须是 Integer (整数)，不能是 String
-            convert_kwargs['hybrid_timeout'] = 600000  
+            # 🎯 实际测试：Java wrapper 期望字符串格式 (不是整数)
+            convert_kwargs['hybrid_timeout'] = "600000"  # 600 秒（字符串格式）
             convert_kwargs['hybrid_fallback'] = True  # Hybrid 失败时 fallback 到 Java
         
         # 🚀 调用 OpenDataLoader

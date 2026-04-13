@@ -1010,27 +1010,41 @@ class DocumentPipeline(BaseIngestionPipeline):
         name_zh = None
         
         # ==========================================
-        # 🌟 方案 A: 從 artifacts 提取（優先）
+        # 🌟 方案 A: 從 artifacts 提取（逐页尝试）
         # ==========================================
         
         if artifacts:
-            # 提取前 2 頁的所有文本内容
-            front_pages_artifacts = [a for a in artifacts if a.get("page_num") in [1, 2]]
-            
-            if front_pages_artifacts:
-                front_pages_text = self._merge_page_artifacts(front_pages_artifacts)
+            # 🌟 逻辑改进：先尝试 Page 1，失败才尝试 Page 2
+            for page_num in [1, 2]:
+                if stock_code:  # 已提取成功，跳过后续页面
+                    break
                 
-                if front_pages_text and len(front_pages_text.strip()) > 50:
-                    logger.info(f"   📄 使用 artifacts 前 2 頁提取公司信息...")
+                page_artifacts = [a for a in artifacts if a.get("page_num") == page_num]
+                
+                if not page_artifacts:
+                    logger.info(f"   ⚠️ Page {page_num} 在 artifacts 中找不到")
+                    continue
+                
+                page_text = self._merge_page_artifacts(page_artifacts)
+                
+                if not page_text or len(page_text.strip()) < 50:
+                    logger.info(f"   ⚠️ Page {page_num} 内容过短，跳过")
+                    continue
+                
+                logger.info(f"   📄 从 Page {page_num} 提取公司信息...")
+                
+                # 調用 LLM 提取公司信息
+                metadata = await self.agent.extract_company_metadata_from_cover(page_text)
+                
+                if metadata:
+                    stock_code_raw = metadata.get("stock_code")
+                    year_raw = metadata.get("year")
+                    name_en_raw = metadata.get("name_en")
+                    name_zh_raw = metadata.get("name_zh")
                     
-                    # 調用 LLM 提取公司信息
-                    metadata = await self.agent.extract_company_metadata_from_cover(front_pages_text)
-                    
-                    if metadata:
-                        stock_code = metadata.get("stock_code")
-                        year_raw = metadata.get("year")
-                        name_en = metadata.get("name_en")
-                        name_zh = metadata.get("name_zh")
+                    # 只有 stock_code 有效才算成功
+                    if stock_code_raw:
+                        stock_code = stock_code_raw
                         
                         # 🌟 强制转换 year 为 int
                         try:
@@ -1039,48 +1053,50 @@ class DocumentPipeline(BaseIngestionPipeline):
                             logger.warning(f"   ⚠️ Artifacts 提取嘅 year ({year_raw}) 無法轉為整數")
                             year = None
                         
-                        logger.info(f"   ✅ Artifacts 提取成功: Stock={stock_code}, Year={year}")
+                        name_en = name_en_raw
+                        name_zh = name_zh_raw
+                        
+                        logger.info(f"   ✅ Artifacts Page {page_num} 提取成功: Stock={stock_code}, Year={year}")
+                        break  # 成功，不再尝试其他页面
                     else:
-                        logger.warning("   ⚠️ Artifacts 提取失敗，嘗試 Fallback...")
-            else:
-                logger.warning("   ⚠️ Artifacts 中找不到前 2 頁內容，嘗試 Fallback...")
-        else:
-            logger.warning("   ⚠️ 沒有 artifacts，嘗試 Fallback...")
+                        logger.info(f"   ⚠️ Page {page_num} 未找到 stock_code，继续尝试...")
         
         # ==========================================
-        # 🌟 方案 A2: Vision LLM 提取封面（当 Page 1 没有文字时）
+        # 🌟 方案 A2: Vision LLM 提取封面（逐页尝试）
         # ==========================================
         
-        # 检查 Page 1 是否存在
-        page1_artifacts = [a for a in (artifacts or []) if a.get("page_num") == 1]
-        
-        if not page1_artifacts and not stock_code:
-            # 🌟 Page 1 没有文字层 → 使用 Vision API 提取
-            logger.info("   🎨 Page 1 没有文字层（纯向量绘图封面），启动 Vision API 提取...")
+        if not stock_code:
+            logger.info("   🎨 Artifacts 未提取到公司信息，启动 Vision API...")
             
             try:
                 # 🌟 使用 llm_core.vision() 替代 VisionAPIClient
                 import fitz  # PyMuPDF
                 import base64
                 
-                # 打开 PDF 并提取前 2 页的图片
+                # 打开 PDF
                 doc = fitz.open(pdf_path)
-                cover_pages = [doc.load_page(i) for i in range(min(2, len(doc)))]
                 
-                # 将封面页面转换为图片
-                images_base64 = []
-                for page in cover_pages:
+                # 🌟 逻辑改进：先尝试 Page 1，失败才尝试 Page 2
+                for page_num in [1, 2]:
+                    if stock_code:  # 已提取成功，跳过后续页面
+                        break
+                    
+                    if page_num > len(doc):
+                        logger.info(f"   ⚠️ PDF 只有 {len(doc)} 页，跳过 Page {page_num}")
+                        continue
+                    
+                    logger.info(f"   🎨 使用 Vision API 分析 Page {page_num}...")
+                    
+                    # 将页面转换为图片
+                    page = doc.load_page(page_num - 1)  # PyMuPDF 是 0-indexed
                     pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))  # 2x zoom for better quality
                     img_bytes = pix.tobytes("png")
                     img_base64 = base64.b64encode(img_bytes).decode('utf-8')
-                    images_base64.append(img_base64)
-                
-                doc.close()
-                
-                # 调用 llm_core.vision() 提取封面信息
-                from nanobot.core.llm_core import llm_core
-                
-                prompt = """
+                    
+                    # 调用 llm_core.vision() 提取封面信息
+                    from nanobot.core.llm_core import llm_core
+                    
+                    prompt = """
 提取封面中的公司信息，返回 JSON 格式：
 {
     "stock_code": "股票代码（如 02359）",
@@ -1091,45 +1107,49 @@ class DocumentPipeline(BaseIngestionPipeline):
 
 只返回 JSON，不要其他解释。
 """
+                    
+                    vision_response = await llm_core.vision(
+                        img_base64,
+                        prompt,
+                        model="qwen3.5-plus"  # 使用云端 API
+                    )
+                    
+                    # 解析 JSON 响应
+                    import json as json_module
+                    import re
+                    json_match = re.search(r'\{[\s\S]*\}', vision_response)
+                    if json_match:
+                        vision_result = json_module.loads(json_match.group(0))
+                        
+                        vision_stock = vision_result.get("stock_code")
+                        vision_year = vision_result.get("year")
+                        vision_name_en = vision_result.get("name_en")
+                        vision_name_zh = vision_result.get("name_zh")
+                        
+                        # 只有 stock_code 有效才算成功
+                        if vision_stock:
+                            stock_code = vision_stock
+                            logger.info(f"   ✅ Vision Page {page_num} 提取 stock_code: {stock_code}")
+                            
+                            if vision_year:
+                                try:
+                                    year = int(vision_year)
+                                    logger.info(f"   ✅ Vision Page {page_num} 提取 year: {year}")
+                                except ValueError:
+                                    logger.warning(f"   ⚠️ Vision 提取嘅 year ({vision_year}) 無法轉為整數")
+                            
+                            if vision_name_en or vision_name_zh:
+                                name_en = vision_name_en or name_en
+                                name_zh = vision_name_zh or name_zh
+                                logger.info(f"   ✅ Vision Page {page_num} 提取 name: {name_en or name_zh}")
+                            
+                            break  # 成功，不再尝试其他页面
+                        else:
+                            logger.info(f"   ⚠️ Vision Page {page_num} 未找到 stock_code，继续尝试...")
+                    else:
+                        logger.info(f"   ⚠️ Vision Page {page_num} 无法解析 JSON，继续尝试...")
                 
-                # 使用第一页的图片
-                vision_response = await llm_core.vision(
-                    images_base64[0],
-                    prompt,
-                    model="qwen3.5-plus"  # 使用云端 API
-                )
-                
-                # 解析 JSON 响应
-                import json
-                import re
-                json_match = re.search(r'\{[\s\S]*\}', vision_response)
-                if json_match:
-                    vision_result = json.loads(json_match.group(0))
-                    
-                    vision_stock = vision_result.get("stock_code")
-                    vision_year = vision_result.get("year")
-                    vision_name_en = vision_result.get("name_en")
-                    vision_name_zh = vision_result.get("name_zh")
-                    
-                    # 如果 Vision 提取成功，优先使用
-                    if vision_stock:
-                        stock_code = vision_stock
-                        logger.info(f"   ✅ Vision 提取 stock_code: {stock_code}")
-                    
-                    if vision_year:
-                        try:
-                            # 🌟 強制將字串轉換為整數
-                            year = int(vision_year)
-                            logger.info(f"   ✅ Vision 提取 year: {year}")
-                        except ValueError:
-                            logger.warning(f"   ⚠️ Vision 提取嘅 year ({vision_year}) 無法轉為整數")
-                    
-                    if vision_name_en or vision_name_zh:
-                        name_en = vision_name_en or name_en
-                        name_zh = vision_name_zh or name_zh
-                        logger.info(f"   ✅ Vision 提取 name: {name_en or name_zh}")
-                else:
-                    logger.warning("   ⚠️ Vision 提取失败（无法解析 JSON），继续 Fallback...")
+                doc.close()
                     
             except Exception as e:
                 logger.warning(f"   ⚠️ Vision 提取异常: {e}，继续 Fallback...")
