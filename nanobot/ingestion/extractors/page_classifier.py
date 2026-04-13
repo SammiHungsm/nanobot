@@ -90,17 +90,17 @@ class PageClassifier:
         system_prompt = self._build_system_prompt(target_data_types)
         
         try:
-            response = await client.chat.completions.create(
-                model=self._get_model(),
+            # 🌟 使用 llm_core.chat() 方法
+            result_text = await client.chat(
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": compressed_context}
                 ],
-                temperature=0.0,
-                response_format={"type": "json_object"}
+                model=self._get_model(),
+                temperature=0.0
             )
             
-            result = json.loads(response.choices[0].message.content)
+            result = json.loads(result_text)
             
             # 確保所有目標類型都有結果
             for dt in target_data_types:
@@ -108,10 +108,6 @@ class PageClassifier:
                     result[dt] = []
             
             logger.info(f"🎯 LLM 路由結果: {result}")
-            
-            # 記錄 Token 使用情況
-            if hasattr(response, 'usage') and response.usage:
-                logger.debug(f"   Token 使用: prompt={response.usage.prompt_tokens}, completion={response.usage.completion_tokens}")
             
             return result
             

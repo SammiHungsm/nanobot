@@ -1,75 +1,79 @@
 """
-LLM Core - 统一的 LLM 与视觉模型客户端
+LLM Core - 使用官方 Provider 系统的统一接口
 
-🎯 解决的问题：
-1. LLM 客户端分散在 ingestion/utils/llm_client.py、providers/registry.py 等多处
-2. Vision 模型分散在 ollama_vision.py、vision_api_client.py 等
-3. API Key 配置读取逻辑重复
-4. Provider 路由逻辑不一致
+🎯 不重新实现 Provider 路由，直接使用官方系统：
+- config/loader.py → load_config()
+- config/schema.py → Config.get_provider(), Config.get_api_key()
+- providers/__init__.py → OpenAICompatProvider, AnthropicProvider
+- providers/registry.py → PROVIDERS, ProviderSpec
 
-统一架构：
-- 使用 nanobot/providers/ 的配置系统
-- 提供统一的 chat() 和 vision() 接口
-- 自动路由到正确的 Provider（OpenAI/Anthropic/Ollama）
-- 支持本地模型和云端模型
+统一接口：
+- chat() - 文字对话
+- vision() - 视觉解析（图片）
+- detect_provider() - Provider 检测（包装官方函数）
 
 Usage:
     from nanobot.core.llm_core import llm_core
     
     # 文字对话
-    response = await llm_core.chat("Hello, how are you?")
+    response = await llm_core.chat([{"role": "user", "content": "Hello"}])
     
     # 视觉解析
-    result = await llm_core.vision(image_base64, "提取表格数据")
+    result = await llm_core.vision(img_base64, "提取表格")
+    
+    # Provider 检测
+    provider_name = detect_provider("gpt-4o")  # 返回 "openai"
 """
 
 import os
 import base64
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional
 from loguru import logger
 
-# 🌟 使用现有的 Provider Registry
+# 🌟 使用官方的 Config 系统
 try:
-    from nanobot.providers.registry import PROVIDERS, ProviderSpec
     from nanobot.config.loader import load_config, resolve_config_env_vars
-    from pathlib import Path
+    from nanobot.config.schema import Config, ProviderConfig
     NANOBOT_CONFIG_AVAILABLE = True
 except ImportError:
     NANOBOT_CONFIG_AVAILABLE = False
-    logger.warning("⚠️ nanobot config system not available, using env vars")
+    logger.warning("⚠️ nanobot config system not available")
 
-# 🌟 使用 OpenAI SDK（兼容多种 Provider）
+# 🌟 使用官方的 Provider 系统
 try:
-    from openai import AsyncOpenAI
-    OPENAI_SDK_AVAILABLE = True
+    from nanobot.providers import OpenAICompatProvider, AnthropicProvider
+    from nanobot.providers.base import LLMResponse
+    from nanobot.providers.registry import PROVIDERS, find_by_name
+    NANOBOT_PROVIDERS_AVAILABLE = True
 except ImportError:
-    OPENAI_SDK_AVAILABLE = False
-    logger.warning("⚠️ OpenAI SDK not installed")
+    NANOBOT_PROVIDERS_AVAILABLE = False
+    logger.warning("⚠️ nanobot providers not available")
 
-
-# ===========================================
-# Provider 路由逻辑
-# ===========================================
 
 def detect_provider(model_name: str) -> Optional[str]:
     """
-    根据模型名称检测 Provider
+    🎯 Provider 检测函数（包装官方逻辑）
     
     Args:
         model_name: 模型名称（如 "gpt-4o", "claude-3", "ollama/llava"）
         
     Returns:
         str: Provider 名称（如 "openai", "anthropic", "ollama"）
+        
+    Example:
+        provider = detect_provider("gpt-4o")  # 返回 "openai"
+        provider = detect_provider("claude-3")  # 返回 "anthropic"
+        provider = detect_provider("ollama/llava")  # 返回 "ollama"
     """
-    if not NANOBOT_CONFIG_AVAILABLE:
+    if not NANOBOT_PROVIDERS_AVAILABLE:
         return "openai"  # Fallback
     
     model_lower = model_name.lower()
     
-    # 🌟 使用 PROVIDERS 的 keywords 匹配
-    for provider_name, spec in PROVIDERS.items():
+    # 🌟 使用官方 PROVIDERS 的 keywords 匹配
+    for spec in PROVIDERS:
         if any(kw in model_lower for kw in spec.keywords):
-            return provider_name
+            return spec.name
     
     # 特殊处理：ollama/ 前缀
     if model_name.startswith("ollama/"):
@@ -79,122 +83,135 @@ def detect_provider(model_name: str) -> Optional[str]:
     return "openai"
 
 
-def get_api_config() -> Dict[str, Any]:
-    """
-    获取 API 配置（从 nanobot config 或环境变量）
-    
-    Returns:
-        Dict: {
-            "api_key": str,
-            "api_base": str,
-            "default_model": str,
-            "vision_model": str
-        }
-    """
-    config = {
-        "api_key": None,
-        "api_base": None,
-        "default_model": os.getenv("DEFAULT_LLM_MODEL", "gpt-4o-mini"),
-        "vision_model": os.getenv("VISION_MODEL", "gpt-4o")
-    }
-    
-    # 🌟 优先使用 nanobot config
-    if NANOBOT_CONFIG_AVAILABLE:
-        try:
-            nanobot_config_env = os.getenv("NANOBOT_CONFIG")
-            config_path = Path(nanobot_config_env) if nanobot_config_env else None
-            
-            loaded_config = resolve_config_env_vars(load_config(config_path))
-            provider = loaded_config.get_provider()
-            
-            if provider:
-                # 🌟 检查 placeholder keys
-                api_key = provider.api_key
-                if api_key and not api_key.startswith("sk-YOUR"):
-                    config["api_key"] = api_key
-                
-                api_base = provider.api_base
-                if api_base:
-                    config["api_base"] = api_base
-            
-            # 🌟 从 agents.defaults 读取模型
-            try:
-                config["default_model"] = loaded_config.agents.defaults.model
-            except AttributeError:
-                pass
-            
-        except Exception as e:
-            logger.warning(f"⚠️ Failed to load nanobot config: {e}")
-    
-    # 🌟 Fallback: 环境变量
-    if not config["api_key"]:
-        # 按优先级检查环境变量
-        for key in ["DASHSCOPE_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"]:
-            val = os.getenv(key)
-            if val and not val.startswith("sk-YOUR"):
-                config["api_key"] = val
-                break
-    
-    if not config["api_base"]:
-        config["api_base"] = os.getenv("OPENAI_API_BASE")
-    
-    return config
-
-
-# ===========================================
-# UnifiedLLMCore - 核心类
-# ===========================================
-
 class UnifiedLLMCore:
     """
-    统一的 LLM 与 Vision 模型客户端
+    统一的 LLM/Vision 客户端
     
-    🎯 整合所有 LLM/Vision 调用，提供统一接口
+    🌟 使用官方的 Provider 系统，不重新实现路由逻辑
     
-    支持的 Provider：
-    - OpenAI (GPT-4o, GPT-4o-mini)
-    - Anthropic (Claude-3)
-    - DashScope (Qwen)
-    - Ollama (本地模型)
-    - 其他 OpenAI-compatible API
+    官方架构：
+    - Config.get_provider(model) → 返回匹配的 ProviderConfig
+    - Config.get_api_key(model) → 返回 API Key
+    - Config.get_api_base(model) → 返回 API Base URL
+    - OpenAICompatProvider / AnthropicProvider → 具体实现
     
     Example:
         llm = UnifiedLLMCore()
-        
-        # 文字对话
         response = await llm.chat([{"role": "user", "content": "Hello"}])
-        
-        # Vision 解析
-        result = await llm.vision(img_base64, "提取表格")
     """
     
     def __init__(self):
         """
         初始化
         
-        🌟 自动检测配置（从 nanobot config 或环境变量）
+        🌟 使用官方的 Config 系统
         """
-        self.config = get_api_config()
-        self.default_model = self.config["default_model"]
-        self.vision_model = self.config["vision_model"]
-        
-        # 🌟 初始化 OpenAI Client（兼容多种 Provider）
-        if OPENAI_SDK_AVAILABLE and self.config["api_key"]:
-            self.client = AsyncOpenAI(
-                api_key=self.config["api_key"],
-                base_url=self.config["api_base"] if self.config["api_base"] else None
-            )
-            logger.info(f"✅ UnifiedLLMCore initialized (model={self.default_model})")
+        # 加载官方配置
+        if NANOBOT_CONFIG_AVAILABLE:
+            config_path_env = os.getenv("NANOBOT_CONFIG")
+            from pathlib import Path
+            config_path = Path(config_path_env) if config_path_env else None
+            
+            self.config: Config = resolve_config_env_vars(load_config(config_path))
+            self.default_model = self.config.agents.defaults.model
+            self.vision_model = os.getenv("VISION_MODEL", "gpt-4o")  # Vision 模型可能不同
+            
+            logger.info(f"✅ UnifiedLLMCore initialized using official config (model={self.default_model})")
         else:
-            self.client = None
-            logger.warning("⚠️ OpenAI client not initialized (missing API key or SDK)")
+            self.config = None
+            self.default_model = os.getenv("DEFAULT_LLM_MODEL", "gpt-4o-mini")
+            self.vision_model = os.getenv("VISION_MODEL", "gpt-4o")
+            logger.warning("⚠️ Using fallback config (official config unavailable)")
+        
+        # Provider 实例（延迟初始化）
+        self._provider_cache: Dict[str, Any] = {}
+    
+    def _get_provider(self, model: str = None) -> Optional[Any]:
+        """
+        🌟 使用官方的 Provider 系统
+        
+        Args:
+            model: 模型名称
+            
+        Returns:
+            Provider 实例（OpenAICompatProvider 或 AnthropicProvider）
+        """
+        if not NANOBOT_PROVIDERS_AVAILABLE:
+            logger.error("❌ nanobot providers not available")
+            return None
+        
+        target_model = model or self.default_model
+        
+        # 🌟 使用官方的 Provider 匹配逻辑
+        provider_name = self.config.get_provider_name(target_model) if self.config else None
+        
+        if provider_name:
+            # 检查缓存
+            if provider_name in self._provider_cache:
+                return self._provider_cache[provider_name]
+            
+            # 🌟 使用官方的 Provider Registry
+            spec = find_by_name(provider_name)
+            if spec:
+                # 获取配置
+                provider_config = self.config.get_provider(target_model) if self.config else None
+                
+                # 🌟 正确的 Provider 初始化方式（使用关键字参数）
+                if spec.backend == "anthropic":
+                    provider = AnthropicProvider(
+                        api_key=provider_config.api_key if provider_config else None,
+                        api_base=provider_config.api_base if provider_config else None,
+                        spec=spec,
+                        extra_headers=provider_config.extra_headers if provider_config else None
+                    )
+                else:
+                    # OpenAI-compatible（包括 OpenAI, DashScope, Ollama 等）
+                    provider = OpenAICompatProvider(
+                        api_key=provider_config.api_key if provider_config else None,
+                        api_base=provider_config.api_base if provider_config else None,
+                        spec=spec,
+                        extra_headers=provider_config.extra_headers if provider_config else None
+                    )
+                
+                self._provider_cache[provider_name] = provider
+                logger.debug(f"🤖 Created provider: {provider_name} for model {target_model}")
+                return provider
+        
+        # Fallback: 使用第一个可用的 Provider
+        logger.warning(f"⚠️ No provider found for model {target_model}, using first available")
+        
+        # 🌟 遍历 PROVIDERS registry
+        for spec in PROVIDERS:
+            if spec.is_oauth:  # OAuth provider 需要 explicit model selection
+                continue
+            
+            provider_config = getattr(self.config.providers, spec.name, None) if self.config else None
+            
+            if provider_config and (provider_config.api_key or spec.is_local):
+                if spec.backend == "anthropic":
+                    return AnthropicProvider(
+                        api_key=provider_config.api_key,
+                        api_base=provider_config.api_base,
+                        spec=spec,
+                        extra_headers=provider_config.extra_headers
+                    )
+                else:
+                    return OpenAICompatProvider(
+                        api_key=provider_config.api_key,
+                        api_base=provider_config.api_base,
+                        spec=spec,
+                        extra_headers=provider_config.extra_headers
+                    )
+        
+        logger.error("❌ No available provider found")
+        return None
     
     async def chat(
         self,
         messages: List[Dict[str, Any]],
         model: str = None,
-        temperature: float = 0.7,
-        max_tokens: int = 2000,
+        temperature: float = None,
+        max_tokens: int = None,
         **kwargs
     ) -> str:
         """
@@ -208,202 +225,39 @@ class UnifiedLLMCore:
             
         Returns:
             str: LLM 的回复文本
-            
-        Example:
-            response = await llm.chat([
-                {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "user", "content": "Hello"}
-            ])
         """
         target_model = model or self.default_model
-        provider = detect_provider(target_model)
+        provider = self._get_provider(target_model)
         
-        logger.debug(f"🤖 Calling LLM: {target_model} (provider={provider})")
+        if not provider:
+            logger.error("❌ Provider not available")
+            raise RuntimeError("Provider not available. Check config and API keys.")
+        
+        # 🌟 使用配置中的默认值
+        if temperature is None:
+            temperature = self.config.agents.defaults.temperature if self.config else 0.7
+        
+        if max_tokens is None:
+            max_tokens = self.config.agents.defaults.max_tokens if self.config else 2000
+        
+        logger.debug(f"🤖 Calling LLM: {target_model}")
         
         try:
-            # 🌟 Provider 路由逻辑
+            # 🌟 调用官方的 Provider
+            response: LLMResponse = await provider.chat(
+                model=target_model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                **kwargs
+            )
             
-            # 处理 Ollama（本地模型）
-            if provider == "ollama":
-                return await self._call_ollama_chat(messages, target_model, temperature, max_tokens, **kwargs)
-            
-            # 处理 Anthropic（Claude）
-            elif provider == "anthropic":
-                return await self._call_anthropic_chat(messages, target_model, temperature, max_tokens, **kwargs)
-            
-            # 处理 DashScope（Qwen）
-            elif provider == "dashscope":
-                # DashScope 使用 OpenAI-compatible API（如果配置正确）
-                return await self._call_openai_compatible(messages, target_model, temperature, max_tokens, **kwargs)
-            
-            # 默认：OpenAI-compatible Provider
-            else:
-                return await self._call_openai_compatible(messages, target_model, temperature, max_tokens, **kwargs)
+            content = response.content or ""
+            logger.debug(f"✅ LLM response: {len(content)} chars")
+            return content
             
         except Exception as e:
             logger.error(f"❌ LLM call failed: {e}")
-            raise
-    
-    async def _call_openai_compatible(
-        self,
-        messages: List[Dict[str, Any]],
-        model: str,
-        temperature: float,
-        max_tokens: int,
-        **kwargs
-    ) -> str:
-        """
-        🌟 调用 OpenAI-compatible API（标准格式）
-        
-        支持：
-        - OpenAI (GPT-4o, GPT-4o-mini)
-        - DashScope (Qwen) - 如果 api_base 正确配置
-        - 其他 OpenAI-compatible Gateway（LiteLLM, OneAPI）
-        """
-        if not self.client:
-            raise RuntimeError("OpenAI client not initialized. Check API key.")
-        
-        response = await self.client.chat.completions.create(
-            model=model,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            **kwargs
-        )
-        
-        content = response.choices[0].message.content
-        logger.debug(f"✅ OpenAI response: {len(content)} chars")
-        return content
-    
-    async def _call_ollama_chat(
-        self,
-        messages: List[Dict[str, Any]],
-        model: str,
-        temperature: float,
-        max_tokens: int,
-        **kwargs
-    ) -> str:
-        """
-        🌟 调用 Ollama 本地模型
-        
-        Args:
-            messages: OpenAI 格式的 messages
-            model: Ollama 模型名称（如 "ollama/llama3"）
-            
-        Returns:
-            str: Ollama 的回复
-            
-        注意：Ollama 的 API 地址通常是 http://localhost:11434/v1
-        """
-        import httpx
-        
-        # 🌟 移除 ollama/ 前缀
-        ollama_model = model.replace("ollama/", "")
-        
-        # 🌟 Ollama API 地址（默认 localhost）
-        ollama_url = os.getenv("OLLAMA_API_BASE", "http://localhost:11434/v1")
-        
-        logger.debug(f"🦙 Calling Ollama: {ollama_model} at {ollama_url}")
-        
-        try:
-            # 🌟 使用 OpenAI-compatible 格式（Ollama 支持）
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.post(
-                    f"{ollama_url}/chat/completions",
-                    json={
-                        "model": ollama_model,
-                        "messages": messages,
-                        "temperature": temperature,
-                        "max_tokens": max_tokens,
-                        "stream": False
-                    }
-                )
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-                    logger.debug(f"✅ Ollama response: {len(content)} chars")
-                    return content
-                else:
-                    logger.error(f"❌ Ollama failed: {response.status_code}")
-                    raise RuntimeError(f"Ollama API failed: {response.status_code}")
-                    
-        except Exception as e:
-            logger.error(f"❌ Ollama chat call failed: {e}")
-            raise
-    
-    async def _call_anthropic_chat(
-        self,
-        messages: List[Dict[str, Any]],
-        model: str,
-        temperature: float,
-        max_tokens: int,
-        **kwargs
-    ) -> str:
-        """
-        🌟 调用 Anthropic Claude
-        
-        Args:
-            messages: OpenAI 格式的 messages（需要转换）
-            model: Claude 模型名称（如 "claude-3-opus"）
-            
-        Returns:
-            str: Claude 的回复
-            
-        注意：
-        - Anthropic 的 API 格式与 OpenAI 不同
-        - 需要使用 anthropic SDK 或 LiteLLM Gateway
-        """
-        # 🌟 如果使用 LiteLLM Gateway，可以直接用 OpenAI SDK
-        # 检查 api_base 是否指向 LiteLLM
-        if self.config.get("api_base") and "litellm" in self.config.get("api_base", "").lower():
-            logger.debug("Using LiteLLM Gateway for Anthropic")
-            return await self._call_openai_compatible(messages, model, temperature, max_tokens, **kwargs)
-        
-        # 🌟 否则，需要使用 Anthropic SDK
-        try:
-            import anthropic
-            
-            # 🌟 提取 API Key
-            anthropic_key = os.getenv("ANTHROPIC_API_KEY")
-            if not anthropic_key:
-                raise RuntimeError("ANTHROPIC_API_KEY not set")
-            
-            # 🌟 转换 messages 格式（Anthropic 不支持 system 在 messages 中）
-            system_message = ""
-            anthropic_messages = []
-            
-            for msg in messages:
-                if msg["role"] == "system":
-                    system_message = msg["content"]
-                else:
-                    anthropic_messages.append({
-                        "role": msg["role"],
-                        "content": msg["content"]
-                    })
-            
-            # 🌟 调用 Anthropic SDK
-            client = anthropic.AsyncAnthropic(api_key=anthropic_key)
-            
-            response = await client.messages.create(
-                model=model.replace("anthropic/", ""),
-                max_tokens=max_tokens,
-                temperature=temperature,
-                system=system_message,
-                messages=anthropic_messages
-            )
-            
-            content = response.content[0].text
-            logger.debug(f"✅ Anthropic response: {len(content)} chars")
-            return content
-            
-        except ImportError:
-            logger.warning("⚠️ anthropic SDK not installed, trying OpenAI-compatible")
-            # Fallback: 尝试使用 OpenAI SDK（可能通过 Gateway）
-            return await self._call_openai_compatible(messages, model, temperature, max_tokens, **kwargs)
-        
-        except Exception as e:
-            logger.error(f"❌ Anthropic call failed: {e}")
             raise
     
     async def vision(
@@ -426,22 +280,15 @@ class UnifiedLLMCore:
             
         Returns:
             str: Vision 模型的分析结果
-            
-        Example:
-            # 从文件读取图片
-            with open("chart.png", "rb") as f:
-                img_base64 = base64.b64encode(f.read()).decode()
-            
-            result = await llm.vision(img_base64, "提取表格数据")
         """
-        if not self.client:
-            logger.error("❌ OpenAI client not initialized")
-            raise RuntimeError("OpenAI client not initialized. Check API key.")
-        
         target_model = model or self.vision_model
-        provider = detect_provider(target_model)
+        provider = self._get_provider(target_model)
         
-        logger.debug(f"👁️ Calling Vision: {target_model} (provider={provider})")
+        if not provider:
+            logger.error("❌ Provider not available")
+            raise RuntimeError("Provider not available. Check config and API keys.")
+        
+        logger.debug(f"👁️ Calling Vision: {target_model}")
         
         # 🌟 构建 Vision 请求（OpenAI 格式）
         messages = [
@@ -459,74 +306,21 @@ class UnifiedLLMCore:
             }
         ]
         
-        # 🌟 特殊处理：Ollama 需要不同的 API 格式
-        if provider == "ollama":
-            return await self._call_ollama_vision(target_model, image_base64, prompt)
-        
-        # 🌟 其他 Provider：使用标准 OpenAI Vision API
         try:
-            response = await self.client.chat.completions.create(
+            # 🌟 调用官方的 Provider（Vision 使用 chat 方法）
+            response: LLMResponse = await provider.chat(
                 model=target_model,
                 messages=messages,
                 temperature=temperature,
                 max_tokens=max_tokens
             )
             
-            content = response.choices[0].message.content
+            content = response.content or ""
             logger.debug(f"✅ Vision response: {len(content)} chars")
             return content
             
         except Exception as e:
             logger.error(f"❌ Vision call failed: {e}")
-            raise
-    
-    async def _call_ollama_vision(self, model: str, image_base64: str, prompt: str) -> str:
-        """
-        🌟 Ollama Vision API 调用（特殊处理）
-        
-        Ollama 使用不同的 API 格式，需要单独处理
-        
-        Args:
-            model: Ollama 模型名称（如 "ollama/llava"）
-            image_base64: 图片的 Base64 编码
-            prompt: 提示词
-            
-        Returns:
-            str: Vision 模型的分析结果
-        """
-        import httpx
-        
-        # 🌟 移除 ollama/ 前缀
-        ollama_model = model.replace("ollama/", "")
-        
-        # 🌟 Ollama API 地址（默认 localhost）
-        ollama_url = os.getenv("OLLAMA_API_BASE", "http://localhost:11434")
-        
-        logger.debug(f"🦙 Calling Ollama Vision: {ollama_model}")
-        
-        try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.post(
-                    f"{ollama_url}/api/generate",
-                    json={
-                        "model": ollama_model,
-                        "prompt": prompt,
-                        "images": [image_base64],
-                        "stream": False
-                    }
-                )
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    content = data.get("response", "")
-                    logger.debug(f"✅ Ollama response: {len(content)} chars")
-                    return content
-                else:
-                    logger.error(f"❌ Ollama failed: {response.status_code}")
-                    raise RuntimeError(f"Ollama API failed: {response.status_code}")
-                    
-        except Exception as e:
-            logger.error(f"❌ Ollama Vision call failed: {e}")
             raise
     
     async def batch_chat(
@@ -607,7 +401,6 @@ class UnifiedLLMCore:
 # 全域單例
 # ===========================================
 
-# 🌟 创建全局单例（类似 llm_client.py 的 Singleton）
 llm_core = UnifiedLLMCore()
 
 
@@ -640,26 +433,47 @@ async def vision(image_path_or_base64: str, prompt: str, model: str = None) -> s
         
     Returns:
         str: Vision 分析结果
-        
-    Example:
-        # 从文件读取
-        result = await vision("chart.png", "提取表格")
-        
-        # 使用 Base64
-        with open("chart.png", "rb") as f:
-            img_base64 = base64.b64encode(f.read()).decode()
-        result = await vision(img_base64, "提取表格")
     """
-    # 🌟 自动处理图片输入（文件路径或 Base64）
+    # 🌟 自动处理图片输入
     if os.path.exists(image_path_or_base64):
-        # 是文件路径
         with open(image_path_or_base64, "rb") as f:
             img_base64 = base64.b64encode(f.read()).decode()
     else:
-        # 已经是 Base64
         img_base64 = image_path_or_base64
     
     return await llm_core.vision(img_base64, prompt, model=model)
+
+
+# ===========================================
+# 兼容旧代码的函数（不再需要，但保留别名）
+# ===========================================
+
+def get_llm_client() -> UnifiedLLMCore:
+    """兼容旧代码：返回 llm_core 实例"""
+    return llm_core
+
+def get_llm_model() -> str:
+    """兼容旧代码：返回默认模型"""
+    return llm_core.default_model
+
+def get_vision_model() -> str:
+    """兼容旧代码：返回视觉模型"""
+    return llm_core.vision_model
+
+def get_api_base() -> str:
+    """兼容旧代码：返回 API Base"""
+    if llm_core.config:
+        return llm_core.config.get_api_base() or ""
+    return ""
+
+def get_api_config() -> Dict[str, Any]:
+    """兼容旧代码：返回 API 配置"""
+    return {
+        "api_key": llm_core.config.get_api_key() if llm_core.config else None,
+        "api_base": get_api_base(),
+        "default_model": llm_core.default_model,
+        "vision_model": llm_core.vision_model
+    }
 
 
 # ===========================================
@@ -669,22 +483,21 @@ async def vision(image_path_or_base64: str, prompt: str, model: str = None) -> s
 if __name__ == "__main__":
     import asyncio
     
-    print("🧪 测试 UnifiedLLMCore...")
+    print("🧪 测试 UnifiedLLMCore (使用官方 Provider 系统)")
     
     # 测试配置
-    print("\n1. 测试配置检测:")
-    config = get_api_config()
-    print(f"   API Key: {'已设置' if config['api_key'] else '未设置'}")
-    print(f"   API Base: {config['api_base'] or '默认'}")
-    print(f"   Default Model: {config['default_model']}")
-    print(f"   Vision Model: {config['vision_model']}")
+    print("\n1. 测试配置:")
+    print(f"   Config available: {NANOBOT_CONFIG_AVAILABLE}")
+    print(f"   Providers available: {NANOBOT_PROVIDERS_AVAILABLE}")
+    print(f"   Default model: {llm_core.default_model}")
+    print(f"   Vision model: {llm_core.vision_model}")
     
-    # 测试 Provider 检测
-    print("\n2. 测试 Provider 检测:")
+    # 测试 Provider 匹配
+    print("\n2. 测试 Provider 匹配:")
     test_models = ["gpt-4o", "claude-3", "qwen-plus", "ollama/llava"]
     for model in test_models:
-        provider = detect_provider(model)
-        print(f"   {model} → {provider}")
+        provider = llm_core._get_provider(model)
+        print(f"   {model} → {provider.__class__.__name__ if provider else 'None'}")
     
     # 测试 chat
     print("\n3. 测试 chat:")

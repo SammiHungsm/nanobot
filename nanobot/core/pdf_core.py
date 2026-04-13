@@ -251,9 +251,11 @@ class OpenDataLoaderCore:
             logger.info(f"🚀 Hybrid AI 视觉模式：启动 {device} 解析（Docling 模型）")
             
             convert_kwargs['hybrid'] = "docling-fast"
-            convert_kwargs['hybrid_mode'] = "auto"  # "auto" (dynamic triage) 或 "full" (all pages)
+            # 🎯 修正：改为 "full"，确保表格/图片/扫描件全部强制交给 Backend 处理
+            convert_kwargs['hybrid_mode'] = "full"  
             convert_kwargs['hybrid_url'] = self.hybrid_url  # 🌟 从环境变量获取
-            convert_kwargs['hybrid_timeout'] = "600000"  # 600 秒（CPU 模式需要更长 timeout）
+            # 🎯 修正：必须是 Integer (整数)，不能是 String
+            convert_kwargs['hybrid_timeout'] = 600000  
             convert_kwargs['hybrid_fallback'] = True  # Hybrid 失败时 fallback 到 Java
         
         # 🚀 调用 OpenDataLoader
@@ -317,6 +319,15 @@ class OpenDataLoaderCore:
         }
         total_pages = 0
         
+        # 🌟 检查是否有外部图片文件（OpenDataLoader image_output="external"）
+        image_files = list(output_path.glob("images/*")) + \
+                      list(output_path.glob("*.png")) + \
+                      list(output_path.glob("*.jpg")) + \
+                      list(output_path.glob("*.jpeg"))
+        
+        if image_files:
+            logger.info(f"📸 发现 {len(image_files)} 个外部图片文件")
+        
         for json_file in sorted(json_files):
             try:
                 with open(json_file, 'r', encoding='utf-8') as f:
@@ -336,6 +347,81 @@ class OpenDataLoaderCore:
                 
             except Exception as e:
                 logger.warning(f"⚠️ 读取 JSON 文件失败 {json_file}: {e}")
+        
+        # 🌟 如果 JSON 中没有图片数据，检查外部图片文件
+        if not images and image_files:
+            import base64
+            logger.info(f"📸 从外部文件加载图片数据...")
+            for idx, img_file in enumerate(sorted(image_files)):
+                try:
+                    # 读取图片文件为 base64
+                    with open(img_file, 'rb') as f:
+                        img_bytes = f.read()
+                    img_base64 = base64.b64encode(img_bytes).decode('utf-8')
+                    
+                    # 推测图片 MIME 类型
+                    img_ext = img_file.suffix.lower()
+                    mime_type = {
+                        '.png': 'image/png',
+                        '.jpg': 'image/jpeg',
+                        '.jpeg': 'image/jpeg',
+                        '.gif': 'image/gif',
+                        '.webp': 'image/webp'
+                    }.get(img_ext, 'image/png')
+                    
+                    # 构造 data URI
+                    img_data_uri = f"data:{mime_type};base64,{img_base64}"
+                    
+                    # 尝试从文件名提取页码（如 image_page1.png）
+                    page_num = 0
+                    for part in img_file.stem.split('_'):
+                        if 'page' in part.lower():
+                            try:
+                                page_num = int(part.replace('page', '').replace('Page', '').replace('PAGE', ''))
+                            except:
+                                pass
+                    
+                    images.append({
+                        'page_num': page_num,
+                        'image_data': img_data_uri,
+                        'image_path': str(img_file),
+                        'metadata': {'source': 'external_file'}
+                    })
+                    artifacts.append({
+                        'type': 'image',
+                        'image_data': img_data_uri,
+                        'image_path': str(img_file),
+                        'page_num': page_num,
+                        'metadata': {'source': 'external_file'}
+                    })
+                    logger.debug(f"✅ 加载图片: {img_file.name} (page {page_num})")
+                except Exception as e:
+                    logger.warning(f"⚠️ 图片文件读取失败 {img_file}: {e}")
+        
+        # 🎯 修正 2：防止 TempDir 被刪除導致圖片黑洞！
+        # 趁 temp_dir 仲未被自動刪除，強制將所有實體圖片轉成 Base64 塞入 image_data
+        import base64
+        import mimetypes
+        
+        for artifact in artifacts:
+            if artifact.get('type') == 'image' and not artifact.get('image_data'):
+                img_path = artifact.get('image_path')
+                if img_path and Path(img_path).exists():
+                    try:
+                        with open(img_path, 'rb') as f:
+                            img_bytes = f.read()
+                        img_base64 = base64.b64encode(img_bytes).decode('utf-8')
+                        mime_type = mimetypes.guess_type(img_path)[0] or 'image/png'
+                        artifact['image_data'] = f"data:{mime_type};base64,{img_base64}"
+                        
+                        # 同步更新 images 列表
+                        for img in images:
+                            if img.get('image_path') == img_path:
+                                img['image_data'] = artifact['image_data']
+                        
+                        logger.debug(f"✅ TempDir 图片转换 Base64: {img_path}")
+                    except Exception as e:
+                        logger.warning(f"⚠️ 臨時目錄圖片轉換 Base64 失敗 {img_path}: {e}")
         
         return PDFParseResult(
             file_path=str(pdf_path),
@@ -377,8 +463,27 @@ class OpenDataLoaderCore:
         # 🌟 情况 1: 已经是分类结构
         if 'tables' in data:
             normalized['tables'] = data['tables']
+            # 🎯 修正 1：將 tables 塞入 artifacts
+            for table in data['tables']:
+                normalized['artifacts'].append({
+                    'type': 'table',
+                    'content_json': table,
+                    'page_num': table.get('page', table.get('page_num', 0)),
+                    'metadata': table.get('metadata', {})
+                })
+        
         if 'images' in data:
             normalized['images'] = data['images']
+            # 🎯 修正 1：將 images 塞入 artifacts
+            for img in data['images']:
+                normalized['artifacts'].append({
+                    'type': 'image',
+                    'image_data': img.get('image_data'),
+                    'image_path': img.get('image_path') or img.get('path'),
+                    'page_num': img.get('page', img.get('page_num', 0)),
+                    'metadata': img.get('metadata', {})
+                })
+        
         if 'elements' in data:
             for elem in data['elements']:
                 normalized['artifacts'].append({
@@ -426,7 +531,7 @@ class OpenDataLoaderCore:
                         'metadata': {}
                     })
         
-        # 🌟 情况 3: kids 结构（类似 PDF 树状结构）
+        # 🌟 情况 3: kids 结构（OpenDataLoader 实际结构）
         if 'kids' in data:
             self._extract_from_kids(data['kids'], normalized)
         
@@ -434,9 +539,12 @@ class OpenDataLoaderCore:
         if 'content' in data:
             for idx, item in enumerate(data['content']):
                 item_type = item.get('type', 'unknown')
+                # 🎯 修正：如果元素是图片，必须读取 image_data
                 normalized['artifacts'].append({
                     'type': item_type,
                     'content': item.get('content', ''),
+                    'image_data': item.get('image_data') or item.get('image'),  # 补回这行
+                    'image_path': item.get('image_path'),  # 补回这行
                     'page_num': item.get('page', 0),
                     'bbox': item.get('bbox'),
                     'metadata': item.get('metadata', {})
@@ -446,42 +554,94 @@ class OpenDataLoaderCore:
         if 'metadata' in data:
             normalized['metadata'].update(data['metadata'])
         
+        # 🌟 OpenDataLoader 特殊字段
+        if 'number of pages' in data:
+            normalized['metadata']['total_pages'] = data['number of pages']
+        
         return normalized
     
     def _extract_from_kids(self, kids: List[Dict], normalized: Dict):
-        """从 kids 结构递归提取内容"""
+        """
+        🎯 从 kids 结构提取内容（修正版）
+        
+        OpenDataLoader 的实际结构：
+        - kids 是扁平列表，包含所有元素
+        - 每个元素有 type, page number, content
+        - 直接遍历，按类型分类
+        
+        之前的错误：检查 kid.get('type') == 'page'
+        正确的逻辑：直接处理 paragraph, heading, table 等元素
+        """
         for kid in kids:
-            if kid.get('type') == 'page':
-                page_num = kid.get('page_num', 0)
+            kid_type = kid.get('type', 'unknown')
+            page_num = kid.get('page number', 0)
+            content = kid.get('content', '')
+            
+            # 🌟 根据类型分类
+            if kid_type == 'table':
+                # 表格元素
+                normalized['tables'].append({
+                    'page_num': page_num,
+                    'content': content,
+                    'metadata': kid
+                })
+                normalized['artifacts'].append({
+                    'type': 'table',
+                    'content': content,
+                    'page_num': page_num,
+                    'metadata': kid
+                })
+            
+            elif kid_type in ['image', 'image_screenshot', 'screenshot', 'figure']:
+                # 图片元素（支持多种类型名称）
+                # 🌟 尝试从多个字段提取图片数据
+                image_data = kid.get('image_data') or kid.get('image') or kid.get('content')
                 
-                # 递归处理子节点
-                if 'kids' in kid:
-                    for sub_kid in kid['kids']:
-                        if sub_kid.get('type') == 'table':
-                            sub_kid['page_num'] = page_num
-                            normalized['tables'].append(sub_kid)
-                            normalized['artifacts'].append({
-                                'type': 'table',
-                                'content_json': sub_kid,
-                                'page_num': page_num,
-                                'metadata': sub_kid.get('metadata', {})
-                            })
-                        elif sub_kid.get('type') == 'image':
-                            sub_kid['page_num'] = page_num
-                            normalized['images'].append(sub_kid)
-                            normalized['artifacts'].append({
-                                'type': 'image',
-                                'image_data': sub_kid.get('image_data'),
-                                'page_num': page_num,
-                                'metadata': sub_kid.get('metadata', {})
-                            })
-                        elif sub_kid.get('type') in ['text', 'paragraph', 'heading']:
-                            normalized['artifacts'].append({
-                                'type': 'text_chunk',
-                                'content': sub_kid.get('content', ''),
-                                'page_num': page_num,
-                                'metadata': sub_kid.get('metadata', {})
-                            })
+                # 检查是否有外部图片文件路径
+                image_path = kid.get('image_path') or kid.get('file_path') or kid.get('path')
+                
+                normalized['images'].append({
+                    'page_num': page_num,
+                    'content': content,
+                    'image_data': image_data,
+                    'image_path': image_path,
+                    'metadata': kid
+                })
+                normalized['artifacts'].append({
+                    'type': 'image',
+                    'content': content,
+                    'image_data': image_data,
+                    'image_path': image_path,
+                    'page_num': page_num,
+                    'metadata': kid
+                })
+            
+            elif kid_type in ['paragraph', 'heading', 'text']:
+                # 文字元素（合并为 text_chunk）
+                normalized['artifacts'].append({
+                    'type': 'text_chunk',
+                    'content': content,
+                    'page_num': page_num,
+                    'metadata': kid
+                })
+            
+            elif kid_type == 'list':
+                # 列表元素
+                normalized['artifacts'].append({
+                    'type': 'list',
+                    'content': content,
+                    'page_num': page_num,
+                    'metadata': kid
+                })
+            
+            else:
+                # 其他元素（保留原类型）
+                normalized['artifacts'].append({
+                    'type': kid_type,
+                    'content': content,
+                    'page_num': page_num,
+                    'metadata': kid
+                })
             
             # 如果 kids 下还有 kids，继续递归
             if 'kids' in kid:

@@ -12,12 +12,13 @@ BaseIngestionPipeline (基類)
     └── extract_information() - 抽象方法
         ↓
 AgenticPipeline (子類)
-    └── extract_information() - 使用 AI Agent 提取
+    ├── extract_information() - 使用 AI Agent 提取
+    └── process_document() - 兼容接口（用于 pipeline.py）
 ```
 
 瘦身效果：
 - 原本的 AgenticIngestionOrchestrator 有 ~400 行
-- 现在的 AgenticPipeline 只需 ~30 行
+- 现在的 AgenticPipeline 只需 ~50 行
 - Parser/DB 代码全部删除（由基类处理）
 """
 
@@ -51,40 +52,87 @@ class AgenticPipeline(BaseIngestionPipeline):
         **kwargs
     ) -> Dict[str, Any]:
         """
-        🎯 覆写提取逻辑：使用 AI Agent 进行复杂分析
+        🎯 实现基类的抽象方法
+        
+        从 Artifacts 中提取结构化数据
         
         Args:
             artifacts: OpenDataLoader 解析出的 Artifacts
             metadata: PDF 元数据
-            **kwargs: 其他参数（如 is_index_report, confirmed_industry）
+            **kwargs: 其他参数
             
         Returns:
             Dict: 提取的结构化数据
-            
-        提取内容：
-        - 报告类型（年报/指数报告）
-        - 公司信息（名称、行业）
-        - 财务数据（营收、利润）
-        - Key Personnel（高管信息）
         """
-        logger.info("🤖 Agent 正在分析 Artifacts...")
+        logger.info("🤖 AgenticPipeline.extract_information 开始提取...")
         
-        # 🌟 构建 Prompt
-        prompt = self._build_agent_prompt(artifacts, metadata, **kwargs)
+        try:
+            # 🌟 使用 llm_core.chat() 提取
+            # 构建 Prompt
+            prompt = self._build_agent_prompt(artifacts, metadata, **kwargs)
+            
+            response = await llm_core.chat(
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=3000
+            )
+            
+            # 解析 JSON
+            extracted_data = self._parse_agent_response(response)
+            
+            logger.info(f"✅ extract_information 完成: {len(extracted_data)} 个数据项")
+            return extracted_data
+            
+        except Exception as e:
+            logger.error(f"❌ extract_information 失败: {e}")
+            return {"success": False, "error": str(e)}
+    
+    async def process_document(
+        self,
+        document_content: str,
+        filename: str,
+        user_hints: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
+        """
+        🎯 兼容接口：用于 pipeline.py 的 smart_extract
         
-        # 🌟 调用 LLM（使用统一的 llm_core）
-        response = await llm_core.chat(
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,  # 低温度，确保准确性
-            max_tokens=2000
-        )
+        旧的 AgenticIngestionOrchestrator 有这个方法，新的 AgenticPipeline 需要兼容
         
-        # 🌟 解析 JSON（LLM 应返回 JSON 格式）
-        extracted_data = self._parse_agent_response(response)
+        Args:
+            document_content: 文档内容（通常是 Prompt）
+            filename: 文件名
+            user_hints: 用户提示
+            
+        Returns:
+            Dict: 处理结果
+        """
+        logger.info("🤖 AgenticPipeline.process_document 开始处理...")
         
-        logger.info(f"✅ Agent 分析完成：{len(extracted_data)} 个数据项")
-        
-        return extracted_data
+        try:
+            # 🌟 使用 llm_core.chat() 发送 Prompt
+            response = await llm_core.chat(
+                messages=[{"role": "user", "content": document_content}],
+                temperature=0.3,
+                max_tokens=3000
+            )
+            
+            # 🌟 解析 JSON
+            import json
+            import re
+            
+            json_match = re.search(r'\{[\s\S]*\}', response)
+            
+            if json_match:
+                result = json.loads(json_match.group(0))
+                logger.info(f"✅ process_document 完成: {len(result)} 个数据项")
+                return {"success": True, "data": result, "raw_response": response}
+            else:
+                logger.warning("⚠️ 无法解析 JSON，返回原始响应")
+                return {"success": False, "raw_response": response, "error": "no JSON found"}
+            
+        except Exception as e:
+            logger.error(f"❌ process_document 失败: {e}")
+            return {"success": False, "error": str(e)}
     
     def _build_agent_prompt(
         self,
@@ -92,25 +140,14 @@ class AgenticPipeline(BaseIngestionPipeline):
         metadata: Dict[str, Any],
         **kwargs
     ) -> str:
-        """
-        构建 Agent Prompt
-        
-        Args:
-            artifacts: Artifacts 列表
-            metadata: PDF 元数据
-            **kwargs: 其他参数
-            
-        Returns:
-            str: 完整的 Prompt
-        """
-        # 🌟 提取前几页的文字内容（用于分析）
+        """构建 Agent Prompt"""
+        # 提取前几页的文字内容
         first_pages_text = "\n\n".join([
             a.get("content", "")
-            for a in artifacts[:5]  # 只用前 5 个 artifacts
+            for a in artifacts[:5]
             if a.get("type") == "text_chunk"
         ])
         
-        # 🌟 用户提供的参数（如 is_index_report）
         is_index_report = kwargs.get("is_index_report", False)
         confirmed_industry = kwargs.get("confirmed_industry")
         
@@ -161,19 +198,10 @@ class AgenticPipeline(BaseIngestionPipeline):
         return prompt
     
     def _parse_agent_response(self, response: str) -> Dict[str, Any]:
-        """
-        解析 Agent 的 JSON 回复
-        
-        Args:
-            response: LLM 的回复
-            
-        Returns:
-            Dict: 解析后的数据
-        """
+        """解析 Agent 的 JSON 回复"""
         import json
         import re
         
-        # 🌟 提取 JSON 部分（可能有 Markdown 包装）
         json_match = re.search(r'\{[\s\S]*\}', response)
         
         if json_match:
@@ -188,6 +216,58 @@ class AgenticPipeline(BaseIngestionPipeline):
         else:
             logger.warning("⚠️ 未找到 JSON 格式")
             return {"raw_response": response}
+    
+    async def process_document(
+        self,
+        document_content: str,
+        filename: str,
+        user_hints: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
+        """
+        🎯 兼容接口：用于 pipeline.py 的 smart_extract
+        
+        旧的 AgenticIngestionOrchestrator 有这个方法，新的 AgenticPipeline 需要兼容
+        
+        Args:
+            document_content: 文档内容（通常是 Prompt）
+            filename: 文件名
+            user_hints: 用户提示
+            
+        Returns:
+            Dict: 处理结果
+            
+        实现：
+        - 接收 Stage 5 Prompt（不叠加 Stage 0 的 System Prompt）
+        - 使用 llm_core.chat() 发送 Prompt
+        - 返回结构化结果
+        """
+        logger.info("🤖 AgenticPipeline.process_document 开始处理...")
+        
+        try:
+            # 🌟 使用 llm_core.chat() 发送 Prompt
+            response = await llm_core.chat(
+                messages=[{"role": "user", "content": document_content}],
+                temperature=0.3,  # 低温度，确保准确性
+                max_tokens=3000
+            )
+            
+            # 🌟 解析 JSON（LLM 应返回 JSON 格式）
+            import json
+            import re
+            
+            json_match = re.search(r'\{[\s\S]*\}', response)
+            
+            if json_match:
+                result = json.loads(json_match.group(0))
+                logger.info(f"✅ process_document 完成: {len(result)} 个数据项")
+                return {"success": True, "data": result, "raw_response": response}
+            else:
+                logger.warning("⚠️ 无法解析 JSON，返回原始响应")
+                return {"success": False, "raw_response": response, "error": "no JSON found"}
+            
+        except Exception as e:
+            logger.error(f"❌ process_document 失败: {e}")
+            return {"success": False, "error": str(e)}
 
 
 # ===========================================

@@ -47,7 +47,8 @@ class DocumentService:
             self.pipeline = DocumentPipeline(
                 db_url=self._db_url, 
                 data_dir=self._data_dir, 
-                use_opendataloader=True
+                use_opendataloader=True,
+                enable_hybrid=True  # 🌟 启用 Hybrid AI 视觉模式（提取图片）
             )
             await self.pipeline.connect()
             self._pipeline_connected = True

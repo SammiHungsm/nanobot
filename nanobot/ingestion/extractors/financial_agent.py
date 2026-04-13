@@ -272,18 +272,13 @@ class FinancialAgent:
         
         for attempt in range(self.max_retries + 1):
             try:
-                kwargs = {
-                    "model": self._get_model(),
-                    "messages": messages,
-                    "temperature": temperature
-                }
-                
-                # 如果支持 response_format，添加參數
-                if response_format:
-                    kwargs["response_format"] = response_format
-                
-                response = await client.chat.completions.create(**kwargs)
-                return response.choices[0].message.content
+                # 🌟 使用 llm_core.chat() 方法（不再使用 client.chat.completions.create）
+                response = await client.chat(
+                    messages=messages,
+                    model=self._get_model(),
+                    temperature=temperature
+                )
+                return response
                 
             except Exception as e:
                 if attempt < self.max_retries:
@@ -656,31 +651,14 @@ IMPORTANT: You MUST respond with valid JSON only. Extract all visible data from 
             
             logger.info(f"🧠 正在使用 Vision LLM 提取 {extraction_type}...")
             
-            response = await client.chat.completions.create(
+            # 🌟 使用 llm_core.vision() 方法
+            result_text = await client.vision(
+                image_base64=base64_image,
+                prompt=f"{enhanced_prompt}\n\n請提取這張圖片中的 {extraction_type} 數據。",
                 model=vision_model,
-                messages=[
-                    {"role": "system", "content": enhanced_prompt},
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/png;base64,{base64_image}",
-                                    "detail": "high"
-                                }
-                            },
-                            {
-                                "type": "text",
-                                "text": f"請提取這張圖片中的 {extraction_type} 數據。"
-                            }
-                        ]
-                    }
-                ],
                 temperature=0.0
             )
             
-            result_text = response.choices[0].message.content
             result = self.json_processor.repair_and_parse(result_text)
             
             if result:
@@ -764,27 +742,13 @@ IMPORTANT: You MUST respond with valid JSON only. Extract all visible data from 
   "name_zh": "長和"
 }"""
             
-            response = await client.chat.completions.create(
+            # 🌟 使用 llm_core.vision() 方法
+            result_text = await client.vision(
+                image_base64=base64_image,
+                prompt=prompt,
                 model=vision_model,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/png;base64,{base64_image}",
-                                    "detail": "high"
-                                }
-                            }
-                        ]
-                    }
-                ],
                 temperature=0.0
             )
-            
-            result_text = response.choices[0].message.content
             logger.debug(f"   🤖 Vision LLM 原始響應: {result_text[:300] if result_text else 'None'}...")
             
             result = self.json_processor.repair_and_parse(result_text)

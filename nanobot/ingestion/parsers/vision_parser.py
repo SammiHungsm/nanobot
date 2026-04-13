@@ -260,31 +260,13 @@ class VisionParser:
             
             logger.info(f"👁️ RAG-Anything 視覺模式：轉換圖片為 Markdown...")
             
-            response = await client.chat.completions.create(
+            # 🌟 使用 llm_core.vision() 方法
+            markdown_result = await client.vision(
+                image_base64=base64_image,
+                prompt=f"{system_prompt}\n\n請將此頁面精確轉換為 Markdown：",
                 model=self._get_model(),
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/png;base64,{base64_image}",
-                                    "detail": "high"
-                                }
-                            },
-                            {
-                                "type": "text",
-                                "text": "請將此頁面精確轉換為 Markdown："
-                            }
-                        ]
-                    }
-                ],
                 temperature=0.0
             )
-            
-            markdown_result = response.choices[0].message.content
             logger.info(f"✅ Markdown 轉換完成 ({len(markdown_result)} chars)")
             
             # 保存中間產物供調試
