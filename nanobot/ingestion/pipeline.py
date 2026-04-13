@@ -1069,15 +1069,15 @@ class DocumentPipeline:
         page1_artifacts = [a for a in (artifacts or []) if a.get("page_num") == 1]
         
         if not page1_artifacts and not stock_code:
-            # 🌟 Page 1 没有文字层 → 使用 Vision 提取
-            logger.info("   🎨 Page 1 没有文字层（纯向量绘图封面），启动 Vision 提取...")
+            # 🌟 Page 1 没有文字层 → 使用 Vision API 提取
+            logger.info("   🎨 Page 1 没有文字层（纯向量绘图封面），启动 Vision API 提取...")
             
             try:
-                from .extractors.ollama_vision import OllamaVisionExtractor
+                from .extractors.vision_api_client import VisionAPIClient
                 
-                vision_extractor = OllamaVisionExtractor(model="qwen3-vl:4b")
-                # 🌟 使用新的参数名：max_page=2（尝试 Page 1 和 Page 2）
-                vision_result = await vision_extractor.extract_cover_from_pdf(pdf_path, max_page=2)
+                # 🌟 使用云端 API（qwen-vl-max），精度更高
+                vision_client = VisionAPIClient(model="qwen3.5-plus")
+                vision_result = await vision_client.extract_cover_from_pdf(pdf_path, max_page=2, timeout=120)
                 
                 if vision_result:
                     vision_stock = vision_result.get("stock_code")
