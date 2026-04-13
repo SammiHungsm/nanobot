@@ -104,7 +104,7 @@ class OllamaVisionExtractor:
             page = doc[page_num - 1]
             
             # 转换为图片（高分辨率）
-            # zoom = 2.0 表示 2x 放大，提高 OCR 准确率
+            # 🌟 zoom = 2.0 高分辨率，重要！确保 OCR 准确率
             mat = fitz.Matrix(2.0, 2.0)
             pix = page.get_pixmap(matrix=mat)
             
@@ -191,7 +191,7 @@ class OllamaVisionExtractor:
                 async with session.post(
                     f"{OLLAMA_API_TAGS}/chat",  # 🌟 使用原生 API
                     json=payload,
-                    timeout=aiohttp.ClientTimeout(total=120)
+                    timeout=aiohttp.ClientTimeout(total=600)  # 🌟 10 分钟（高分辨率 zoom=2.0）
                 ) as resp:
                     if resp.status != 200:
                         logger.error(f"❌ Ollama API 错误: {resp.status}")
@@ -254,14 +254,17 @@ class OllamaVisionExtractor:
     async def extract_cover_from_pdf(
         self,
         pdf_path: str,
-        page_num: int = 1
+        max_page: int = 2  # 🌟 最多尝试 Page 1 和 Page 2
     ) -> Optional[Dict[str, Any]]:
         """
         从 PDF 封面提取信息（完整流程）
         
+        🌟 改进：先用 Page 1，失败才 fallback 到 Page 2
+        不会超过 Page 2
+        
         Args:
             pdf_path: PDF 文件路径
-            page_num: 页码（默认第一页）
+            max_page: 最大尝试页码（默认 2）
             
         Returns:
             Dict: {stock_code, year, name_en, name_zh}
@@ -273,22 +276,38 @@ class OllamaVisionExtractor:
             logger.error("❌ Vision 模型不可用，跳过提取")
             return None
         
-        # Step 2: PDF → 图片
-        image_base64 = self.pdf_page_to_image(pdf_path, page_num)
+        # Step 2: 🌟 先尝试 Page 1
+        for page_num in range(1, max_page + 1):
+            logger.info(f"   📄 正在尝试 Page {page_num}...")
+            
+            # PDF → 图片
+            image_base64 = self.pdf_page_to_image(pdf_path, page_num)
+            
+            if not image_base64:
+                logger.warning(f"   ⚠️ Page {page_num} 切割失败，尝试下一页...")
+                continue
+            
+            # Vision LLM 提取
+            result = await self.extract_from_image(image_base64)
+            
+            if result:
+                stock_code = result.get("stock_code")
+                year = result.get("year")
+                name_en = result.get("name_en")
+                name_zh = result.get("name_zh")
+                
+                # 🌟 检查是否有有效数据
+                if stock_code or year or name_en or name_zh:
+                    logger.info(f"   ✅ Page {page_num} 提取成功: stock={stock_code}, year={year}, name={name_en or name_zh}")
+                    return result
+                else:
+                    logger.warning(f"   ⚠️ Page {page_num} 返回空数据，尝试下一页...")
+            else:
+                logger.warning(f"   ⚠️ Page {page_num} Vision 提取失败，尝试下一页...")
         
-        if not image_base64:
-            logger.error("❌ PDF 切割失败")
-            return None
-        
-        # Step 3: Vision LLM 提取
-        result = await self.extract_from_image(image_base64)
-        
-        if result:
-            logger.info(f"✅ 封面提取完成: {result}")
-        else:
-            logger.warning("⚠️ Vision 提取返回空")
-        
-        return result
+        # 所有页面都失败
+        logger.warning(f"⚠️ Page 1-{max_page} Vision 提取全部失败")
+        return None
 
 
 # ============================================================

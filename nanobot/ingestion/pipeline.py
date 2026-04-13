@@ -1076,7 +1076,8 @@ class DocumentPipeline:
                 from .extractors.ollama_vision import OllamaVisionExtractor
                 
                 vision_extractor = OllamaVisionExtractor(model="qwen3-vl:4b")
-                vision_result = await vision_extractor.extract_cover_from_pdf(pdf_path, page_num=1)
+                # 🌟 使用新的参数名：max_page=2（尝试 Page 1 和 Page 2）
+                vision_result = await vision_extractor.extract_cover_from_pdf(pdf_path, max_page=2)
                 
                 if vision_result:
                     vision_stock = vision_result.get("stock_code")
