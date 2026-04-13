@@ -167,7 +167,7 @@ class OpenDataLoaderParser:
                         
                         # 🌟 啟動 Hybrid AI 視覺模式（用 Docling 進行版面與表格分析）
                         hybrid="docling-fast",        # 使用 docling 模型
-                        hybrid_mode="minimal",         # 🌟 "minimal" 只对最复杂的页面启動 AI
+                        hybrid_mode="auto",           # 🌟 "auto" (dynamic triage) 或 "full" (all pages)
                         hybrid_url="http://localhost:5002",  # 🌟 指向本地 Hybrid 服务器
                         hybrid_timeout="300000",      # 🌟 300 秒
                         hybrid_fallback=True          # 🌟 如果 Hybrid 失败，fallback 到 Java

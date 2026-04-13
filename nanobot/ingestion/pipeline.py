@@ -1494,7 +1494,7 @@ class DocumentPipeline:
         import httpx
         import asyncio
         
-        vanna_url = os.getenv("VANNA_SERVICE_URL", "http://vanna-service:8082")
+        vanna_url = os.getenv("VANNA_SERVICE_URL", "http://vanna-service:8000")  # 🌟 修正端口为 8000
         
         for attempt in range(1, max_retries + 1):
             try:
