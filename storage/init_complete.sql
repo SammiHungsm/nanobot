@@ -1047,13 +1047,6 @@ CREATE INDEX IF NOT EXISTS idx_ar_document_id ON artifact_relations(document_id)
 CREATE INDEX IF NOT EXISTS idx_ar_source_id ON artifact_relations(source_artifact_id);
 CREATE INDEX IF NOT EXISTS idx_ar_target_id ON artifact_relations(target_artifact_id);
 
--- 【觸發器: artifact_relations 表更新時間】
-DROP TRIGGER IF EXISTS update_artifact_relations_updated_at ON artifact_relations;
-CREATE TRIGGER update_artifact_relations_updated_at
-    BEFORE UPDATE ON artifact_relations
-    FOR EACH ROW
-    EXECUTE FUNCTION update_updated_at_column();
-
 
 -- ============================================================
 -- 【實用函數 Utility Functions】
@@ -1113,6 +1106,12 @@ CREATE TRIGGER update_vanna_training_data_updated_at
 DROP TRIGGER IF EXISTS update_key_personnel_updated_at ON key_personnel;
 CREATE TRIGGER update_key_personnel_updated_at
     BEFORE UPDATE ON key_personnel
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+-- 【觸發器: artifact_relations 表更新時間】
+DROP TRIGGER IF EXISTS update_artifact_relations_updated_at ON artifact_relations;
+CREATE TRIGGER update_artifact_relations_updated_at
+    BEFORE UPDATE ON artifact_relations
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 

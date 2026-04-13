@@ -20,17 +20,23 @@ from functools import lru_cache
 
 class EntityResolver:
     """
-    實體對齊器 (v3.0)
+    實體對齊器 (v3.1)
     
     將不同公司的會計名詞強制統一為標準名稱
+    
+    🎯 v3.1 新增：圖文關聯映射 (Relational Mapping)
+    - 解決「圖表在第 5 頁，解釋在第 50 頁」的跨頁斷裂問題
+    - 使用 Regex 自動偵測文字中提及的圖表（Figure 3, 表 5 等）
+    - 將關聯寫入 artifact_relations 表
     """
     
-    def __init__(self, mapping_path: Optional[str] = None):
+    def __init__(self, mapping_path: Optional[str] = None, db_client=None):
         """
         初始化
         
         Args:
             mapping_path: 財務名詞對照表路徑
+            db_client: DBClient 例（用于寫入 artifact_relations）
         """
         if mapping_path is None:
             mapping_path = Path(__file__).parent.parent / "config" / "financial_terms_mapping.json"
@@ -38,7 +44,144 @@ class EntityResolver:
         self.mapping_path = Path(mapping_path)
         self.mapping: Dict[str, Any] = {}
         self._alias_to_canonical: Dict[str, Tuple[str, str, str]] = {}  # alias -> (canonical_en, canonical_zh, category)
+        self.db = db_client  # 🎯 新增：DBClient 實例
         self._load_mapping()
+    
+    async def link_image_and_text_context(self, document_id: int) -> int:
+        """
+        🎯 [Step 2: 入庫魔法] 掃描所有 Text Chunk，尋找提及圖表的關鍵字，並建立關聯
+        
+        核心邏輯：
+        1. 從 raw_artifacts 抽取該文檔的所有 Text 類 Artifacts
+        2. 從 raw_artifacts 抽取該文檔的所有 Chart/Image 類 Artifacts
+        3. 使用 Regex 偵測 "Figure 3", "圖 5", "Table 2" 等關鍵字
+        4. 在 Chart/Image 的 metadata 中查找對應的標題/編號
+        5. 建立關聯並寫入 artifact_relations 表
+        
+        Args:
+            document_id: 文檔 ID（整數）
+            
+        Returns:
+            int: 建立的關聯數量
+            
+        Example:
+            # 在 PDF 入庫完成後執行
+            resolver = EntityResolver(db_client=db)
+            links_count = await resolver.link_image_and_text_context(document_id=123)
+            print(f"✅ 完成！共建立 {links_count} 條跨頁圖文關聯。")
+        """
+        if not self.db:
+            logger.warning("⚠️ DBClient 未初始化，無法建立圖文關聯")
+            return 0
+        
+        import re
+        from loguru import logger
+        
+        logger.info(f"🔍 正在為 Document {document_id} 執行圖文關聯映射 (Relational Mapping)...")
+        
+        # 1. 從 Database 抽取該文檔所有 Text 類 Artifacts
+        text_artifacts = await self.db.fetch_all(
+            """
+            SELECT artifact_id, content, page_num, metadata 
+            FROM raw_artifacts 
+            WHERE document_id = $1 AND artifact_type = 'text_chunk'
+            """,
+            document_id
+        )
+        
+        # 2. 從 Database 抽取該文檔所有 Chart/Image 類 Artifacts
+        image_artifacts = await self.db.fetch_all(
+            """
+            SELECT artifact_id, content, page_num, metadata, artifact_type
+            FROM raw_artifacts 
+            WHERE document_id = $1 AND artifact_type IN ('image', 'chart', 'table')
+            """,
+            document_id
+        )
+        
+        if not text_artifacts or not image_artifacts:
+            logger.info(f"ℹ️ Document {document_id} 暫無 Text 或 Chart/Image Artifacts")
+            return 0
+        
+        # 3. 定義 Regex 來捉 "Figure 3", "圖 5", "Table 2" 等
+        # 支援中英文：Fig, Figure, 圖, 表, Table
+        pattern = re.compile(
+            r'(?:fig\.?|figure|圖|圖表|表|table|chart)\s*(\d+[a-zA-Z]?)',
+            re.IGNORECASE
+        )
+        
+        # 4. 建立快速查找表：{figure_number: artifact_id}
+        # 假設 Chart/Image 的 metadata 中有 title 或 AI 解析出的編號
+        image_lookup: Dict[str, Dict[str, Any]] = {}
+        for img in image_artifacts:
+            img_meta = img.get('metadata', {})
+            if isinstance(img_meta, str):
+                import json
+                try:
+                    img_meta = json.loads(img_meta)
+                except:
+                    img_meta = {}
+            
+            # 從 metadata 提取可能的標題/編號
+            # 假設 ODL/Vision 模型會解析出類似 "Figure 3" 或 "表 5" 的標題
+            img_title = img_meta.get('title', '')
+            img_caption = img_meta.get('caption', '')
+            img_number = img_meta.get('figure_number', '')  # 例如: "3", "5A"
+            
+            # 多種可能的標識符
+            identifiers = [
+                img_title,
+                img_caption,
+                f"Figure {img_number}" if img_number else None,
+                f"圖 {img_number}" if img_number else None,
+                f"Table {img_number}" if img_number else None,
+                f"表 {img_number}" if img_number else None,
+            ]
+            
+            for identifier in identifiers:
+                if identifier:
+                    # 提取編號部分（如 "Figure 3" -> "3"，"圖 5A" -> "5A"）
+                    match = pattern.search(identifier)
+                    if match:
+                        figure_num = match.group(1)
+                        image_lookup[figure_num] = img
+        
+        # 5. 開始掃描 Text Artifacts
+        links_created = 0
+        for text_chunk in text_artifacts:
+            content = text_chunk.get('content', '')
+            text_artifact_id = text_chunk.get('artifact_id')
+            
+            # 偵測提及的圖表編號
+            matches = pattern.findall(content)
+            
+            for match in matches:
+                figure_num = str(match).strip()
+                
+                # 在 image_lookup 中查找對應的圖表
+                if figure_num in image_lookup:
+                    img_artifact = image_lookup[figure_num]
+                    img_artifact_id = img_artifact.get('artifact_id')
+                    
+                    # 搞到啦！寫入 Database
+                    success = await self.db.save_artifact_relation(
+                        document_id=document_id,
+                        source_artifact_id=img_artifact_id,  # 圖表 ID
+                        target_artifact_id=text_artifact_id,  # 文字 ID
+                        relation_type="explained_by",
+                        confidence=0.9,  # Regex match 置信度
+                        extraction_method="regex"
+                    )
+                    
+                    if success:
+                        links_created += 1
+                        logger.debug(
+                            f"🔗 建立關聯: {img_artifact_id} (Page {img_artifact.get('page_num')}) "
+                            f"-> {text_artifact_id} (Page {text_chunk.get('page_num')})"
+                        )
+        
+        logger.info(f"✅ 完成！共建立 {links_created} 條跨頁圖文關聯。")
+        return links_created
     
     def _load_mapping(self):
         """載入對照表"""

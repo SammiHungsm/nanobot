@@ -1,28 +1,42 @@
 """
-Ingestion Module - 數據攝取管道
+Nanobot Ingestion - 資料導入模組
 
-企業級模組化架構：
-- pipeline: 主流程協調器
-- parsers: PDF 解析 (快速/Vision)
-- extractors: LLM 數據提取
-- validators: 數據驗證
-- repository: 數據庫操作
+模組：
+- base_pipeline: Pipeline 基類（模板方法模式）
+- agentic_pipeline: Agent Pipeline（繼承基類）
+- batch_processor_v2: 简化版批量处理器
+- pipeline: 文档 Pipeline（主流程）
+- repository: DB 客户端
+- parsers: PDF Parser
+- extractors: 数据提取器
+
+使用方式：
+    # 使用新的 AgenticPipeline
+    from nanobot.ingestion.agentic_pipeline import AgenticPipeline
+    
+    pipeline = AgenticPipeline(db_url="postgresql://...")
+    await pipeline.connect()
+    result = await pipeline.run("report.pdf")
+    await pipeline.close()
+    
+    # 使用批量处理器
+    from nanobot.ingestion.batch_processor_v2 import process_directory
+    
+    stats = await process_directory("./pdfs", pipeline_type="agentic")
 """
 
-from .pipeline import DocumentPipeline, process_pdf_simple
-from .parsers import VisionParser, FastParser
-from .extractors import FinancialAgent, get_prompt
-from .validators import validate_all, ValidationResult
-from .repository import DBClient
+from .base_pipeline import BaseIngestionPipeline, create_pipeline
+from .agentic_pipeline import AgenticPipeline, create_agentic_pipeline
+from .batch_processor_v2 import process_directory, process_file_list
 
 __all__ = [
-    "DocumentPipeline",
-    "process_pdf_simple",
-    "VisionParser",
-    "FastParser",
-    "FinancialAgent",
-    "get_prompt",
-    "validate_all",
-    "ValidationResult",
-    "DBClient"
+    # Base Pipeline
+    "BaseIngestionPipeline",
+    "create_pipeline",
+    # Agentic Pipeline
+    "AgenticPipeline",
+    "create_agentic_pipeline",
+    # Batch Processor
+    "process_directory",
+    "process_file_list"
 ]

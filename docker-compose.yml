@@ -57,6 +57,8 @@ services:
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
       - DASHSCOPE_API_BASE=${DASHSCOPE_API_BASE:-https://coding.dashscope.aliyuncs.com/v1}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      # 🌟 新增：Hybrid URL（指向 nanobot-webui 容器）
+      - HYBRID_URL=http://nanobot-webui:5002
     volumes:
       - ./config:/app/config
       - ~/.nanobot:/root/.nanobot
@@ -102,6 +104,8 @@ services:
       - NANOBOT_CONFIG=/app/config/config.json  
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      # 🌟 新增：Hybrid URL（容器内自引用）
+      - HYBRID_URL=http://localhost:5002
     depends_on:
       postgres-financial:
         condition: service_healthy
@@ -163,6 +167,8 @@ services:
       # 🔑 API Keys for PDF processing
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      # 🌟 新增：Hybrid URL（指向 nanobot-webui 容器）
+      - HYBRID_URL=http://nanobot-webui:5002
     depends_on:
       - postgres-financial
     restart: unless-stopped

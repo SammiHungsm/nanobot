@@ -1339,6 +1339,31 @@ class DocumentPipeline:
             else:
                 logger.info("✅ 一般年報結構化提取完成")
             
+            # Step 5.5: 🎯 圖文關聯映射 (跨模態 Magic)
+            if progress_callback:
+                progress_callback(92.0, "建立圖文關聯...")
+            
+            try:
+                # 初始化 EntityResolver（帶 DBClient）
+                from .extractors.entity_resolver import EntityResolver
+                
+                resolver = EntityResolver(db_client=self.db)
+                
+                # 🌟 使用 document_id（整數）而非 doc_id（字串）
+                document_internal_id = await self.db.get_document_internal_id(doc_id)
+                
+                if document_internal_id:
+                    links_count = await resolver.link_image_and_text_context(document_internal_id)
+                    stats["cross_modal_links"] = links_count
+                    logger.info(f"✅ Stage 5.5 完成：建立了 {links_count} 條跨頁圖文關聯")
+                else:
+                    logger.warning(f"⚠️ Stage 5.5 跳過：無法獲取 document_id")
+                    stats["cross_modal_links"] = 0
+                    
+            except Exception as e:
+                logger.warning(f"⚠️ Stage 5.5 失敗（可忽略）: {e}")
+                stats["cross_modal_links"] = 0
+            
             # Step 6: 觸發 Vanna 訓練
             if progress_callback:
                 progress_callback(95.0, "觸發 Vanna 訓練...")

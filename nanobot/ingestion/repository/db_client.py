@@ -1259,6 +1259,126 @@ class DBClient:
         return [dict(row) for row in rows]
     
     # ===========================================
+    # Artifact Relations Operations (跨模態關聯)
+    # ===========================================
+    
+    async def save_artifact_relation(
+        self,
+        document_id: int,
+        source_artifact_id: str,
+        target_artifact_id: str,
+        relation_type: str = "explained_by",
+        confidence: float = 1.0,
+        extraction_method: str = "regex"
+    ) -> bool:
+        """
+        🎯 [Step 2: 入庫魔法] 將圖片與解釋文字建立關聯
+        
+        解決「圖表在第 5 頁，解釋在第 50 頁」的跨頁斷裂問題。
+        
+        Args:
+            document_id: 文檔 ID（整數）
+            source_artifact_id: 源 Artifact ID（通常是圖表/圖片）
+            target_artifact_id: 目標 Artifact ID（通常是解釋文字）
+            relation_type: 關係類型（explained_by / referenced_in）
+            confidence: 置信度（Regex = 0.9，LLM = 0.7）
+            extraction_method: 提取方法（regex / llm_inferred / manual）
+            
+        Returns:
+            bool: 是否成功
+            
+        Example:
+            # 第 5 頁的圖表 "Figure 3" 被第 50 頁的文字提及
+            await db.save_artifact_relation(
+                document_id=123,
+                source_artifact_id="chart_page5_figure3",
+                target_artifact_id="text_page50_para2",
+                relation_type="explained_by",
+                confidence=0.9,
+                extraction_method="regex"
+            )
+        """
+        try:
+            # 🌟 使用連接池（避免並發衝突）
+            async with self.connection() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO artifact_relations 
+                    (document_id, source_artifact_id, target_artifact_id, 
+                     relation_type, confidence_score, extraction_method)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    ON CONFLICT (source_artifact_id, target_artifact_id) DO NOTHING;
+                    """,
+                    document_id,
+                    source_artifact_id,
+                    target_artifact_id,
+                    relation_type,
+                    confidence,
+                    extraction_method
+                )
+            
+            logger.debug(f"🔗 成功建立圖文關聯: {source_artifact_id} -> {target_artifact_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ 建立圖文關聯失敗: {e}")
+            return False
+    
+    async def get_artifact_relations(
+        self,
+        artifact_id: str,
+        direction: str = "outgoing"  # outgoing: 查找圖表被哪些文字解釋；incoming: 查找文字提及哪些圖表
+    ) -> List[Dict[str, Any]]:
+        """
+        🎯 [Step 3: Runtime SQL JOIN] 查找 Artifact 的關聯
+        
+        Args:
+            artifact_id: Artifact ID
+            direction: 查找方向
+                - outgoing: 查找圖表被哪些文字解釋（source -> target）
+                - incoming: 查找文字提及哪些圖表（target -> source）
+            
+        Returns:
+            List[Dict]: 關聯列表
+            
+        Example:
+            # 查找 "Figure 3" 被哪些文字解釋
+            relations = await db.get_artifact_relations("chart_page5_figure3", direction="outgoing")
+            # 返回：[{"target_artifact_id": "text_page50_para2", "relation_type": "explained_by"}]
+        """
+        try:
+            # 🌟 使用連接池
+            async with self.connection() as conn:
+                if direction == "outgoing":
+                    # 查找圖表被哪些文字解釋
+                    rows = await conn.fetch(
+                        """
+                        SELECT ar.*, ra.content, ra.page_num, ra.artifact_type
+                        FROM artifact_relations ar
+                        JOIN raw_artifacts ra ON ar.target_artifact_id = ra.artifact_id
+                        WHERE ar.source_artifact_id = $1
+                        """,
+                        artifact_id
+                    )
+                else:
+                    # 查找文字提及哪些圖表
+                    rows = await conn.fetch(
+                        """
+                        SELECT ar.*, ra.content, ra.page_num, ra.artifact_type
+                        FROM artifact_relations ar
+                        JOIN raw_artifacts ra ON ar.source_artifact_id = ra.artifact_id
+                        WHERE ar.target_artifact_id = $1
+                        """,
+                        artifact_id
+                    )
+            
+            return [dict(row) for row in rows]
+            
+        except Exception as e:
+            logger.error(f"❌ 查找 Artifact 關聯失敗: {e}")
+            return []
+    
+    # ===========================================
     # Raw Artifacts Operations
     # ===========================================
     
@@ -1350,3 +1470,121 @@ class DBClient:
         except Exception as e:
             logger.error(f"❌ Artifact 入庫失敗: {e}")
             return False
+    
+    # ===========================================
+    # Artifact Relations Operations (跨模態關聯)
+    # ===========================================
+    
+    async def save_artifact_relation(
+        self,
+        document_id: int,
+        source_artifact_id: str,
+        target_artifact_id: str,
+        relation_type: str = "explained_by",
+        confidence: float = 1.0,
+        extraction_method: str = "regex"
+    ) -> bool:
+        """
+        [Step 2: 入庫魔法] 將圖片/圖表與解釋文字建立跨模態關聯
+        
+        解決「圖表在第 5 頁，解釋在第 50 頁」的痛點。
+        
+        Args:
+            document_id: 文檔 ID
+            source_artifact_id: 源 Artifact ID（通常是圖表/圖片）
+            target_artifact_id: 目標 Artifact ID（通常是解釋文字）
+            relation_type: 關係類型 (explained_by, referenced_in)
+            confidence: 關聯置信度 (0.0-1.0)
+            extraction_method: 提取方法 (regex, llm_inferred, manual)
+            
+        Returns:
+            bool: 是否成功
+        """
+        query = """
+        INSERT INTO artifact_relations 
+        (document_id, source_artifact_id, target_artifact_id, relation_type, confidence_score, extraction_method)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (source_artifact_id, target_artifact_id) DO NOTHING;
+        """
+        try:
+            async with self.connection() as conn:
+                await conn.execute(
+                    query,
+                    document_id,
+                    source_artifact_id,
+                    target_artifact_id,
+                    relation_type,
+                    confidence,
+                    extraction_method
+                )
+            logger.debug(f"🔗 成功建立圖文關聯: {source_artifact_id} -> {target_artifact_id} (confidence={confidence})")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ 建立圖文關聯失敗: {e}")
+            return False
+    
+    async def get_artifact_relations(
+        self,
+        source_artifact_id: str = None,
+        target_artifact_id: str = None,
+        document_id: int = None
+    ) -> List[Dict]:
+        """
+        [Step 3: Runtime Retrieval] 查詢 Artifact 關聯
+        
+        Args:
+            source_artifact_id: 源 Artifact ID（圖表）
+            target_artifact_id: 目標 Artifact ID（文字）
+            document_id: 文檔 ID
+            
+        Returns:
+            List[Dict]: 關聯記錄列表
+        """
+        try:
+            async with self.connection() as conn:
+                if source_artifact_id:
+                    # 查詢圖表的解釋文字
+                    rows = await conn.fetch(
+                        """
+                        SELECT 
+                            ar.*,
+                            ra.content AS target_content,
+                            ra.page_num AS target_page_num
+                        FROM artifact_relations ar
+                        JOIN raw_artifacts ra ON ar.target_artifact_id = ra.artifact_id
+                        WHERE ar.source_artifact_id = $1
+                        """,
+                        source_artifact_id
+                    )
+                elif target_artifact_id:
+                    # 查詢文字對應的圖表
+                    rows = await conn.fetch(
+                        """
+                        SELECT 
+                            ar.*,
+                            ra.content AS source_content,
+                            ra.page_num AS source_page_num,
+                            ra.file_path AS source_file_path
+                        FROM artifact_relations ar
+                        JOIN raw_artifacts ra ON ar.source_artifact_id = ra.artifact_id
+                        WHERE ar.target_artifact_id = $1
+                        """,
+                        target_artifact_id
+                    )
+                elif document_id:
+                    # 查詢文檔的所有關聯
+                    rows = await conn.fetch(
+                        """
+                        SELECT * FROM artifact_relations WHERE document_id = $1
+                        """,
+                        document_id
+                    )
+                else:
+                    return []
+            
+            return [dict(row) for row in rows]
+            
+        except Exception as e:
+            logger.error(f"❌ 查詢 Artifact 關聯失敗: {e}")
+            return []

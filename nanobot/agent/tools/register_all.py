@@ -64,6 +64,156 @@ def register_all_tools(registry) -> None:
     except ImportError as e:
         logger.warning(f"⚠️ Failed to import document_tools: {e}")
     
+    # 6. 註冊多模態 RAG 工具 (跨模態圖文關聯)
+    try:
+        from nanobot.agent.tools.multimodal_rag import MultimodalRAGTools
+        from nanobot.agent.tools.base import Tool
+        
+        # 創建 Tool Wrapper
+        class GetChartContextTool(Tool):
+            """獲取圖表的跨頁解釋文字"""
+            
+            @property
+            def name(self) -> str:
+                return "get_chart_context"
+            
+            @property
+            def description(self) -> str:
+                return """
+🎯 Runtime SQL JOIN - 解決「圖表在第 5 頁，解釋在第 50 頁」的跨頁斷裂問題
+
+當用戶問「圖 3 的營收為什麼下跌？」時，使用此工具：
+1. 先調用 find_chart_by_figure_number 獲取圖表的 artifact_id
+2. 再調用此工具獲取跨頁解釋文字
+
+Args:
+    image_artifact_id: 圖表的 Artifact ID
+    
+Returns:
+    str: 合併後的跨頁解釋文字
+"""
+            
+            @property
+            def parameters(self) -> dict:
+                return {
+                    "type": "object",
+                    "properties": {
+                        "image_artifact_id": {
+                            "type": "string",
+                            "description": "圖表的 Artifact ID"
+                        }
+                    },
+                    "required": ["image_artifact_id"]
+                }
+            
+            async def execute(self, image_artifact_id: str) -> str:
+                from nanobot.agent.tools.multimodal_rag import get_chart_context
+                return await get_chart_context(image_artifact_id)
+        
+        class FindChartByFigureNumberTool(Tool):
+            """根據圖表編號查找 Artifact ID"""
+            
+            @property
+            def name(self) -> str:
+                return "find_chart_by_figure_number"
+            
+            @property
+            def description(self) -> str:
+                return """
+根據圖表編號（如 "3", "5A"）查找對應的 Artifact ID
+
+用於將用戶口中的「圖 3」轉換為具體的 artifact_id
+
+Args:
+    document_id: 文檔 ID
+    figure_number: 圖表編號（例如："3", "5A", "12B"）
+    
+Returns:
+    str: Artifact ID，或 None
+"""
+            
+            @property
+            def parameters(self) -> dict:
+                return {
+                    "type": "object",
+                    "properties": {
+                        "document_id": {
+                            "type": "integer",
+                            "description": "文檔 ID"
+                        },
+                        "figure_number": {
+                            "type": "string",
+                            "description": "圖表編號（例如：3, 5A, 12B）"
+                        }
+                    },
+                    "required": ["document_id", "figure_number"]
+                }
+            
+            async def execute(self, document_id: int, figure_number: str) -> str:
+                from nanobot.agent.tools.multimodal_rag import find_chart_by_figure_number
+                result = await find_chart_by_figure_number(document_id, figure_number)
+                return result or "未找到對應的圖表"
+        
+        class AssembleMultimodalPromptTool(Tool):
+            """組裝多模態 Prompt"""
+            
+            @property
+            def name(self) -> str:
+                return "assemble_multimodal_prompt"
+            
+            @property
+            def description(self) -> str:
+                return """
+將圖片描述 + 跨頁文字 + 用戶問題組裝成完整 Prompt
+
+Args:
+    image_description: 圖表的描述
+    context_text: 跨頁解釋文字
+    user_question: 用戶的問題
+    
+Returns:
+    str: 組裝好的完整 Prompt
+"""
+            
+            @property
+            def parameters(self) -> dict:
+                return {
+                    "type": "object",
+                    "properties": {
+                        "image_description": {
+                            "type": "string",
+                            "description": "圖表的描述"
+                        },
+                        "context_text": {
+                            "type": "string",
+                            "description": "跨頁解釋文字"
+                        },
+                        "user_question": {
+                            "type": "string",
+                            "description": "用戶的問題"
+                        }
+                    },
+                    "required": ["image_description", "context_text", "user_question"]
+                }
+            
+            async def execute(
+                self,
+                image_description: str,
+                context_text: str,
+                user_question: str
+            ) -> str:
+                from nanobot.agent.tools.multimodal_rag import assemble_multimodal_prompt
+                return assemble_multimodal_prompt(image_description, context_text, user_question)
+        
+        registry.register(GetChartContextTool())
+        registry.register(FindChartByFigureNumberTool())
+        registry.register(AssembleMultimodalPromptTool())
+        
+        logger.info("✅ Registered multimodal RAG tools (cross-modal retrieval)")
+        
+    except ImportError as e:
+        logger.warning(f"⚠️ Failed to import multimodal_rag: {e}")
+    
     # 統計已註冊的工具
     total_tools = len(registry.list_tools())
     logger.info(f"📊 Total registered tools: {total_tools}")
@@ -113,5 +263,10 @@ TOOL_CATEGORIES = {
     "document": [
         "parse_pdf",
         "extract_tables"
+    ],
+    "multimodal_rag": [
+        "get_chart_context",
+        "find_chart_by_figure_number",
+        "assemble_multimodal_prompt"
     ]
 }

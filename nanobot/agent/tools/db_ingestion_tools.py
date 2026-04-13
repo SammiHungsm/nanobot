@@ -1383,4 +1383,9 @@ def register_ingestion_tools(registry) -> None:
     registry.register(SearchDocumentPagesTool())  # 🌟 Continuous Learning
     registry.register(BackfillFromFallbackTool())  # 🌟 Continuous Learning
     
-    logger.info("✅ Registered 14 ingestion tools including Continuous Learning Loop tools")
+    # 🌟 Multimodal RAG Tools (跨模態圖文檢索)
+    from nanobot.agent.tools.multimodal_rag import GetChartContextTool, GetChartContextByTitleTool
+    registry.register(GetChartContextTool())
+    registry.register(GetChartContextByTitleTool())
+    
+    logger.info("✅ Registered 16 ingestion tools including Multimodal RAG tools")
