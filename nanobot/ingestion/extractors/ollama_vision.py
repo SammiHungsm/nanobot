@@ -3,7 +3,7 @@ Ollama Vision Extractor - 使用本地 Ollama Vision 模型提取封面信息
 
 优势：
 1. 不需要额外安装 OpenDataLoader Hybrid
-2. 使用已有的 Ollama qwen3-vl:4b (3.3GB)
+2. 使用 Ollama gemma4:e4b (9.6GB, Google DeepMind Gemma 4)
 3. Docker 通过 host.docker.internal 访问
 
 使用场景：
@@ -33,10 +33,10 @@ class OllamaVisionExtractor:
     """
     Ollama Vision 提取器
     
-    使用 qwen3-vl:4b 模型从图片中提取结构化信息
+    使用 gemma4:e4b 模型从图片中提取结构化信息
     """
     
-    def __init__(self, model: str = "qwen3-vl:4b", api_base: str = None):
+    def __init__(self, model: str = "gemma4:e4b", api_base: str = None):
         """
         初始化
         

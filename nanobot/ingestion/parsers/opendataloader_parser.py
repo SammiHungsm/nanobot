@@ -141,13 +141,12 @@ class OpenDataLoaderParser:
                 logger.debug(f"   input_path: {pdf_path}")
                 logger.debug(f"   output_dir: {temp_dir}")
                 logger.debug(f"   format: json")
-                logger.info("🔥 警告：正在使用純 CPU 執行 OpenDataLoader Hybrid 視覺模式，請耐心等待...")
                 
                 # 🌟 如果只处理特定页面，不启用 Hybrid（快速模式）
                 if pages:
                     # 🌟 将 list 转换为逗号分隔的字符串
                     pages_str = ",".join(str(p) for p in pages)
-                    logger.info(f"📄 快速模式：只处理 Page {pages_str}（不启用 Hybrid）")
+                    logger.info(f"📄 快速模式：只处理 Page {pages_str}（纯 Java 解析，不启动 Hybrid）")
                     convert(
                         input_path=pdf_path,
                         output_dir=temp_dir,
@@ -158,6 +157,10 @@ class OpenDataLoaderParser:
                     )
                 else:
                     # 完整解析：启用 Hybrid
+                    import os
+                    use_cuda = os.environ.get("USE_CUDA", "false").lower() == "true"
+                    device = "CUDA GPU" if use_cuda else "CPU"
+                    logger.info(f"🚀 Hybrid AI 视觉模式：启动 {device} 解析（Docling 模型）")
                     convert(
                         input_path=pdf_path,          # 可以是 str 或 list
                         output_dir=temp_dir,          # 目錄路徑

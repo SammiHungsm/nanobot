@@ -29,10 +29,10 @@ COPY pyproject.toml /tmp/nanobot/
 COPY README.md /tmp/nanobot/
 COPY bridge/ /tmp/nanobot/bridge/
 
-# 🌟 GPU Version: Install standard PyTorch (auto-detects CUDA)
-# Remove CPU-only index URL to allow GPU version
+# 🌟 GPU Version: Install PyTorch with CUDA 12.4 (compatible with CUDA 12.7 driver)
+# Use cu124 index to match host NVIDIA driver 566.07 (CUDA 12.7)
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install torch torchvision
+    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
 
 # Install nanobot package with cache
 RUN --mount=type=cache,target=/root/.cache/pip \
