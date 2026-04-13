@@ -77,7 +77,8 @@ services:
       context: .
       dockerfile: webui/Dockerfile
     container_name: nanobot-webui
-    command: ["python", "-m", "app.main"]
+    # 🌟 使用 entrypoint 启动 Hybrid + WebUI
+    entrypoint: ["/bin/bash", "-c", "nohup opendataloader-pdf-hybrid --port 5002 --device cpu > /tmp/hybrid.log 2>&1 & sleep 10 && exec python -m app.main"]
     volumes:
       # 🌟 修正：全部統一掛載到 /app/data/ 底下，並修正 outputs 為 output
       - ./data/uploads:/app/data/uploads

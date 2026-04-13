@@ -49,7 +49,7 @@ class LLMClientManager:
         """
         # 先嘗試從 nanobot config.json 讀取
         try:
-            from nanobot.config.loader import load_config
+            from nanobot.config.loader import load_config, resolve_config_env_vars
             from pathlib import Path
             
             config_path = None
@@ -59,7 +59,8 @@ class LLMClientManager:
                 if not config_path.exists():
                     config_path = None
             
-            config = load_config(config_path)
+            # 🌟 关键修复：必须解析环境变量 ${VAR} 格式
+            config = resolve_config_env_vars(load_config(config_path))
             provider = config.get_provider()
             
             # 從 agents.defaults 讀取模型

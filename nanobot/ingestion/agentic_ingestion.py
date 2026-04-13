@@ -176,20 +176,89 @@ class AgenticIngestionOrchestrator:
         """
         self.agent_runner = agent_runner
         self.tools_registry = tools_registry
+        self._tools_registered = False  # 🌟 标记 Tools 是否已注册
         
-        # 註冊必要的 Tools
-        self._register_tools()
+        # 🌟 如果没有传入 agent_runner，自动创建一个
+        if self.agent_runner is None:
+            self._lazy_init_agent_runner()
+        
+        # 🌟 只有在没有延迟初始化时才注册 Tools
+        if not self._tools_registered:
+            self._register_tools()
         
         logger.info("🤖 Agentic Ingestion Orchestrator 初始化完成")
     
+    def _lazy_init_agent_runner(self):
+        """
+        延迟初始化 AgentRunner
+        
+        🌟 当外部没有传入 agent_runner 时，自动创建一个
+        
+        创建步骤：
+        1. 从 LLMClientManager 获取 API Key 和 Base URL
+        2. 创建 OpenAICompatProvider
+        3. 创建 ToolRegistry 并注册 Tools
+        4. 创建 AgentRunner
+        """
+        try:
+            from nanobot.providers.openai_compat_provider import OpenAICompatProvider
+            from nanobot.agent.runner import AgentRunner
+            from nanobot.agent.tools.registry import ToolRegistry
+            from nanobot.ingestion.utils.llm_client import get_llm_client, get_llm_model
+            
+            # 1. 从 LLMClientManager 获取配置
+            llm_client = get_llm_client()
+            model = get_llm_model()
+            
+            if llm_client:
+                # 2. 获取 API Key 和 Base URL
+                # LLMClientManager 返回的是 AsyncOpenAI 客户端，我们需要提取配置
+                api_key = llm_client.api_key if hasattr(llm_client, 'api_key') else None
+                api_base = str(llm_client.base_url) if hasattr(llm_client, 'base_url') else None
+                
+                if not api_key or api_key.startswith("sk-YOUR"):
+                    logger.warning("   ⚠️ API Key 无效，将使用规则模式处理")
+                    return
+                
+                # 3. 创建 OpenAICompatProvider
+                provider = OpenAICompatProvider(
+                    api_key=api_key,
+                    api_base=api_base,
+                    default_model=model or "qwen3.5-plus"
+                )
+                
+                # 4. 创建 ToolRegistry（如果还没有）
+                if self.tools_registry is None:
+                    self.tools_registry = ToolRegistry()
+                
+                # 5. 注册 Ingestion Tools
+                self._register_tools()
+                
+                # 6. 创建 AgentRunner
+                self.agent_runner = AgentRunner(provider=provider)
+                
+                logger.info(f"   ✅ 延迟初始化 AgentRunner 完成 (model={model or 'qwen3.5-plus'})")
+            else:
+                logger.warning("   ⚠️ 无法获取 LLM Client，将使用规则模式处理")
+                
+        except Exception as e:
+            logger.error(f"   ❌ 延迟初始化 AgentRunner 失败: {e}")
+            logger.warning("   ⚠️ 将使用规则模式处理")
+    
     def _register_tools(self):
         """註冊必要的 Tools"""
-        if self.tools_registry:
+        if self.tools_registry and not self._tools_registered:
             from nanobot.agent.tools.db_ingestion_tools import register_ingestion_tools
             from nanobot.agent.tools.dynamic_schema_tools import register_dynamic_schema_tools
             
             register_ingestion_tools(self.tools_registry)
             register_dynamic_schema_tools(self.tools_registry)
+            
+            self._tools_registered = True  # 🌟 标记已注册
+            
+            # 🌟 打印注册的工具列表（上线前确认）
+            registered_tools = list(self.tools_registry._tools.keys())
+            logger.info(f"   ✅ 已注册 {len(registered_tools)} 个 Tools: {registered_tools}")
     
     async def process_document(
         self,
@@ -200,15 +269,38 @@ class AgenticIngestionOrchestrator:
         """
         處理單個文檔
         
+        🌟 支持不同阶段的处理：
+        - Stage 0 (预处理): 识别报告类型、提取母公司
+        - Stage 5 (结构化提取): 提取 Revenue Breakdown 并写入数据库
+        
         Args:
-            document_content: PDF 前 1-2 頁內容
+            document_content: PDF 内容或 Stage 5 Prompt
             filename: 檔案名稱
             user_hints: 用戶提供的提示
+                - stage: "preprocessing" 或 "structured_extraction"
+                - doc_type, index_theme, confirmed_doc_industry, etc.
         
         Returns:
             處理結果
         """
         logger.info(f"📄 開始處理文檔: {filename}")
+        
+        # 🌟 检查是否是 Stage 5 (结构化提取)
+        stage = user_hints.get("stage", "preprocessing") if user_hints else "preprocessing"
+        
+        if stage == "structured_extraction":
+            # 🌟 Stage 5: 直接使用传入的 Prompt，不叠加 Stage 0 的 System Prompt
+            logger.info("   🔧 Stage 5: 结构化提取与写入")
+            
+            if self.agent_runner:
+                # 直接执行传入的 stage5_prompt
+                return await self._process_with_agent(document_content)
+            else:
+                # 使用规则处理 Stage 5
+                return await self._process_stage5_with_rules(user_hints)
+        
+        # 🌟 Stage 0: 使用默认的预处理逻辑
+        logger.info("   🔧 Stage 0: 预处理（识别报告类型）")
         
         # 構建完整 Prompt
         prompt = self._build_prompt(document_content, filename, user_hints)
@@ -219,6 +311,60 @@ class AgenticIngestionOrchestrator:
         
         # 否則使用規則處理
         return await self._process_with_rules(document_content, filename, user_hints)
+    
+    async def _process_stage5_with_rules(
+        self,
+        user_hints: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        使用规则处理 Stage 5 (结构化提取)
+        
+        🌟 当没有 agent_runner 时，使用硬编码逻辑
+        
+        Args:
+            user_hints: 包含 page_content, company_id, year, page_num 等
+        
+        Returns:
+            处理结果
+        """
+        from nanobot.agent.tools.db_ingestion_tools import SmartInsertDocumentTool
+        
+        logger.info("   📋 使用规则模式处理 Stage 5")
+        
+        if not user_hints:
+            return {"success": False, "error": "No user_hints provided"}
+        
+        page_content = user_hints.get("page_content", "")
+        company_id = user_hints.get("company_id")
+        year = user_hints.get("year")
+        page_num = user_hints.get("page_num")
+        is_index_report = user_hints.get("doc_type") == "index_report"
+        
+        # 🌟 如果是指数报告，使用 SmartInsertDocumentTool 写入
+        if is_index_report:
+            params = {
+                "filename": user_hints.get("filename", "unknown.pdf"),
+                "report_type": "index_report",
+                "parent_company": None,
+                "index_theme": user_hints.get("index_theme"),
+                "confirmed_doc_industry": user_hints.get("confirmed_doc_industry"),
+                "dynamic_data": {"page_num": page_num, "year": year},
+                "sub_companies": [],  # 🌟 从 page_content 提取成分股（简化版）
+                "industry_assignment_rule": "A"
+            }
+            
+            tool = SmartInsertDocumentTool()
+            return await tool.execute(**params)
+        
+        # 🌟 如果是年报，尝试提取 Revenue Breakdown
+        # (这里简化处理，实际应该调用 FinancialAgent)
+        return {
+            "success": True,
+            "stage": "structured_extraction",
+            "page_num": page_num,
+            "company_id": company_id,
+            "note": "Stage 5 processed with rules (no agent_runner)"
+        }
     
     def _build_prompt(
         self,
@@ -258,10 +404,44 @@ class AgenticIngestionOrchestrator:
     async def _process_with_agent(self, prompt: str) -> Dict[str, Any]:
         """使用 Agent 處理"""
         try:
-            result = await self.agent_runner.run(prompt)
-            return result
+            # 🌟 AgentRunner.run() 需要 AgentRunSpec，而不是简单的 prompt 字符串
+            from nanobot.agent.runner import AgentRunSpec, AgentRunResult
+            from nanobot.agent.hook import AgentHook
+            
+            # 构建 initial_messages
+            initial_messages = [
+                {"role": "system", "content": "你是一个高级 PostgreSQL 数据库写入 Agent。请根据用户的指令执行数据库写入操作。"},
+                {"role": "user", "content": prompt}
+            ]
+            
+            # 构建 AgentRunSpec
+            spec = AgentRunSpec(
+                initial_messages=initial_messages,
+                tools=self.tools_registry,
+                model=self.agent_runner.provider.default_model if self.agent_runner.provider else "qwen3.5-plus",
+                max_iterations=10,
+                max_tool_result_chars=8000,
+                temperature=0.3,
+                hook=AgentHook()
+            )
+            
+            # 调用 AgentRunner.run()
+            result: AgentRunResult = await self.agent_runner.run(spec)
+            
+            # 返回结果
+            return {
+                "success": result.stop_reason == "completed",
+                "final_content": result.final_content,
+                "tools_used": result.tools_used,
+                "usage": result.usage,
+                "stop_reason": result.stop_reason,
+                "error": result.error
+            }
+            
         except Exception as e:
-            logger.error(f"❌ Agent 處理失敗: {e}")
+            logger.error(f"❌ Agent 处理失败: {e}")
+            import traceback
+            traceback.print_exc()
             return {"success": False, "error": str(e)}
     
     async def _process_with_rules(

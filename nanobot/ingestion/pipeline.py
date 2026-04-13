@@ -41,6 +41,9 @@ from .extractors.page_classifier import PageClassifier
 # 導入統一的 LLM 客戶端
 from .utils.llm_client import get_llm_client, get_llm_model, get_vision_model
 
+# 導入 Keyword Manager（動態關鍵字管理）
+from .utils.keyword_manager import KeywordManager
+
 
 # ===========================================
 # 跨頁表格合併工具
@@ -232,8 +235,9 @@ class DocumentPipeline:
     def _get_agentic_pipeline(self):
         """獲取或創建 AgenticPipeline 實例"""
         if self._agentic_pipeline is None and self.enable_agentic_ingestion:
-            from .agentic_ingestion import AgenticIngestionPipeline
-            self._agentic_pipeline = AgenticIngestionPipeline(agent_loop=self.agent_loop)
+            # 🌟 修正导入错误：实际类名是 AgenticIngestionOrchestrator
+            from .agentic_ingestion import AgenticIngestionOrchestrator
+            self._agentic_pipeline = AgenticIngestionOrchestrator(agent_runner=self.agent_loop)
         return self._agentic_pipeline
     
     async def connect(self):
@@ -407,30 +411,36 @@ class DocumentPipeline:
         company_id: int,
         doc_id: str,
         progress_callback: Callable = None,
-        year: int = None,  # 🌟 新增：年份参数（由主流程传入）
-        artifacts: List[Dict[str, Any]] = None  # 🌟 新增：OpenDataLoader 解析结果
+        year: int = None,
+        artifacts: List[Dict[str, Any]] = None,
+        # 🌟 新增 UI 参数（来自 WebUI）
+        is_index_report: bool = False,
+        index_theme: str = None,
+        confirmed_doc_industry: str = None
     ) -> Dict[str, Any]:
         """
         智能結構化提取
         
-        🌟 重要變更：
-        - save_all_pages_to_fallback_table 已抽離到 process_pdf_full Step 4.5
-        - 確保所有文檔（包括指數報告）都會保存兜底數據
-        - 此函數只負責結構化提取
-        - 🔧 移除 PyMuPDF 自己切 PDF 的邏輯，完全依賴 OpenDataLoader artifacts
+        🌟 核心改进：根据用户建议，实现真正的 Agentic 写入逻辑
+        - UI 决定大方向 (is_index_report, index_theme, confirmed_doc_industry)
+        - AI 处理细节落库 (查 Schema、写 SQL、塞 JSON)
         
         Args:
             pdf_path: PDF 路徑
-            company_id: 公司 ID
+            company_id: 公司 ID (指数报告时为 None)
             doc_id: 文檔 ID
             progress_callback: 進度回調
             year: 年份（由主流程传入）
-            artifacts: OpenDataLoader 解析结果（替代 PyMuPDF 切 PDF）
+            artifacts: OpenDataLoader 解析结果
+            is_index_report: 是否為指數報告（来自 UI）
+            index_theme: 指數主題 (如 "Hang Seng Biotech Index")
+            confirmed_doc_industry: 報告定義的行業 (如 "Biotech")
             
         Returns:
             Dict: 提取結果統計
         """
         logger.info(f"🧠 開始智能結構化提取...")
+        logger.info(f"   👉 UI 設定: 指數報告={is_index_report}, 行業={confirmed_doc_industry}")
         
         # 🌟 如果没有传入年份，使用当前年份作为 fallback
         if not year:
@@ -443,6 +453,12 @@ class DocumentPipeline:
             "revenue_breakdown": {"pages": [], "extracted": 0},
             "errors": []
         }
+        
+        # 🌟 Phase 3: 获取总页数（用于上下文感知）
+        total_pages = 0
+        if artifacts:
+            total_pages = max(a.get("page_num", 1) for a in artifacts)
+            logger.info(f"   📊 PDF 总页数: {total_pages}")
         
         # 🌟 如果没有 artifacts，跳过提取（不再自己切 PDF）
         if not artifacts:
@@ -458,13 +474,19 @@ class DocumentPipeline:
             revenue_pages = set()
             
             # 🌟 方法 A：在 artifacts 中搜索關鍵字（替代 FastParser.scan_for_keywords）
-            keywords = [
-                "revenue breakdown", "geographical", "geographic", 
-                "region", "segment", "business segment",
-                "收入分佈", "地區收入", "業務分佈", "地理分佈",
-                "歐洲", "美洲", "中國", "亞洲", "香港",
-                "turnover", "sales by", "income by"
-            ]
+            # 🌟 改為從 JSON 讀取關鍵字（支持 Agent 動態學習）
+            # 使用 raw 目录（Docker 容器可写）
+            keyword_manager = KeywordManager("/app/data/raw/search_keywords.json")
+            keywords = keyword_manager.get_all_keywords_flat("revenue_breakdown")
+            
+            # 如果 JSON 沒有關鍵字，使用基本 Cold-start 名單
+            if not keywords:
+                keywords = [
+                    "revenue breakdown", "geographical", "geographic", 
+                    "region", "segment", "business segment",
+                    "收入分佈", "地區收入", "業務分佈"
+                ]
+                logger.warning("⚠️ Keyword JSON 空白，使用 Cold-start 名單")
             
             for artifact in artifacts:
                 artifact_type = artifact.get("type")
@@ -491,20 +513,38 @@ class DocumentPipeline:
             
             logger.info(f"   📊 Artifacts 搜索找到 {len(revenue_pages)} 個候選頁面: {sorted(revenue_pages)}")
             
-            # 方法 B：LLM 語義分類 (作為輔助補強，不當作唯一依賴)
-            # 注意：LLM 分類可能因為 FastParser 抓出空白文字而失敗
-            try:
-                pages_text = await self._extract_all_pages_text(pdf_path)
-                if pages_text:
-                    classification_result = await self.page_classifier.find_candidate_pages(
-                        pages_text,
-                        target_data_types=["revenue_breakdown", "key_personnel"]
-                    )
-                    llm_pages = classification_result.get("revenue_breakdown", [])
-                    revenue_pages.update(llm_pages)
-                    logger.info(f"   🧠 LLM 分類找到 {len(llm_pages)} 個額外候選頁面: {llm_pages}")
-            except Exception as e:
-                logger.warning(f"   ⚠️ LLM 分類失敗（跳過，不影響特徵掃描結果）: {e}")
+            # 🌟 Phase 3: 记录关键词使用（上下文感知）
+            keyword_hits = {}  # 记录每个关键词命中的页面
+            for keyword in keywords:
+                keyword_hits[keyword] = []  # 初始化
+            
+            # 🌟 Phase 3: 重新扫描，记录每个关键词命中的页面（用于后续上下文记录）
+            for artifact in artifacts:
+                artifact_type = artifact.get("type")
+                page_num = artifact.get("page_num")
+                
+                if artifact_type == "text_chunk":
+                    content = str(artifact.get("content", "")).lower()
+                    for keyword in keywords:
+                        if keyword.lower() in content and page_num not in keyword_hits[keyword]:
+                            keyword_hits[keyword].append(page_num)
+                            break
+                
+                elif artifact_type == "table":
+                    table_json = artifact.get("content_json", {})
+                    content = json.dumps(table_json, ensure_ascii=False).lower()
+                    for keyword in keywords:
+                        if keyword.lower() in content and page_num not in keyword_hits[keyword]:
+                            keyword_hits[keyword].append(page_num)
+                            break
+            
+            # 🌟 记录关键词使用（usage_count）
+            for keyword, hit_pages in keyword_hits.items():
+                if hit_pages:
+                    logger.debug(f"   📝 Keyword '{keyword}' used in pages: {hit_pages}")
+            
+            # 🌟 移除方法 B (LLM 語義分類)：用户明确不想用 PyMuPDF 自己切 PDF
+            # 🌟 完全依赖 Artifacts 搜索结果，不再调用 _extract_all_pages_text
             
             revenue_pages = sorted(list(revenue_pages))
             result["revenue_breakdown"]["pages"] = revenue_pages
@@ -541,30 +581,164 @@ class DocumentPipeline:
                 
                 logger.info(f"   📊 提取 Page {page_num} ({len(page_content)} chars)...")
                 
-                # 🌟 調用 LLM 提取 Revenue Breakdown (不再使用 Vision Parser)
+                # 🌟 核心改进：根据用户建议，实现 Agentic 写入逻辑
+                # UI 决定大方向，AI 处理细节落库
+                
                 try:
-                    extracted_data = await self.agent.extract_revenue_breakdown(page_content)
+                    # 🌟 真正的 Agentic 写入逻辑（Stage 5 专属 Prompt）
+                    # 🌟 修正：直接调用 _get_agentic_pipeline()，而不是检查 self.agent_loop
                     
-                    if extracted_data:
-                        # 验证百分比总和
-                        total_pct = sum(
-                            item.get("percentage", 0) 
-                            for item in extracted_data.values()
+                    # 1. 构建专属于 Stage 5 的 Prompt
+                    if is_index_report:
+                        report_context = f"""
+这是一份【指数/行业报告】(主题: {index_theme or 'Unknown'}, 行业: {confirmed_doc_industry or 'Unknown'})。
+里面包含多间公司的数据，请不要预设单一母公司。
+行业分配规则：规则 A - 所有成分股都应指派行业 '{confirmed_doc_industry or 'Unknown'}'"""
+                    else:
+                        report_context = f"""
+这是一份【单一公司年报】，母公司 ID 为 {company_id or '待提取'}。
+行业分配规则：规则 B - 使用 AI 提取各公司的行业"""
+                    
+                    # 2. 🌟 改进版：智能多表写入 Prompt（不再只关注 revenue_breakdown）
+                    stage5_prompt = f"""
+你是一个高级 PostgreSQL 数据库写入 Agent。
+任务目标：分析 PDF 第 {page_num} 页的内容类型，智能提取并写入对应的数据表。
+
+【背景资讯】
+- 文档 ID: {doc_id}
+- 年份: {year}
+- 公司 ID: {company_id or '待提取'}
+- 报告类型: {report_context}
+
+【第一步：页面类型识别】⚠️ 重要！先判断这页是什么类型的内容：
+
+| 页面类型 | 识别关键词 | 目标数据表 |
+|---------|-----------|-----------|
+| 📊 Revenue Breakdown | "revenue", "segment", "geographical", "地区", "分部" | revenue_breakdown |
+| 👤 Key Personnel | "director", "management", "高管", "董事", "委员会" | key_personnel |
+| 💰 Financial Metrics | "profit", "assets", "liabilities", "收入", "利润", "资产" | financial_metrics |
+| 📈 Market Data | "share price", "market cap", "股价", "市值" | market_data |
+| 🏛️ Shareholding | "shareholder", "持股", "股东结构" | shareholding_structure |
+| 🌱 ESG/Other | "ESG", "碳排放", "sustainability" | documents.dynamic_attributes |
+
+【第二步：数据提取与写入】根据识别的类型，调用对应的写入逻辑：
+
+1. 📊 **Revenue Breakdown 页面** → 写入 revenue_breakdown 表：
+   - segment_name (地区/业务名称)
+   - segment_type (geography/business/product)
+   - revenue_percentage (百分比)
+   - revenue_amount (金额)
+   - currency (货币单位)
+
+2. 👤 **Key Personnel 页面** → 写入 key_personnel 表：
+   - name_en, name_zh (姓名)
+   - position_title_en (职位)
+   - board_role (Executive/Non-Executive/Independent)
+   - committee_membership (委员会成员，JSONB 数组)
+   - biography (简介)
+
+3. 💰 **Financial Metrics 页面** → 写入 financial_metrics 表：
+   - metric_name (指标名称，如 "revenue", "net_income")
+   - value (数值)
+   - unit (单位)
+   - standardized_value (标准化为 HKD)
+
+4. 📈 **Market Data 页面** → 写入 market_data 表：
+   - metric_name (股价、市值等)
+   - value, unit
+   - date (数据日期)
+
+5. 🏛️ **Shareholding 页面** → 写入 shareholding_structure 表：
+   - shareholder_name (股东名称)
+   - share_type (股份类型)
+   - shares_held (持股数)
+   - percentage (持股比例)
+
+6. 🌱 **ESG/特殊属性** → 使用 update_dynamic_attributes 写入 JSONB：
+   - 例如：{{"esg_score": 85, "carbon_emission": 1234}}
+
+【第三步：执行写入】
+1. 先调用 get_db_schema 查看表结构
+2. 根据页面类型，提取对应数据
+3. 使用 smart_insert_document 或直接 SQL 写入
+4. 记录新发现的词汇 → register_new_keyword
+
+【待处理文本】
+{page_content[:6000]}
+
+请先判断页面类型，然后执行对应的提取和写入操作。
+"""
+                    
+                    # 3. 🎯 直接获取 Agentic Pipeline（不依赖 agent_loop）
+                    pipeline = self._get_agentic_pipeline()
+                    
+                    if pipeline:
+                        # 🌟 构建 user_hints，标记这是 Stage 5
+                        user_hints = {
+                            "stage": "structured_extraction",  # 🌟 标记这是 Stage 5（不是 Stage 0）
+                            "doc_type": "index_report" if is_index_report else "annual_report",
+                            "index_theme": index_theme,
+                            "confirmed_doc_industry": confirmed_doc_industry,
+                            "page_num": page_num,
+                            "year": year,
+                            "company_id": company_id,
+                            "page_content": page_content[:6000]  # 传入页面内容
+                        }
+                        
+                        logger.info(f"   🤖 将 Page {page_num} 交给 AgenticIngestionOrchestrator 处理...")
+                        
+                        # 🌟 调用 process_document 并传入 Stage 5 Prompt
+                        result_agentic = await pipeline.process_document(
+                            document_content=stage5_prompt,  # 🌟 传入 Stage 5 Prompt（不叠加 Stage 0 的 System Prompt）
+                            filename=Path(pdf_path).name,
+                            user_hints=user_hints
                         )
                         
-                        if 99.0 <= total_pct <= 101.0:
-                            # 🌟 入库
-                            inserted = await self._insert_revenue_breakdown(
-                                company_id, year, extracted_data, 
-                                Path(pdf_path).name, page_num
-                            )
-                            result["revenue_breakdown"]["extracted"] += inserted
-                            logger.info(f"   ✅ Page {page_num} 提取成功: {inserted} 瀦記錄")
-                        else:
-                            logger.warning(f"   ⚠️ Page {page_num} 百分比總和 {total_pct}% 不為 100%，跳過")
+                        logger.info(f"   ✅ Page {page_num} Agentic 写入完成！")
+                        result["revenue_breakdown"]["extracted"] += 1
+                    
+                    # 🌟 方案 B: 传统硬编码写入（如果无法获取 Agentic Pipeline）
                     else:
-                        logger.warning(f"   ⚠️ Page {page_num} LLM 提取失敗")
+                        logger.warning("   ⚠️ 无法获取 Agentic Pipeline，退回传统 Hardcode 写入模式")
+                        extracted_data = await self.agent.extract_revenue_breakdown(page_content)
                         
+                        if extracted_data:
+                            # 验证百分比总和
+                            total_pct = sum(
+                                item.get("percentage", 0) 
+                                for item in extracted_data.values()
+                            )
+                            
+                            if 99.0 <= total_pct <= 101.0:
+                                # 🌟 入库（仅适用于有 company_id 的年报）
+                                if company_id:
+                                    inserted = await self._insert_revenue_breakdown(
+                                        company_id, year, extracted_data, 
+                                        Path(pdf_path).name, page_num
+                                    )
+                                    result["revenue_breakdown"]["extracted"] += inserted
+                                    logger.info(f"   ✅ Page {page_num} 提取成功: {inserted} 瀦記錄")
+                                    
+                                    # 🌟 Phase 3: 记录关键词命中（带上下文）
+                                    km = KeywordManager()
+                                    for keyword, hit_pages in keyword_hits.items():
+                                        if page_num in hit_pages:
+                                            km.record_hit_with_context(
+                                                keyword=keyword,
+                                                page_num=page_num,
+                                                total_pages=total_pages,
+                                                features={"has_table": True, "has_percentage": True},
+                                                hit=True,
+                                                industry=confirmed_doc_industry
+                                            )
+                                else:
+                                    logger.warning(f"   ⚠️ 无 company_id，无法写入 revenue_breakdown（指数报告请启用 Agentic 模式）")
+                            else:
+                                logger.warning(f"   ⚠️ Page {page_num} 百分比總和 {total_pct}% 不為 100%，跳過")
+                        else:
+                            logger.warning(f"   ⚠️ Page {page_num} LLM 提取失敗")
+                            logger.warning(f"   ⚠️ Page {page_num} LLM 提取失敗")
+                            
                 except Exception as e:
                     logger.error(f"   ❌ Page {page_num} 提取失敗: {e}")
                     result["errors"].append(f"Page {page_num}: {str(e)}")
@@ -683,6 +857,12 @@ class DocumentPipeline:
             logger.warning("   ⚠️ 没有 artifacts，跳过保存")
             return 0
         
+        # 🌟 N+1 效能優化：在迴圈外先查出 document_id（一次查詢，重複使用）
+        document_id = await self.db.get_document_internal_id(doc_id)
+        if not document_id:
+            logger.error(f"❌ 找不到文檔 ID={doc_id} 的內部 ID，無法保存 pages")
+            return 0
+        
         source_file = Path(pdf_path).name
         saved_count = 0
         
@@ -736,7 +916,7 @@ class DocumentPipeline:
                 
                 success = await self.db.insert_document_page(
                     company_id=company_id,
-                    doc_id=doc_id,
+                    document_id=document_id,  # 🌟 N+1 效能優化：傳入整數 ID
                     year=year,
                     page_num=page_num,
                     markdown_content=text_content,
@@ -882,6 +1062,48 @@ class DocumentPipeline:
             logger.warning("   ⚠️ 沒有 artifacts，嘗試 Fallback...")
         
         # ==========================================
+        # 🌟 方案 A2: Vision LLM 提取封面（当 Page 1 没有文字时）
+        # ==========================================
+        
+        # 检查 Page 1 是否存在
+        page1_artifacts = [a for a in (artifacts or []) if a.get("page_num") == 1]
+        
+        if not page1_artifacts and not stock_code:
+            # 🌟 Page 1 没有文字层 → 使用 Vision 提取
+            logger.info("   🎨 Page 1 没有文字层（纯向量绘图封面），启动 Vision 提取...")
+            
+            try:
+                from .extractors.ollama_vision import OllamaVisionExtractor
+                
+                vision_extractor = OllamaVisionExtractor(model="qwen3-vl:4b")
+                vision_result = await vision_extractor.extract_cover_from_pdf(pdf_path, page_num=1)
+                
+                if vision_result:
+                    vision_stock = vision_result.get("stock_code")
+                    vision_year = vision_result.get("year")
+                    vision_name_en = vision_result.get("name_en")
+                    vision_name_zh = vision_result.get("name_zh")
+                    
+                    # 如果 Vision 提取成功，优先使用
+                    if vision_stock:
+                        stock_code = vision_stock
+                        logger.info(f"   ✅ Vision 提取 stock_code: {stock_code}")
+                    
+                    if vision_year:
+                        year = vision_year
+                        logger.info(f"   ✅ Vision 提取 year: {year}")
+                    
+                    if vision_name_en or vision_name_zh:
+                        name_en = vision_name_en or name_en
+                        name_zh = vision_name_zh or name_zh
+                        logger.info(f"   ✅ Vision 提取 name: {name_en or name_zh}")
+                else:
+                    logger.warning("   ⚠️ Vision 提取失败，继续 Fallback...")
+                    
+            except Exception as e:
+                logger.warning(f"   ⚠️ Vision 提取异常: {e}，继续 Fallback...")
+        
+        # ==========================================
         # 🌟 方案 B: Fallback - 從文件名提取
         # ==========================================
         
@@ -1021,18 +1243,49 @@ class DocumentPipeline:
             # Step 2: 創建文檔記錄
             await self._create_document(pdf_path, company_id, doc_id, file_hash)
             
-            # Step 3: 🌟 使用 OpenDataLoaderParser 解析 PDF
+            # Step 3: 🌟 快速解析 Page 1-2（用于公司提取）
             if progress_callback:
-                progress_callback(15.0, "OpenDataLoader 解析 PDF...")
+                progress_callback(10.0, "快速解析封面...")
+            
+            cover_artifacts = []
+            if self.opendataloader_parser:
+                # 🌟 只解析 Page 1-2（快速模式，不启用 Hybrid）
+                cover_artifacts = self.opendataloader_parser.parse_pages(pdf_path, pages=[1, 2], doc_id=doc_id)
+                logger.info(f"   ✅ 封面解析完成: {len(cover_artifacts)} 個 artifacts")
+            
+            # Step 4: 提取公司信息（如果沒有 company_id，且不是指數報告）
+            if progress_callback:
+                progress_callback(20.0, "🧠 提取公司信息...")
+            
+            # 🌟 修正：如果是指數報告，絕對不能提取母公司！
+            if not company_id and not is_index_report:
+                # 🌟 使用封面 artifacts 提取公司信息（更快）
+                company_id = await self._extract_and_create_company(pdf_path, doc_id, artifacts=cover_artifacts)
+                if company_id:
+                    logger.info(f"✅ 已關聯公司: ID={company_id}")
+                else:
+                    logger.warning("⚠️ 無法提取公司信息")
+            elif is_index_report:
+                logger.info("ℹ️ 指數報告無需提取母公司，跳過提取")
+                company_id = None
+            
+            # Step 5: 🌟 完整解析 PDF（用于数据提取）
+            if progress_callback:
+                progress_callback(30.0, "完整解析 PDF...")
             
             if self.opendataloader_parser:
                 artifacts = await self.opendataloader_parser.parse_async(pdf_path, doc_id)
-                logger.info(f"   ✅ OpenDataLoader 解析完成: {len(artifacts)} 個 artifacts")
+                logger.info(f"   ✅ OpenDataLoader 完整解析: {len(artifacts)} 個 artifacts")
                 
-                # Step 3.1: 保存 Artifacts 到文件和數據庫
+                # 合併封面 artifacts（如果完整解析沒有 Page 1-2）
+                if cover_artifacts and not any(a.get("page_num") in [1, 2] for a in artifacts):
+                    artifacts.extend(cover_artifacts)
+                    logger.info(f"   📄 已合併封面 artifacts")
+                
+                # 保存 Artifacts
                 await self._save_opendataloader_artifacts(artifacts, doc_id, company_id, pdf_path)
                 
-                # Step 3.2: 保存 output.json 供 WebUI 預覽
+                # 保存 output.json
                 output_json_path = self.data_dir / doc_id / "output.json"
                 output_json_path.parent.mkdir(parents=True, exist_ok=True)
                 import json as json_module
@@ -1041,34 +1294,14 @@ class DocumentPipeline:
                 logger.info(f"   💾 已保存 output.json: {output_json_path}")
             else:
                 logger.warning("⚠️ OpenDataLoaderParser 未啟用")
-                artifacts = []
+                artifacts = cover_artifacts
             
-            # Step 4: 提取公司信息（如果沒有 company_id，且不是指數報告）
+            # Step 6: 保存所有頁面到兜底表 (Zone 2)
             if progress_callback:
-                progress_callback(55.0, "🧠 Vision 提取公司信息...")
+                progress_callback(60.0, "保存所有頁面到兜底表...")
             
-            # 🌟 修正：如果是指數報告，絕對不能提取母公司！
-            # 指數報告涵蓋多間公司，不應該有單一母公司 (company_id)
-            # 提取母公司會導致 AI 將「恒生指數公司」等發行商當成財報公司，污染數據庫
-            if not company_id and not is_index_report:
-                company_id = await self._extract_and_create_company(pdf_path, doc_id, artifacts=artifacts)
-                if company_id:
-                    logger.info(f"✅ 已關聯公司: ID={company_id}")
-                else:
-                    logger.warning("⚠️ 無法提取公司信息")
-            elif is_index_report:
-                logger.info("ℹ️ 指數報告無需提取母公司，跳過提取 (報告涵蓋多間成分股公司)")
-                company_id = None  # 確保 company_id 保持 None
-            
-            # 🌟 Step 4.5: 保存所有頁面到兜底表 (Zone 2) - 所有文檔都必須執行！
-            # 這是 Vanna 全文檢索的關鍵數據源，無論是年報還是指數報告都需要
-            if progress_callback:
-                progress_callback(60.0, "保存所有頁面到兜底表(全文檢索用)...")
-            
-            # 獲取年份，若無則用當前年份
             doc_year = await self._get_document_year(doc_id) or datetime.now().year
             
-            # 🔧 修復：提前初始化 stats，避免 UnboundLocalError
             stats = {
                 "total_chunks": len([a for a in artifacts if a.get("type") == "text_chunk"]),
                 "total_tables": len([a for a in artifacts if a.get("type") == "table"]),
@@ -1078,30 +1311,32 @@ class DocumentPipeline:
             
             saved_pages = await self.save_all_pages_to_fallback_table(
                 pdf_path, company_id, doc_id, doc_year,
-                artifacts=artifacts  # 🌟 传递 artifacts，不再使用 PyMuPDF
+                artifacts=artifacts
             )
             stats["document_pages_saved"] = saved_pages
             
-            # Step 5: 智能結構化提取
+            # Step 7: 智能結構化提取
+            if progress_callback:
+                progress_callback(70.0, "智能提取結構化數據...")
             
-            if company_id:
-                if progress_callback:
-                    progress_callback(70.0, "智能提取結構化數據...")
-                
-                # 🌟 传入年份和 artifacts 参数
-                extraction_result = await self.smart_extract(
-                    pdf_path, company_id, doc_id, 
-                    lambda p, m: progress_callback(70 + p * 0.2, m) if progress_callback else None,
-                    year=doc_year,
-                    artifacts=artifacts  # 🌟 传递 artifacts，不再使用 PyMuPDF
-                )
-                stats["structured_extraction"] = extraction_result
-            elif is_index_report:
-                # 🌟 指數報告雖無 company_id，但兜底數據已在 Step 4.5 保存
-                stats["structured_extraction"] = {"status": "skipped", "reason": "index_report_no_single_company"}
-                logger.info("ℹ️ 指數報告跳過結構化提取（無單一母公司）")
+            extraction_result = await self.smart_extract(
+                pdf_path, company_id, doc_id, 
+                lambda p, m: progress_callback(70 + p * 0.2, m) if progress_callback else None,
+                year=doc_year,
+                artifacts=artifacts,
+                # 🌟 传递 UI 参数，让 Agent 知道报告类型
+                is_index_report=is_index_report,
+                index_theme=index_theme,
+                confirmed_doc_industry=confirmed_doc_industry
+            )
+            stats["structured_extraction"] = extraction_result
+            
+            if is_index_report:
+                logger.info("ℹ️ 指數報告處理完成（多公司數據已由 Agent 提取）")
+            elif not company_id:
+                logger.warning("⚠️ 一般年報但無 company_id，結構化提取可能不完整")
             else:
-                stats["structured_extraction"] = {"status": "skipped", "reason": "no company_id"}
+                logger.info("✅ 一般年報結構化提取完成")
             
             # Step 6: 觸發 Vanna 訓練
             if progress_callback:
@@ -1138,6 +1373,8 @@ class DocumentPipeline:
         """
         保存 OpenDataLoader Artifacts 到數據庫
         
+        🌟 N+1 效能優化：在迴圈外先查出 document_id，避免每次寫入都執行 SELECT
+        
         Args:
             artifacts: Artifacts 列表
             doc_id: 文檔 ID
@@ -1147,6 +1384,12 @@ class DocumentPipeline:
         
         doc_dir = self.data_dir / doc_id
         doc_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 🌟 N+1 效能優化：在迴圈外先查出 document_id（一次查詢，重複使用）
+        document_id = await self.db.get_document_internal_id(doc_id)
+        if not document_id:
+            logger.error(f"❌ 找不到文檔 ID={doc_id} 的內部 ID，無法保存 Artifacts")
+            return
         
         for idx, artifact in enumerate(artifacts):
             artifact_type = artifact.get("type")
@@ -1161,9 +1404,10 @@ class DocumentPipeline:
                         json_module.dump(artifact.get("content_json", {}), f, ensure_ascii=False, indent=2)
                     
                     # 記錄到 raw_artifacts
+                    # 🌟 N+1 效能優化：傳入整數 ID
                     await self.db.insert_raw_artifact(
                         artifact_id=f"{doc_id}_table_{idx:04d}",
-                        doc_id=doc_id,
+                        document_id=document_id,  # 🌟 傳入整數 ID
                         company_id=company_id,
                         file_type="table_json",
                         file_path=str(table_json_path.relative_to(self.data_dir)),
@@ -1214,9 +1458,10 @@ class DocumentPipeline:
                         logger.warning(f"⚠️ OpenDataLoader 未提供圖片數據，跳過保存: {image_filename}")
                     
                     # 記錄到 raw_artifacts
+                    # 🌟 N+1 效能優化：傳入整數 ID
                     await self.db.insert_raw_artifact(
                         artifact_id=f"{doc_id}_image_{idx:04d}",
-                        doc_id=doc_id,
+                        document_id=document_id,  # 🌟 傳入整數 ID
                         company_id=company_id,
                         file_type="image",
                         file_path=str(image_path.relative_to(self.data_dir)) if image_saved else f"{doc_id}/images/{image_filename}",

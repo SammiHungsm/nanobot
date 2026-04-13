@@ -44,6 +44,10 @@ COPY webui/static/ ./static/
 # Create data directories
 RUN mkdir -p /data/pdfs /app/uploads /app/outputs
 
+# 🌟 Copy entrypoint script (starts Hybrid server + WebUI)
+COPY webui/entrypoint.sh ./entrypoint.sh
+RUN chmod +x ./entrypoint.sh
+
 # Create non-root user
 RUN useradd --create-home --shell /bin/bash nanobot \
     && chown -R nanobot:nanobot /app /data
@@ -64,4 +68,5 @@ ENV TORCH_DEVICE=cpu
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
-CMD ["python", "-m", "app.main"]
+# 🌟 Use entrypoint to start Hybrid server + WebUI
+ENTRYPOINT ["./entrypoint.sh"]

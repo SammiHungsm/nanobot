@@ -77,22 +77,28 @@ def call_opendataloader(pdf_path: str, pages: str = "all") -> dict:
             )
             return None
         
-        # 調用 OpenDataLoader 提取表格
+        # 調用 OpenDataLoader 提取表格（Hybrid 模式）
         cmd = [
             "opendataloader-pdf",
             "extract",
             pdf_path,
             "--pages", pages,
             "--format", "json",
-            "--tables"  # 只提取表格
+            "--tables",  # 只提取表格
+            
+            # 🌟 啟動 CLI Hybrid 模式
+            "--hybrid", "docling-fast",
+            "--hybrid-mode", "auto"
         ]
         
-        logger.info(f"正在使用 OpenDataLoader 解析 PDF: {pdf_path}")
+        logger.info(f"🔥 正在使用 OpenDataLoader (Hybrid CPU 模式) 解析 PDF: {pdf_path}")
+        logger.warning("⚠️ CPU 燃燒模式啟動，預計需要 20-30 分鐘...")
+        
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            timeout=300,  # 5 分鐘超時
+            timeout=1200,  # 🌟 20 分鐘超時（CPU 燃燒模式）
             check=False
         )
         

@@ -319,23 +319,25 @@ class DBClient:
         industries_json = json.dumps(extracted_industries) if extracted_industries else None
         
         try:
-            await self.conn.execute(
-                """
-                INSERT INTO document_companies (
-                    document_id, company_id, relation_type, 
-                    extracted_industries, extraction_source
-                ) VALUES ($1, $2, $3, $4::jsonb, $5)
-                ON CONFLICT (document_id, company_id) DO UPDATE SET
-                    relation_type = $3,
-                    extracted_industries = $4::jsonb,
-                    extraction_source = $5
-                """,
-                document_id,
-                company_id,
-                relation_type,
-                industries_json,
-                extraction_source
-            )
+            # 🌟 使用连接池（避免并发冲突）
+            async with self.connection() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO document_companies (
+                        document_id, company_id, relation_type, 
+                        extracted_industries, extraction_source
+                    ) VALUES ($1, $2, $3, $4::jsonb, $5)
+                    ON CONFLICT (document_id, company_id) DO UPDATE SET
+                        relation_type = $3,
+                        extracted_industries = $4::jsonb,
+                        extraction_source = $5
+                    """,
+                    document_id,
+                    company_id,
+                    relation_type,
+                    industries_json,
+                    extraction_source
+                )
             logger.info(f"✅ 已記錄提及公司: doc_id={document_id}, company_id={company_id}, relation={relation_type}")
             return True
         except Exception as e:
@@ -354,7 +356,12 @@ class DBClient:
         """
         columns = list(data.keys())
         values = [data[col] for col in columns]
-        placeholders = [f"${i+1}" for i in range(len(columns))]
+        
+        # 🌟 修正：如果欄位是 extra_data 或 ai_extracted_industries，加上 ::jsonb 強制轉型
+        placeholders = [
+            f"${i+1}::jsonb" if col in ('extra_data', 'ai_extracted_industries') else f"${i+1}" 
+            for i, col in enumerate(columns)
+        ]
         
         sql = f"""
             INSERT INTO companies ({', '.join(columns)})
@@ -381,7 +388,11 @@ class DBClient:
         if not data:
             return True
         
-        set_clauses = [f"{key} = ${i+2}" for i, key in enumerate(data.keys())]
+        # 🌟 修正：如果欄位是 extra_data 或 ai_extracted_industries，加上 ::jsonb 強制轉型
+        set_clauses = [
+            f"{key} = ${i+2}::jsonb" if key in ('extra_data', 'ai_extracted_industries') else f"{key} = ${i+2}" 
+            for i, key in enumerate(data.keys())
+        ]
         values = [company_id] + list(data.values())
         
         sql = f"""
@@ -403,7 +414,12 @@ class DBClient:
         """內部方法：使用提供的連接插入公司（用於事務內）"""
         columns = list(data.keys())
         values = [data[col] for col in columns]
-        placeholders = [f"${i+1}" for i in range(len(columns))]
+        
+        # 🌟 修正：如果欄位是 extra_data 或 ai_extracted_industries，加上 ::jsonb 強制轉型
+        placeholders = [
+            f"${i+1}::jsonb" if col in ('extra_data', 'ai_extracted_industries') else f"${i+1}" 
+            for i, col in enumerate(columns)
+        ]
         
         sql = f"""
             INSERT INTO companies ({', '.join(columns)})
@@ -418,7 +434,11 @@ class DBClient:
         if not data:
             return True
         
-        set_clauses = [f"{key} = ${i+2}" for i, key in enumerate(data.keys())]
+        # 🌟 修正：如果欄位是 extra_data 或 ai_extracted_industries，加上 ::jsonb 強制轉型
+        set_clauses = [
+            f"{key} = ${i+2}::jsonb" if key in ('extra_data', 'ai_extracted_industries') else f"{key} = ${i+2}" 
+            for i, key in enumerate(data.keys())
+        ]
         values = [company_id] + list(data.values())
         
         sql = f"""
@@ -464,10 +484,12 @@ class DBClient:
     
     async def get_company_by_id(self, company_id: int) -> Optional[Dict[str, Any]]:
         """根據 ID 獲取公司信息"""
-        row = await self.conn.fetchrow(
-            "SELECT * FROM companies WHERE id = $1",
-            company_id
-        )
+        # 🌟 使用连接池（避免并发冲突）
+        async with self.connection() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM companies WHERE id = $1",
+                company_id
+            )
         return dict(row) if row else None
     
     # ===========================================
@@ -524,38 +546,40 @@ class DBClient:
             # 將 Decimal 轉換為 float（PostgreSQL 兼容）
             standardized_value_float = float(standardized_value)
             
-            await self.conn.execute(
-                """
-                INSERT INTO financial_metrics 
-                (company_id, year, fiscal_period, metric_name, metric_name_zh, 
-                 original_metric_name, value, unit, 
-                 standardized_value, standardized_currency,
-                 category, source_file, source_page)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-                ON CONFLICT (company_id, year, fiscal_period, metric_name) 
-                DO UPDATE SET 
-                    original_metric_name = $6,
-                    value = $7,
-                    unit = $8,
-                    standardized_value = $9,
-                    standardized_currency = $10,
-                    source_file = $12,
-                    source_page = $13
-                """,
-                company_id,
-                year,
-                fiscal_period,
-                canonical_en,              # 標準化英文名稱
-                canonical_zh,              # 標準化中文名稱
-                metric_name_raw,           # 🔧 原始名稱（供溯源）
-                value,                     # 原始數值
-                unit,                      # 原始單位
-                standardized_value_float,  # 🔧 標準化數值（港幣絕對單位）
-                standardized_currency,     # 🔧 標準化幣別（HKD）
-                category,
-                source_file,
-                source_page
-            )
+            # 🌟 使用连接池（避免并发冲突）
+            async with self.connection() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO financial_metrics 
+                    (company_id, year, fiscal_period, metric_name, metric_name_zh, 
+                     original_metric_name, value, unit, 
+                     standardized_value, standardized_currency,
+                     category, source_file, source_page)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                    ON CONFLICT (company_id, year, fiscal_period, metric_name) 
+                    DO UPDATE SET 
+                        original_metric_name = $6,
+                        value = $7,
+                        unit = $8,
+                        standardized_value = $9,
+                        standardized_currency = $10,
+                        source_file = $12,
+                        source_page = $13
+                    """,
+                    company_id,
+                    year,
+                    fiscal_period,
+                    canonical_en,              # 標準化英文名稱
+                    canonical_zh,              # 標準化中文名稱
+                    metric_name_raw,           # 🔧 原始名稱（供溯源）
+                    value,                     # 原始數值
+                    unit,                      # 原始單位
+                    standardized_value_float,  # 🔧 標準化數值（港幣絕對單位）
+                    standardized_currency,     # 🔧 標準化幣別（HKD）
+                    category,
+                    source_file,
+                    source_page
+                )
             
             logger.debug(
                 f"✅ 寫入指標: {canonical_en} = {value} {unit} → "
@@ -668,26 +692,28 @@ class DBClient:
                     standardized_segment_name = segment_name
                 
                 # 🌟 Schema v2.3: 使用新的列名
-                await self.conn.execute(
-                    """
-                    INSERT INTO revenue_breakdown 
-                    (company_id, year, segment_name, segment_type, revenue_percentage, revenue_amount, currency, source_document_id)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                    ON CONFLICT (company_id, year, segment_name, segment_type) 
-                    DO UPDATE SET 
-                        revenue_percentage = $5, 
-                        revenue_amount = $6,
-                        source_document_id = $8
-                    """,
-                    company_id,
-                    year,
-                    standardized_segment_name,  # 🌟 segment_name
-                    segment_type,               # 🌟 segment_type
-                    percentage,                 # 🌟 revenue_percentage
-                    amount,                     # 🌟 revenue_amount
-                    currency,
-                    source_document_id          # 🌟 source_document_id (Integer)
-                )
+                # 🌟 使用连接池（避免并发冲突）
+                async with self.connection() as conn:
+                    await conn.execute(
+                        """
+                        INSERT INTO revenue_breakdown 
+                        (company_id, year, segment_name, segment_type, revenue_percentage, revenue_amount, currency, source_document_id)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                        ON CONFLICT (company_id, year, segment_name, segment_type) 
+                        DO UPDATE SET 
+                            revenue_percentage = $5, 
+                            revenue_amount = $6,
+                            source_document_id = $8
+                        """,
+                        company_id,
+                        year,
+                        standardized_segment_name,  # 🌟 segment_name
+                        segment_type,               # 🌟 segment_type
+                        percentage,                 # 🌟 revenue_percentage
+                        amount,                     # 🌟 revenue_amount
+                        currency,
+                        source_document_id          # 🌟 source_document_id (Integer)
+                    )
                 inserted_count += 1
             
             logger.info(f"✅ 已寫入 {inserted_count} 條 Revenue Breakdown 記錄（Schema v2.3）")
@@ -703,15 +729,17 @@ class DBClient:
         year: int
     ) -> List[Dict[str, Any]]:
         """獲取 Revenue Breakdown 數據（Schema v2.3）"""
-        rows = await self.conn.fetch(
-            """
-            SELECT * FROM revenue_breakdown 
-            WHERE company_id = $1 AND year = $2
-            ORDER BY revenue_percentage DESC
-            """,
-            company_id,
-            year
-        )
+        # 🌟 使用连接池（避免并发冲突）
+        async with self.connection() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT * FROM revenue_breakdown 
+                WHERE company_id = $1 AND year = $2
+                ORDER BY revenue_percentage DESC
+                """,
+                company_id,
+                year
+            )
         return [dict(row) for row in rows]
     
     # ===========================================
@@ -720,13 +748,14 @@ class DBClient:
     
     async def insert_document_page(
         self,
-        company_id: int,  # 保留參數但不寫入 db（Schema v2.3 已刪除）
-        doc_id: str,
-        year: int,  # 保留參數但不寫入 db（Schema v2.3 已刪除）
-        page_num: int,
-        markdown_content: str,
-        source_file: str,  # 保留參數但不寫入 db（Schema v2.3 已刪除）
-        content_type: str = "markdown",  # 保留參數但不寫入 db（Schema v2.3 已刪除）
+        document_id: int,  # 🌟 必填：Integer ID（解决 N+1 问题）
+        page_num: int,  # 🌟 必填：页码
+        markdown_content: str,  # 🌟 必填：Markdown 内容
+        year: int = None,  # 🌟 可选：保留参数但不写入 db（Schema v2.3 已删除）
+        source_file: str = None,  # 🌟 可选：保留参数但不写入 db（Schema v2.3 已删除）
+        company_id: int = None,  # 🌟 可选：保留参数但不写入 db（Schema v2.3 已删除）
+        doc_id: str = None,  # 🌟 可选：用于向后兼容（如果没有传入 document_id）
+        content_type: str = "markdown",  # 🌟 可选：保留参数但不写入 db
         has_images: bool = False,
         has_charts: bool = False
     ) -> bool:
@@ -737,46 +766,61 @@ class DBClient:
         - 已刪除欄位：company_id, doc_id (字串), year, source_file, content_type
         - 現在只依賴 document_id (Integer) 關聯
         
-        這是「雙軌制」的 Zone 2，確保所有原始數據都被保存，
-        供 Vanna 在找不到精準數據時進行全文搜索。
+        🌟 N+1 效能優化：
+        - 新增 document_id 參數，可直接傳入整數 ID
+        - 如果傳入 document_id，則跳過子查詢（效能提升）
+        - 如果只傳入 doc_id，則執行子查詢（向后兼容）
         
         Args:
-            company_id: 公司 ID（參數保留但不寫入）
-            doc_id: 文檔 ID（用於查詢 document_id）
-            year: 年份（參數保留但不寫入）
-            page_num: 頁碼
-            markdown_content: 原始 Markdown 內容
-            source_file: 源文件名（參數保留但不寫入）
-            content_type: 內容類型（參數保留但不寫入）
-            has_images: 是否包含圖片
-            has_charts: 是否包含圖表
+            document_id: 文檔 ID（整數，必填）
+            page_num: 頁碼（必填）
+            markdown_content: 原始 Markdown 內容（必填）
+            year: 年份（可选，保留参数但不写入 db）
+            source_file: 源文件名（可选，保留参数但不写入 db）
+            company_id: 公司 ID（可选，保留参数但不写入 db）
+            doc_id: 文档 ID（字符串，可选，用于向后兼容）
+            content_type: 內容類型（可选，保留参数但不写入 db）
+            has_images: 是否包含圖片（可选）
+            has_charts: 是否包含圖表（可选）
             
         Returns:
             bool: 是否成功
         """
         try:
-            # 🌟 修正：用 doc_id (字串) 查出 document_id (Integer)
-            # 🌟 修正：移除已刪除的欄位 (company_id, year, source_file, content_type)
-            await self.conn.execute(
-                """
-                INSERT INTO document_pages 
-                (document_id, page_num, markdown_content, has_images, has_tables)
-                VALUES (
-                    (SELECT id FROM documents WHERE doc_id = $1), 
-                    $2, $3, $4, $5
+            # 🌟 N+1 效能優化：优先使用传入的 document_id
+            # 如果没有传入，则执行子查询（向后兼容）
+            actual_document_id = document_id
+            
+            # 🌟 使用连接池（避免并发冲突）
+            async with self.connection() as conn:
+                if actual_document_id is None and doc_id:
+                    # 向后兼容：从 doc_id 查询 document_id
+                    actual_document_id = await conn.fetchval(
+                        "SELECT id FROM documents WHERE doc_id = $1", doc_id
+                    )
+                
+                if actual_document_id is None:
+                    logger.error(f"❌ 无法获取 document_id (doc_id={doc_id}, document_id={document_id})")
+                    return False
+                
+                # 🌟 直接使用 document_id，移除子查询
+                await conn.execute(
+                    """
+                    INSERT INTO document_pages 
+                    (document_id, page_num, markdown_content, has_images, has_tables)
+                    VALUES ($1, $2, $3, $4, $5)
+                    ON CONFLICT (document_id, page_num) 
+                    DO UPDATE SET 
+                        markdown_content = $3,
+                        has_images = $4,
+                        has_tables = $5
+                    """,
+                    actual_document_id,  # 🌟 直接传入整数，不再使用子查询
+                    page_num,
+                    markdown_content,
+                    has_images,
+                    has_charts  # 映射到 has_tables
                 )
-                ON CONFLICT (document_id, page_num) 
-                DO UPDATE SET 
-                    markdown_content = $3,
-                    has_images = $4,
-                    has_tables = $5
-                """,
-                doc_id,
-                page_num,
-                markdown_content,
-                has_images,
-                has_charts  # 映射到 has_tables
-            )
             
             logger.debug(f"✅ Page {page_num} 已寫入 document_pages 兜底表")
             return True
@@ -870,7 +914,9 @@ class DBClient:
             sql += f" ORDER BY dp.page_num LIMIT ${param_idx}"
             params.append(limit)
             
-            rows = await self.conn.fetch(sql, *params)
+            # 🌟 使用连接池（避免并发冲突）
+            async with self.connection() as conn:
+                rows = await conn.fetch(sql, *params)
             return [dict(row) for row in rows]
             
         except Exception as e:
@@ -896,25 +942,27 @@ class DBClient:
         # 🌟 優先使用 filename 參數，如果沒有則從 file_path 提取
         actual_filename = filename or (Path(file_path).name if file_path else "unknown.pdf")
         
-        await self.conn.execute(
-            """
-            INSERT INTO documents (
-                doc_id, owner_company_id, filename, file_path, file_hash, 
-                file_size_bytes, report_type, processing_status, uploaded_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
-            ON CONFLICT (doc_id) DO UPDATE SET
-                processing_status = 'pending',
-                updated_at = NOW()
-            """,
-            doc_id,
-            company_id,  # 寫入 owner_company_id
-            actual_filename,
-            file_path,
-            file_hash,
-            file_size,  # 寫入 file_size_bytes
-            document_type,  # 寫入 report_type
-            "pending"
-        )
+        # 🌟 使用连接池（避免并发冲突）
+        async with self.connection() as conn:
+            await conn.execute(
+                """
+                INSERT INTO documents (
+                    doc_id, owner_company_id, filename, file_path, file_hash, 
+                    file_size_bytes, report_type, processing_status, uploaded_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+                ON CONFLICT (doc_id) DO UPDATE SET
+                    processing_status = 'pending',
+                    updated_at = NOW()
+                """,
+                doc_id,
+                company_id,  # 寫入 owner_company_id
+                actual_filename,
+                file_path,
+                file_hash,
+                file_size,  # 寫入 file_size_bytes
+                document_type,  # 寫入 report_type
+                "pending"
+            )
     
     async def update_document_status(
         self,
@@ -924,101 +972,115 @@ class DBClient:
         error: str = None
     ):
         """更新文檔處理狀態 (Schema v2.3: 只更新 processing_status)"""
-        if status == "completed" and stats:
-            await self.conn.execute(
-                """
-                UPDATE documents SET
-                    processing_status = 'completed',
-                    processing_completed_at = NOW(),
-                    total_chunks = $1,
-                    total_artifacts = $2,
-                    updated_at = NOW()
-                WHERE doc_id = $3
-                """,
-                stats.get("total_chunks", 0),
-                stats.get("total_tables", 0) + stats.get("total_images", 0),
-                doc_id
-            )
-        elif status == "failed":
-            await self.conn.execute(
-                """
-                UPDATE documents SET
-                    processing_status = 'failed',
-                    processing_error = $1,
-                    updated_at = NOW()
-                WHERE doc_id = $2
-                """,
-                error,
-                doc_id
-            )
-        else:
-            await self.conn.execute(
-                """
-                UPDATE documents SET
-                    processing_status = $1,
-                    updated_at = NOW()
-                WHERE doc_id = $2
-                """,
-                status,
-                doc_id
-            )
+        # 🌟 使用连接池（避免并发冲突）
+        async with self.connection() as conn:
+            if status == "completed" and stats:
+                await conn.execute(
+                    """
+                    UPDATE documents SET
+                        processing_status = 'completed',
+                        processing_completed_at = NOW(),
+                        total_chunks = $1,
+                        total_artifacts = $2,
+                        updated_at = NOW()
+                    WHERE doc_id = $3
+                    """,
+                    stats.get("total_chunks", 0),
+                    stats.get("total_tables", 0) + stats.get("total_images", 0),
+                    doc_id
+                )
+            elif status == "failed":
+                await conn.execute(
+                    """
+                    UPDATE documents SET
+                        processing_status = 'failed',
+                        processing_error = $1,
+                        updated_at = NOW()
+                    WHERE doc_id = $2
+                    """,
+                    error,
+                    doc_id
+                )
+            else:
+                await conn.execute(
+                    """
+                    UPDATE documents SET
+                        processing_status = $1,
+                        updated_at = NOW()
+                    WHERE doc_id = $2
+                    """,
+                    status,
+                    doc_id
+                )
     
     async def update_document_company_id(self, doc_id: str, company_id: int, year: int = None):
         """更新文檔的母公司 ID 和年份"""
-        if year:
-            await self.conn.execute(
-                """
-                UPDATE documents SET
-                    owner_company_id = $1,
-                    year = $2,
-                    updated_at = NOW()
-                WHERE doc_id = $3
-                """,
-                company_id,
-                year,
-                doc_id
-            )
-            logger.info(f"✅ 已更新文檔 {doc_id} 的 owner_company_id={company_id}, year={year}")
-        else:
-            await self.conn.execute(
-                """
-                UPDATE documents SET
-                    owner_company_id = $1,
-                    updated_at = NOW()
-                WHERE doc_id = $2
-                """,
-                company_id,
-                doc_id
-            )
-            logger.info(f"✅ 已更新文檔 {doc_id} 的 owner_company_id={company_id}")
+        # 🌟 使用连接池（避免并发冲突）
+        async with self.connection() as conn:
+            if year:
+                await conn.execute(
+                    """
+                    UPDATE documents SET
+                        owner_company_id = $1,
+                        year = $2,
+                        updated_at = NOW()
+                    WHERE doc_id = $3
+                    """,
+                    company_id,
+                    year,
+                    doc_id
+                )
+                logger.info(f"✅ 已更新文檔 {doc_id} 的 owner_company_id={company_id}, year={year}")
+            else:
+                await conn.execute(
+                    """
+                    UPDATE documents SET
+                        owner_company_id = $1,
+                        updated_at = NOW()
+                    WHERE doc_id = $2
+                    """,
+                    company_id,
+                    doc_id
+                )
+                logger.info(f"✅ 已更新文檔 {doc_id} 的 owner_company_id={company_id}")
     
     async def check_document_exists(self, doc_id: str, file_hash: str) -> bool:
         """檢查文檔是否已存在"""
-        exists = await self.conn.fetchval(
-            """
-            SELECT EXISTS (
-                SELECT 1 FROM documents 
-                WHERE doc_id = $1 OR file_hash = $2
+        # 🌟 使用连接池（避免并发冲突）
+        async with self.connection() as conn:
+            exists = await conn.fetchval(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM documents 
+                    WHERE doc_id = $1 OR file_hash = $2
+                )
+                """,
+                doc_id, file_hash
             )
-            """,
-            doc_id, file_hash
-        )
         return exists
     
     async def delete_document(self, doc_id: str):
         """刪除文檔及其所有相關數據"""
         logger.info(f"🗑️ 正在刪除文檔 {doc_id} 的所有數據...")
         
-        # 先獲取 document.id (raw_artifacts 使用 document_id FK，不是 doc_id)
-        doc_row = await self.conn.fetchrow("SELECT id FROM documents WHERE doc_id = $1", doc_id)
-        if doc_row:
-            document_id = doc_row['id']
-            # 刪除相關數據 (document_chunks 已移除 - No RAG Option)
-            await self.conn.execute("DELETE FROM raw_artifacts WHERE document_id = $1", document_id)
-            await self.conn.execute("DELETE FROM document_companies WHERE document_id = $1", document_id)
-            await self.conn.execute("DELETE FROM document_processing_history WHERE document_id = $1", document_id)
-        
-        await self.conn.execute("DELETE FROM documents WHERE doc_id = $1", doc_id)
+        # 🌟 使用连接池（避免并发冲突）
+        async with self.connection() as conn:
+            # 先獲取 document.id (raw_artifacts 使用 document_id FK，不是 doc_id)
+            doc_row = await conn.fetchrow("SELECT id FROM documents WHERE doc_id = $1", doc_id)
+            if doc_row:
+                document_id = doc_row['id']
+                
+                # 🌟 刪除所有子表（按依赖顺序）
+                # Fix #3: 补上漏掉的 document_pages, revenue_breakdown, review_queue
+                await conn.execute("DELETE FROM revenue_breakdown WHERE source_document_id = $1", document_id)
+                await conn.execute("DELETE FROM document_pages WHERE document_id = $1", document_id)
+                await conn.execute("DELETE FROM raw_artifacts WHERE document_id = $1", document_id)
+                await conn.execute("DELETE FROM document_companies WHERE document_id = $1", document_id)
+                await conn.execute("DELETE FROM document_processing_history WHERE document_id = $1", document_id)
+                await conn.execute("DELETE FROM review_queue WHERE document_id = $1", document_id)
+            
+            # 删除主文档
+            await conn.execute("DELETE FROM documents WHERE doc_id = $1", doc_id)
         
         logger.info(f"✅ 文檔 {doc_id} 已刪除")
     
@@ -1056,23 +1118,25 @@ class DBClient:
             # 將值轉換為 JSONB 格式
             json_val = json.dumps(attribute_value, ensure_ascii=False)
             
-            # 使用 jsonb_set 進行深度更新（支持嵌套結構）
-            await self.conn.execute(
-                """
-                UPDATE companies 
-                SET extra_data = jsonb_set(
-                    COALESCE(extra_data, '{}'::jsonb), 
-                    array[$2::text], 
-                    $3::jsonb, 
-                    true
-                ),
-                updated_at = NOW()
-                WHERE id = $1;
-                """,
-                company_id,
-                attribute_key,
-                json_val
-            )
+            # 🌟 使用连接池（避免并发冲突）
+            async with self.connection() as conn:
+                # 使用 jsonb_set 進行深度更新（支持嵌套結構）
+                await conn.execute(
+                    """
+                    UPDATE companies 
+                    SET extra_data = jsonb_set(
+                        COALESCE(extra_data, '{}'::jsonb), 
+                        array[$2::text], 
+                        $3::jsonb, 
+                        true
+                    ),
+                    updated_at = NOW()
+                    WHERE id = $1;
+                    """,
+                    company_id,
+                    attribute_key,
+                    json_val
+                )
             
             logger.info(f"✅ 已更新公司 {company_id} 的 extra_data.{attribute_key}")
             return True
@@ -1097,32 +1161,34 @@ class DBClient:
             Any: 屬性值或整個 extra_data Dict
         """
         try:
-            if attribute_key:
-                # 讀取單個屬性
-                value = await self.conn.fetchval(
-                    """
-                    SELECT extra_data->>$2 
-                    FROM companies 
-                    WHERE id = $1;
-                    """,
-                    company_id,
-                    attribute_key
-                )
-                return value
-            else:
-                # 讀取整個 extra_data
-                row = await self.conn.fetchrow(
-                    """
-                    SELECT extra_data 
-                    FROM companies 
-                    WHERE id = $1;
-                    """,
-                    company_id
-                )
-                if row and row['extra_data']:
-                    import json
-                    return json.loads(row['extra_data'])
-                return {}
+            # 🌟 使用连接池（避免并发冲突）
+            async with self.connection() as conn:
+                if attribute_key:
+                    # 讀取單個屬性
+                    value = await conn.fetchval(
+                        """
+                        SELECT extra_data->>$2 
+                        FROM companies 
+                        WHERE id = $1;
+                        """,
+                        company_id,
+                        attribute_key
+                    )
+                    return value
+                else:
+                    # 讀取整個 extra_data
+                    row = await conn.fetchrow(
+                        """
+                        SELECT extra_data 
+                        FROM companies 
+                        WHERE id = $1;
+                        """,
+                        company_id
+                    )
+                    if row and row['extra_data']:
+                        import json
+                        return json.loads(row['extra_data'])
+                    return {}
                 
         except Exception as e:
             logger.error(f"❌ JSONB 讀取失敗: {e}")
@@ -1156,18 +1222,40 @@ class DBClient:
     # Utility Methods
     # ===========================================
     
+    async def get_document_internal_id(self, doc_id: str) -> Optional[int]:
+        """
+        🌟 從 documents 表獲取整數主鍵 ID
+        
+        解決 N+1 效能問題：在迴圈外先查出 document_id，避免每次寫入都執行 SELECT
+        
+        Args:
+            doc_id: 文檔 ID（字串）
+            
+        Returns:
+            int: documents.id (Integer)，或 None（如果找不到）
+        """
+        # 🌟 使用连接池（避免并发冲突）
+        async with self.connection() as conn:
+            return await conn.fetchval("SELECT id FROM documents WHERE doc_id = $1", doc_id)
+    
     async def execute_query(self, sql: str, *args) -> Any:
         """執行原始 SQL 查詢"""
-        return await self.conn.execute(sql, *args)
+        # 🌟 使用连接池（避免并发冲突）
+        async with self.connection() as conn:
+            return await conn.execute(sql, *args)
     
     async def fetch_one(self, sql: str, *args) -> Optional[Dict]:
         """獲取單行"""
-        row = await self.conn.fetchrow(sql, *args)
+        # 🌟 使用连接池（避免并发冲突）
+        async with self.connection() as conn:
+            row = await conn.fetchrow(sql, *args)
         return dict(row) if row else None
     
     async def fetch_all(self, sql: str, *args) -> List[Dict]:
         """獲取多行"""
-        rows = await self.conn.fetch(sql, *args)
+        # 🌟 使用连接池（避免并发冲突）
+        async with self.connection() as conn:
+            rows = await conn.fetch(sql, *args)
         return [dict(row) for row in rows]
     
     # ===========================================
@@ -1177,10 +1265,11 @@ class DBClient:
     async def insert_raw_artifact(
         self,
         artifact_id: str,
-        doc_id: str,
-        company_id: Optional[int],  # 參數保留但不寫入此表（Schema v2.3 已刪除）
-        file_type: str,
-        file_path: str,
+        doc_id: str = None,  # 🌟 可选：用于向后兼容（如果没有传入 document_id）
+        document_id: int = None,  # 🌟 新增：直接传入整数 ID（解决 N+1 问题）
+        company_id: Optional[int] = None,  # 🌟 修正：添加默认值，保留參數但不寫入此表
+        file_type: str = None,  # 🌟 修正：添加默认值
+        file_path: str = None,  # 🌟 修正：添加默认值
         page_num: int = None,
         metadata: str = None,
         file_size: int = 0  # 參數保留但不寫入此表（Schema v2.3 已刪除）
@@ -1193,9 +1282,15 @@ class DBClient:
         - file_size_bytes, source_file → 已刪除
         - doc_id (字串) → document_id (Integer)
         
+        🌟 N+1 效能優化：
+        - 新增 document_id 參數，可直接傳入整數 ID
+        - 如果傳入 document_id，則跳過子查詢（效能提升）
+        - 如果只傳入 doc_id，則執行子查詢（向后兼容）
+        
         Args:
             artifact_id: Artifact ID
-            doc_id: 文檔 ID（用於查詢 document_id）
+            doc_id: 文檔 ID（字串，用于向后兼容）
+            document_id: 文檔 ID（整數，推薦使用）
             company_id: 公司 ID（參數保留但不寫入）
             file_type: 文件類型 (table_json, image, etc.)
             file_path: 文件路徑
@@ -1214,29 +1309,41 @@ class DBClient:
                             "chart" if "chart" in file_type.lower() else \
                             file_type
             
-            # 🌟 修正：查出 document_id (Integer)，移除已刪除欄位
-            await self.conn.execute(
-                """
-                INSERT INTO raw_artifacts (
-                    artifact_id, document_id, artifact_type,
-                    file_path, page_num, parsed_data
-                ) VALUES (
-                    $1, 
-                    (SELECT id FROM documents WHERE doc_id = $2), 
-                    $3, $4, $5, $6::jsonb
+            # 🌟 使用连接池（避免并发冲突）
+            async with self.connection() as conn:
+                # 🌟 N+1 效能優化：优先使用传入的 document_id
+                actual_document_id = document_id
+                
+                if actual_document_id is None and doc_id:
+                    # 向后兼容：从 doc_id 查询 document_id
+                    actual_document_id = await conn.fetchval(
+                        "SELECT id FROM documents WHERE doc_id = $1", doc_id
+                    )
+                
+                if actual_document_id is None:
+                    logger.error(f"❌ 无法获取 document_id (doc_id={doc_id}, document_id={document_id})")
+                    return False
+                
+                # 🌟 直接使用 document_id，移除子查询
+                await conn.execute(
+                    """
+                    INSERT INTO raw_artifacts (
+                        artifact_id, document_id, artifact_type,
+                        file_path, page_num, parsed_data
+                    ) VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+                    ON CONFLICT (artifact_id) DO UPDATE SET
+                        file_path = $4,
+                        page_num = $5,
+                        parsed_data = $6::jsonb
+                    """,
+                    artifact_id,
+                    actual_document_id,  # 🌟 直接传入整数，不再使用子查询
+                    artifact_type,
+                    file_path,
+                    page_num,
+                    metadata or '{}'
                 )
-                ON CONFLICT (artifact_id) DO UPDATE SET
-                    file_path = $4,
-                    page_num = $5,
-                    parsed_data = $6::jsonb
-                """,
-                artifact_id,
-                doc_id,
-                artifact_type,
-                file_path,
-                page_num,
-                metadata or '{}'
-            )
+            
             logger.debug(f"✅ Artifact {artifact_id} ({artifact_type}) 已保存")
             return True
             

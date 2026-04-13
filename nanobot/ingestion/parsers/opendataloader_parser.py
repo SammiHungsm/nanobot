@@ -60,6 +60,26 @@ class OpenDataLoaderParser:
         logger.info(f"✅ 解析完成：{len(artifacts)} 個 artifacts")
         return artifacts
     
+    def parse_pages(self, pdf_path: str, pages: List[int], doc_id: str = None) -> List[Dict[str, Any]]:
+        """
+        🌟 只解析 PDF 的特定页面（用于快速提取封面信息）
+        
+        Args:
+            pdf_path: PDF 文件路径
+            pages: 要解析的页码列表（如 [1, 2]）
+            doc_id: 文档 ID
+            
+        Returns:
+            List[Dict]: Artifacts 列表
+        """
+        logger.info(f"📖 OpenDataLoader 快速解析 Page {pages}：{pdf_path}")
+        
+        result_json = self._run_opendataloader(pdf_path, doc_id, pages=pages)
+        artifacts = self._convert_to_artifacts(result_json)
+        
+        logger.info(f"✅ Page {pages} 解析完成：{len(artifacts)} 個 artifacts")
+        return artifacts
+    
     async def parse_async(self, pdf_path: str, doc_id: str = None) -> List[Dict[str, Any]]:
         """
         異步解析 PDF（將阻塞操作放到背景線程）
@@ -82,7 +102,7 @@ class OpenDataLoaderParser:
         logger.info(f"✅ 解析完成：{len(artifacts)} 個 artifacts")
         return artifacts
     
-    def _run_opendataloader(self, pdf_path: str, doc_id: str = None) -> Dict[str, Any]:
+    def _run_opendataloader(self, pdf_path: str, doc_id: str = None, pages: List[int] = None) -> Dict[str, Any]:
         """
         執行 OpenDataLoader 解析
         
@@ -96,13 +116,15 @@ class OpenDataLoaderParser:
             output_dir="output/",
             format="markdown,json",  # 逗号分隔
             image_output="embedded",  # 或 "external"
-            image_format="png"
+            image_format="png",
+            pages=[1, 2, 3]  # 🌟 只处理特定页面
         )
         ```
         
         Args:
             pdf_path: PDF 文件路徑
             doc_id: 文檔 ID
+            pages: 要解析的页码列表（如 [1, 2]），None 表示所有页面
             
         Returns:
             Dict: OpenDataLoader 原始輸出
@@ -119,20 +141,37 @@ class OpenDataLoaderParser:
                 logger.debug(f"   input_path: {pdf_path}")
                 logger.debug(f"   output_dir: {temp_dir}")
                 logger.debug(f"   format: json")
+                logger.info("🔥 警告：正在使用純 CPU 執行 OpenDataLoader Hybrid 視覺模式，請耐心等待...")
                 
-                # 🔧 修復：使用正確的 Python API（根據官方文檔）
-                # 參數必須是 snake_case，不是 kebab-case
-                # ⚠️ 重要：不要傳 pages="all"，CLI 不接受這個格式
-                #    --pages 的默認值就是所有頁面，不傳參數即可
-                #    如果要指定頁面，格式是 "1,3,5-7"
-                convert(
-                    input_path=pdf_path,          # 可以是 str 或 list
-                    output_dir=temp_dir,          # 目錄路徑
-                    format="json",                # 輸出格式
-                    # pages=None,                 # ❌ 不傳 pages，默處理所有頁面
-                    image_output="embedded",      # Base64 data URIs
-                    image_format="png"            # 圖片格式
-                )
+                # 🌟 如果只处理特定页面，不启用 Hybrid（快速模式）
+                if pages:
+                    # 🌟 将 list 转换为逗号分隔的字符串
+                    pages_str = ",".join(str(p) for p in pages)
+                    logger.info(f"📄 快速模式：只处理 Page {pages_str}（不启用 Hybrid）")
+                    convert(
+                        input_path=pdf_path,
+                        output_dir=temp_dir,
+                        format="json",
+                        image_output="embedded",
+                        image_format="png",
+                        pages=pages_str  # 🌟 字符串格式："1,2"
+                    )
+                else:
+                    # 完整解析：启用 Hybrid
+                    convert(
+                        input_path=pdf_path,          # 可以是 str 或 list
+                        output_dir=temp_dir,          # 目錄路徑
+                        format="json",                # 輸出格式
+                        image_output="embedded",      # Base64 data URIs
+                        image_format="png",           # 圖片格式
+                        
+                        # 🌟 啟動 Hybrid AI 視覺模式（用 Docling 進行版面與表格分析）
+                        hybrid="docling-fast",        # 使用 docling 模型
+                        hybrid_mode="minimal",         # 🌟 "minimal" 只对最复杂的页面启動 AI
+                        hybrid_url="http://localhost:5002",  # 🌟 指向本地 Hybrid 服务器
+                        hybrid_timeout="300000",      # 🌟 300 秒
+                        hybrid_fallback=True          # 🌟 如果 Hybrid 失败，fallback 到 Java
+                    )
                 
                 # 查找輸出的 JSON 文件
                 # OpenDataLoader 會以 PDF 文件名命名輸出文件

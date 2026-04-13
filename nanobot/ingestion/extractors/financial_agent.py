@@ -349,6 +349,29 @@ Expected format (Schema v2.3):
         result = self.json_processor.repair_and_parse(result_text)
         
         if result:
+            # 🌟 檢查是否有新發現的關鍵字（持續學習）
+            discovered_keyword = result.get("discovered_keyword")
+            if discovered_keyword and isinstance(discovered_keyword, dict):
+                keyword = discovered_keyword.get("keyword")
+                reasoning = discovered_keyword.get("reasoning", "")
+                
+                if keyword:
+                    # 🧠 註冊新關鍵字到知識庫
+                    from ..utils.keyword_manager import KeywordManager
+                    km = KeywordManager()
+                    register_result = km.add_keyword(
+                        category="revenue_breakdown",
+                        keyword=keyword,
+                        source="agent",
+                        confidence="bronze",  # Agent 發現的關鍵字需要審核
+                        reasoning=reasoning
+                    )
+                    
+                    if register_result.get("success"):
+                        logger.info(f"🧠 Agent 發現新關鍵字: '{keyword}' 已加入知識庫")
+                    else:
+                        logger.debug(f"   關鍵字 '{keyword}' 未加入: {register_result.get('reason')}")
+            
             # 驗證 schema
             try:
                 validated = RevenueBreakdownResponse(**result)
@@ -619,7 +642,8 @@ Expected format (Schema v2.3):
         
         try:
             # 切換到 Vision 模型
-            vision_model = self.model.replace("qwen3.5", "qwen-vl").replace("gpt-4", "gpt-4-vision")
+            # ✅ 正确写法：使用 _get_model() 方法
+            vision_model = self._get_model().replace("qwen3.5", "qwen-vl").replace("gpt-4", "gpt-4-vision")
             
             system_prompt = get_prompt("direct_revenue_vision")
             
@@ -804,34 +828,29 @@ IMPORTANT: You MUST respond with valid JSON only. Extract all visible data from 
 
 async def extract_revenue_breakdown_simple(
     markdown_content: str,
-    api_key: str = None,
-    api_base: str = None,
-    model: str = None
 ) -> Optional[Dict[str, Any]]:
     """
     簡單的 Revenue Breakdown 提取入口
     
+    🌟 重构后：FinancialAgent 使用统一的 get_llm_client()，不再需要传入 API 参数
+    
     Args:
         markdown_content: Markdown 文本
-        api_key: API Key
-        api_base: API Base URL
-        model: 模型名稱
         
     Returns:
         Dict: 提取的數據
     """
-    agent = FinancialAgent(api_key=api_key, api_base=api_base, model=model)
+    agent = FinancialAgent()
     return await agent.extract_revenue_breakdown(markdown_content)
 
 
 async def extract_company_info_simple(
     text_content: str,
-    api_key: str = None,
-    api_base: str = None,
-    model: str = None
 ) -> Optional[Dict[str, Any]]:
     """
     簡單的公司信息提取入口
+    
+    🌟 重构后：FinancialAgent 使用统一的 get_llm_client()，不再需要传入 API 参数
     """
-    agent = FinancialAgent(api_key=api_key, api_base=api_base, model=model)
+    agent = FinancialAgent()
     return await agent.extract_company_info(text_content)

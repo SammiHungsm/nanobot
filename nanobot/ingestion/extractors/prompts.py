@@ -45,17 +45,36 @@ REVENUE_BREAKDOWN_EXTRACTION_PROMPT = """
 我會提供一份從財務年報轉換出的 Markdown 內容。
 你的唯一任務是提取「地區收入分佈 (Revenue Breakdown by Geographical Location)」。
 
+【任務 1：數據提取】
 【嚴格執行以下規則】：
 1. **只讀 Markdown 表格**：從 Markdown 的表格中提取地區名稱和百分比。如果表格中有百分比列，直接使用，不要自己計算！
 2. **金額提取**：同時提取絕對金額（如果有的話），注意單位。
 3. **自我驗證**：提取完成後，將所有百分比相加。如果總和不在 99.0 到 101.0 之間，說明你遺漏了某些地區，請仔細重看！
 
+【任務 2：持續學習與優化】🌟 新功能
+請觀察這頁文本中，標示這份 Revenue Breakdown 的「章節標題」或「表格欄位名稱」是什麼？
+如果這個名稱非常特殊，且不在常見的 (revenue breakdown, segment, region, geographical, 收入分佈, 地區收入) 之中，
+請在你的 JSON 回應中加入一個 "discovered_keyword" 字段，將這個新發現的詞彙告訴系統。
+
+例如：
+{
+  "items": [...],
+  "total_percentage": 100.0,
+  "discovered_keyword": {
+    "keyword": "營運地區收益剖析",
+    "reasoning": "這是某港股年報使用的特殊標題，應加入知識庫以便未來識別"
+  }
+}
+
 【強制輸出格式】：
 只輸出純 JSON，不要包含 Markdown 標記：
 {
-  "Canada": {"percentage": 1.0, "amount": 3862},
-  "Europe": {"percentage": 50.0, "amount": 231679},
-  "Asia, Australia & Others": {"percentage": 17.0, "amount": 80214}
+  "items": [
+    {"segment_name": "Europe", "segment_type": "geography", "revenue_percentage": 50.0, "revenue_amount": 231679, "currency": "HKD"},
+    {"segment_name": "Asia", "segment_type": "geography", "revenue_percentage": 17.0, "revenue_amount": 80214, "currency": "HKD"}
+  ],
+  "total_percentage": 100.0,
+  "discovered_keyword": null  // 或填入新發現的關鍵字
 }
 """
 

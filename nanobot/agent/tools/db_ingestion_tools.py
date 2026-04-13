@@ -140,10 +140,22 @@ class GetDBSchemaTool(Tool):
 📌 可用的主要表 (Schema v2.3):
 - documents: 文檔主表 (owner_company_id, file_size_bytes)
 - document_companies: 關聯公司表 (橋樑表)
-- document_pages: 兜底表 (Zone 2, 只依賴 document_id)
+- document_pages: 兜底表 (Zone 2, 只依賴 document_id) ← 🌟 包底庫！所有 PDF 頁面都在這裡
 - financial_metrics: 扁平化財務指標表
 - revenue_breakdown: 收入分解表 (segment_name, segment_type)
+- key_personnel: 关键人员表 (董事、高管)
+- shareholding_structure: 股东结构表
 - review_queue: 人工審核隊列 (priority INTEGER 1-10)
+
+🌟 持续学习规则 (Continuous Learning Loop):
+如果你发现：
+1. 结构化表 (revenue_breakdown, financial_metrics) 中没有用户要的数据
+2. 但在 document_pages (包底库) 中找到了答案
+请执行以下步骤：
+① 分析找到数据的页面标题/关键词
+② 调用 register_new_keyword 注册新关键词
+③ 把找到的数据回填到结构化表
+④ 这样下次处理类似文档时就不会漏接了！
 """
                 }
                 
@@ -639,6 +651,711 @@ class CreateReviewRecordTool(Tool):
             await db.close()
 
 
+class RegisterNewKeywordTool(Tool):
+    """
+    [Tool] 註冊新的搜索關鍵字
+    
+    功能：
+    - Agent 發現新的財報專有名詞時，將其註冊到全局知識庫
+    - 防呆機制：禁止太短或太通用的詞
+    - 支持分級制度：gold/silver/bronze
+    
+    使用場景：
+    - 在財報中發現「營運地區收益剖析」這種特殊標題
+    - Agent 應該呼叫此 Tool 將其加入知識庫
+    - 下次處理其他公司年報時，就能自動識別這個詞
+    """
+    
+    @property
+    def name(self) -> str:
+        return "register_new_keyword"
+    
+    @property
+    def description(self) -> str:
+        return (
+            "Register a new search keyword to the global knowledge base. "
+            "Use this when you discover a unique term that should be recognized in future documents. "
+            "Example: If you find '營運地區收益剖析' as a revenue section title, register it so the system "
+            "can automatically find similar sections in other annual reports."
+        )
+    
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string",
+                    "enum": ["revenue_breakdown", "key_personnel", "esg", "financial_metrics"],
+                    "description": "Category of the keyword"
+                },
+                "keyword": {
+                    "type": "string",
+                    "description": "New keyword to register (e.g., '營運地區收益剖析', 'Geographical Revenue Split')"
+                },
+                "confidence": {
+                    "type": "string",
+                    "enum": ["gold", "silver", "bronze"],
+                    "default": "bronze",
+                    "description": "Confidence level. Use 'bronze' for AI-discovered keywords (pending review)"
+                },
+                "reasoning": {
+                    "type": "string",
+                    "description": "Why this keyword is useful and should be added"
+                }
+            },
+            "required": ["category", "keyword"]
+        }
+    
+    @property
+    def read_only(self) -> bool:
+        return False  # 會寫入 JSON
+    
+    async def execute(
+        self,
+        category: str,
+        keyword: str,
+        confidence: str = "bronze",
+        reasoning: Optional[str] = None
+    ) -> str:
+        """註冊新關鍵字"""
+        from nanobot.ingestion.utils.keyword_manager import KeywordManager
+        
+        km = KeywordManager()
+        
+        # 调用 KeywordManager 的 add_keyword（已有防呆机制）
+        result = km.add_keyword(
+            category=category,
+            keyword=keyword,
+            source="agent",
+            confidence=confidence,
+            reasoning=reasoning or "Agent discovered during document processing"
+        )
+        
+        if result["success"]:
+            logger.info(f"🧠 Agent 發現新關鍵字: '{keyword}' → {category}")
+        
+        return json.dumps(result, indent=2, ensure_ascii=False)
+
+
+class GetKeywordStatsTool(Tool):
+    """
+    [Tool] 獲取關鍵字庫統計信息
+    
+    功能：
+    - 返回各類別的關鍵字數量
+    - 返回低效能關鍵字（假陽性）
+    - 幫助 Agent 了解知識庫狀況
+    """
+    
+    @property
+    def name(self) -> str:
+        return "get_keyword_stats"
+    
+    @property
+    def description(self) -> str:
+        return (
+            "Get statistics about the keyword knowledge base. "
+            "Returns total keywords, confidence distribution, and low-performance keywords."
+        )
+    
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string",
+                    "description": "Filter by category (optional)",
+                    "default": None
+                }
+            }
+        }
+    
+    @property
+    def read_only(self) -> bool:
+        return True
+    
+    async def execute(self, category: Optional[str] = None) -> str:
+        """獲取統計信息"""
+        from nanobot.ingestion.utils.keyword_manager import KeywordManager
+        
+        km = KeywordManager()
+        stats = km.get_stats(category)
+        
+        return json.dumps(stats, indent=2, ensure_ascii=False)
+
+
+class InsertKeyPersonnelTool(Tool):
+    """
+    [Tool] 写入关键人员数据
+    
+    功能：
+    - 写入 key_personnel 表
+    - 支持 board_role, committee_membership 等
+    
+    Schema v2.3:
+    - name_en, name_zh, position_title_en
+    - role, board_role (Executive/Non-Executive/Independent)
+    - committee_membership (JSONB 数组)
+    """
+    
+    @property
+    def name(self) -> str:
+        return "insert_key_personnel"
+    
+    @property
+    def description(self) -> str:
+        return (
+            "Insert key personnel (directors, executives) into key_personnel table. "
+            "Use this when you find board members, management team, or committee members."
+        )
+    
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "company_id": {"type": "integer", "description": "Company ID"},
+                "document_id": {"type": "integer", "description": "Document ID"},
+                "personnel_list": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name_en": {"type": "string", "description": "English name"},
+                            "name_zh": {"type": ["string", "null"], "description": "Chinese name"},
+                            "position_title_en": {"type": ["string", "null"], "description": "Position title"},
+                            "board_role": {
+                                "type": "string",
+                                "enum": ["Executive", "Non-Executive", "Independent Non-Executive"],
+                                "description": "Board role type"
+                            },
+                            "committee_membership": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Committee memberships (e.g., ['Audit Committee', 'Remuneration Committee'])"
+                            },
+                            "biography": {"type": ["string", "null"], "description": "Brief biography"}
+                        },
+                        "required": ["name_en"]
+                    },
+                    "description": "List of key personnel to insert"
+                }
+            },
+            "required": ["company_id", "personnel_list"]
+        }
+    
+    @property
+    def read_only(self) -> bool:
+        return False
+    
+    async def execute(self, company_id: int, personnel_list: List[Dict], document_id: Optional[int] = None) -> str:
+        """写入关键人员"""
+        from nanobot.ingestion.repository.db_client import DBClient
+        
+        db = DBClient()
+        await db.connect()
+        
+        try:
+            inserted_count = 0
+            
+            async with db.connection() as conn:
+                for person in personnel_list:
+                    # committee_membership 需要转为 JSON
+                    import json
+                    committee_json = json.dumps(person.get("committee_membership", [])) if person.get("committee_membership") else None
+                    
+                    await conn.execute(
+                        """
+                        INSERT INTO key_personnel 
+                        (company_id, document_id, name_en, name_zh, position_title_en, board_role, committee_membership, biography)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
+                        ON CONFLICT (company_id, name_en) 
+                        DO UPDATE SET 
+                            position_title_en = $5,
+                            board_role = $6,
+                            committee_membership = $7::jsonb
+                        """,
+                        company_id,
+                        document_id,
+                        person.get("name_en"),
+                        person.get("name_zh"),
+                        person.get("position_title_en"),
+                        person.get("board_role"),
+                        committee_json,
+                        person.get("biography")
+                    )
+                    inserted_count += 1
+            
+            return json.dumps({
+                "success": True,
+                "company_id": company_id,
+                "inserted_count": inserted_count,
+                "message": f"✅ 写入 {inserted_count} 位关键人员"
+            }, indent=2, ensure_ascii=False)
+            
+        except Exception as e:
+            return json.dumps({"success": False, "error": str(e)}, indent=2)
+        finally:
+            await db.close()
+
+
+class InsertFinancialMetricsTool(Tool):
+    """
+    [Tool] 写入财务指标数据
+    
+    功能：
+    - 写入 financial_metrics 表
+    - 支持标准化货币单位
+    
+    Schema v2.3:
+    - metric_name (如 revenue, net_income, total_assets)
+    - value, unit, standardized_value
+    """
+    
+    @property
+    def name(self) -> str:
+        return "insert_financial_metrics"
+    
+    @property
+    def description(self) -> str:
+        return (
+            "Insert financial metrics into financial_metrics table. "
+            "Use this when you find financial figures like revenue, profit, assets, liabilities."
+        )
+    
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "company_id": {"type": "integer", "description": "Company ID"},
+                "year": {"type": "integer", "description": "Financial year"},
+                "metrics": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "metric_name": {"type": "string", "description": "Metric name (e.g., 'revenue', 'net_income')"},
+                            "value": {"type": "number", "description": "Raw value"},
+                            "unit": {"type": "string", "description": "Unit (e.g., 'HKD', 'RMB')"},
+                            "standardized_value": {"type": ["number", "null"], "description": "Value in HKD"},
+                            "source_page": {"type": ["integer", "null"], "description": "Source page number"}
+                        },
+                        "required": ["metric_name", "value"]
+                    },
+                    "description": "List of financial metrics"
+                }
+            },
+            "required": ["company_id", "year", "metrics"]
+        }
+    
+    @property
+    def read_only(self) -> bool:
+        return False
+    
+    async def execute(self, company_id: int, year: int, metrics: List[Dict]) -> str:
+        """写入财务指标"""
+        from nanobot.ingestion.repository.db_client import DBClient
+        
+        db = DBClient()
+        await db.connect()
+        
+        try:
+            inserted_count = 0
+            
+            async with db.connection() as conn:
+                for metric in metrics:
+                    await conn.execute(
+                        """
+                        INSERT INTO financial_metrics 
+                        (company_id, year, metric_name, value, unit, standardized_value, source_page)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7)
+                        ON CONFLICT (company_id, year, metric_name) 
+                        DO UPDATE SET value = $4, standardized_value = $6
+                        """,
+                        company_id,
+                        year,
+                        metric.get("metric_name"),
+                        metric.get("value"),
+                        metric.get("unit", "HKD"),
+                        metric.get("standardized_value"),
+                        metric.get("source_page")
+                    )
+                    inserted_count += 1
+            
+            return json.dumps({
+                "success": True,
+                "company_id": company_id,
+                "year": year,
+                "inserted_count": inserted_count,
+                "message": f"✅ 写入 {inserted_count} 个财务指标"
+            }, indent=2, ensure_ascii=False)
+            
+        except Exception as e:
+            return json.dumps({"success": False, "error": str(e)}, indent=2)
+        finally:
+            await db.close()
+
+
+class InsertShareholdingTool(Tool):
+    """
+    [Tool] 写入股东结构数据
+    
+    Schema v2.3:
+    - shareholder_name, share_type
+    - shares_held, percentage
+    """
+    
+    @property
+    def name(self) -> str:
+        return "insert_shareholding"
+    
+    @property
+    def description(self) -> str:
+        return (
+            "Insert shareholding structure into shareholding_structure table. "
+            "Use this when you find shareholder names and ownership percentages."
+        )
+    
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "company_id": {"type": "integer", "description": "Company ID"},
+                "year": {"type": "integer", "description": "Year"},
+                "shareholders": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "shareholder_name": {"type": "string", "description": "Shareholder name"},
+                            "share_type": {"type": ["string", "null"], "description": "Share type (e.g., 'ordinary')"},
+                            "shares_held": {"type": ["number", "null"], "description": "Number of shares"},
+                            "percentage": {"type": "number", "description": "Ownership percentage"}
+                        },
+                        "required": ["shareholder_name", "percentage"]
+                    },
+                    "description": "List of shareholders"
+                }
+            },
+            "required": ["company_id", "year", "shareholders"]
+        }
+    
+    @property
+    def read_only(self) -> bool:
+        return False
+    
+    async def execute(self, company_id: int, year: int, shareholders: List[Dict]) -> str:
+        """写入股东结构"""
+        from nanobot.ingestion.repository.db_client import DBClient
+        
+        db = DBClient()
+        await db.connect()
+        
+        try:
+            inserted_count = 0
+            
+            async with db.connection() as conn:
+                for sh in shareholders:
+                    await conn.execute(
+                        """
+                        INSERT INTO shareholding_structure 
+                        (company_id, year, shareholder_name, share_type, shares_held, percentage)
+                        VALUES ($1, $2, $3, $4, $5, $6)
+                        """,
+                        company_id,
+                        year,
+                        sh.get("shareholder_name"),
+                        sh.get("share_type"),
+                        sh.get("shares_held"),
+                        sh.get("percentage")
+                    )
+                    inserted_count += 1
+            
+            return json.dumps({
+                "success": True,
+                "inserted_count": inserted_count
+            }, indent=2, ensure_ascii=False)
+            
+        except Exception as e:
+            return json.dumps({"success": False, "error": str(e)}, indent=2)
+        finally:
+            await db.close()
+
+
+class CleanupLowPerformanceKeywordsTool(Tool):
+    """
+    [Tool] 清理低效能關鍵字（反向學習）
+    
+    功能：
+    - 自動檢測命中率低於 20% 的關鍵字
+    - Bronze 等級 → 直接移除
+    - Silver 等級 → 降級為 Bronze
+    - Gold 等級 → 保持（需人工審核）
+    
+    使用場景：
+    - 定期清理知識庫，防止「關鍵字爆炸」
+    - 優化掃描效能
+    """
+    
+    @property
+    def name(self) -> str:
+        return "cleanup_low_performance_keywords"
+    
+    @property
+    def description(self) -> str:
+        return (
+            "Clean up low-performance keywords from the knowledge base. "
+            "Removes keywords with hit_rate < 20% (after min 5 uses). "
+            "Bronze keywords are removed, Silver are downgraded to Bronze, Gold are kept."
+        )
+    
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "min_usage": {
+                    "type": "integer",
+                    "description": "Minimum usage count before cleanup",
+                    "default": 5
+                },
+                "min_hit_rate": {
+                    "type": "number",
+                    "description": "Minimum hit rate threshold (0.0-1.0)",
+                    "default": 0.2
+                },
+                "dry_run": {
+                    "type": "boolean",
+                    "description": "Only report, don't actually remove",
+                    "default": False
+                }
+            }
+        }
+    
+    @property
+    def read_only(self) -> bool:
+        return False
+    
+    async def execute(
+        self,
+        min_usage: int = 5,
+        min_hit_rate: float = 0.2,
+        dry_run: bool = False
+    ) -> str:
+        """執行清理"""
+        from nanobot.ingestion.utils.keyword_manager import KeywordManager
+        
+        km = KeywordManager()
+        
+        if dry_run:
+            # 只返回統計，不執行清理
+            stats = km.get_stats()
+            low_perf = stats.get("low_performance", [])
+            return json.dumps({
+                "dry_run": True,
+                "would_remove": len(low_perf),
+                "low_performance_keywords": low_perf,
+                "message": f"⚠️ Dry run: {len(low_perf)} keywords would be cleaned"
+            }, indent=2, ensure_ascii=False)
+        
+        result = km.auto_cleanup_low_performance(min_usage, min_hit_rate)
+        
+        logger.info(f"🧹 反向學習: 移除 {result['removed_count']} 個，降級 {result['downgraded_count']} 個低效能關鍵字")
+        
+        return json.dumps(result, indent=2, ensure_ascii=False)
+
+
+class GetKeywordContextTool(Tool):
+    """
+    [Tool] 獲取關鍵字的上下文信息
+    
+    功能：
+    - 返回典型頁碼範圍
+    - 返回共同出現的特徵
+    - 返回行業命中統計
+    """
+    
+    @property
+    def name(self) -> str:
+        return "get_keyword_context"
+    
+    @property
+    def description(self) -> str:
+        return (
+            "Get context information for a keyword: typical page range, "
+            "co-occurrence features, and industry-specific statistics."
+        )
+    
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "keyword": {
+                    "type": "string",
+                    "description": "Keyword to analyze"
+                },
+                "category": {
+                    "type": "string",
+                    "description": "Category filter (optional)",
+                    "default": None
+                }
+            },
+            "required": ["keyword"]
+        }
+    
+    @property
+    def read_only(self) -> bool:
+        return True
+    
+    async def execute(self, keyword: str, category: Optional[str] = None) -> str:
+        """獲取上下文"""
+        from nanobot.ingestion.utils.keyword_manager import KeywordManager
+        
+        km = KeywordManager()
+        context = km.get_keyword_context(keyword, category)
+        
+        return json.dumps(context, indent=2, ensure_ascii=False)
+
+
+class SearchDocumentPagesTool(Tool):
+    """
+    [Tool] 搜索包底库 (document_pages) 找遗漏数据
+    
+    🌟 核心功能：Continuous Learning Loop 的关键
+    
+    使用场景：
+    1. 结构化表 (revenue_breakdown) 没有用户要的数据
+    2. 在包底库中搜索关键词
+    3. 找到后 → 注册新关键词 → 回填数据
+    
+    这是打破"鸡生蛋"问题的核心机制！
+    """
+    
+    @property
+    def name(self) -> str:
+        return "search_document_pages"
+    
+    @property
+    def description(self) -> str:
+        return (
+            "Search the fallback table (document_pages) for keywords. "
+            "Use this when structured tables (revenue_breakdown, financial_metrics) don't have the data. "
+            "If you find the data here, please: "
+            "1) Register the page title as a new keyword, "
+            "2) Backfill the data to structured tables. "
+            "This is the Continuous Learning Loop!"
+        )
+    
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "document_id": {"type": "integer", "description": "Document ID to search"},
+                "keywords": {"type": "array", "items": {"type": "string"}, "description": "Keywords to search"},
+                "limit": {"type": "integer", "default": 10}
+            },
+            "required": ["document_id", "keywords"]
+        }
+    
+    @property
+    def read_only(self) -> bool:
+        return True
+    
+    async def execute(self, document_id: int, keywords: List[str], limit: int = 10) -> str:
+        """搜索包底库"""
+        from nanobot.ingestion.repository.db_client import DBClient
+        db = DBClient()
+        await db.connect()
+        try:
+            async with db.connection() as conn:
+                conditions = [f"markdown_content ILIKE '%{kw}%'" for kw in keywords]
+                where_clause = " AND ".join(conditions) if len(conditions) > 1 else conditions[0]
+                results = await conn.fetch(
+                    f"SELECT page_num, markdown_content FROM document_pages WHERE document_id = $1 AND {where_clause} LIMIT $2",
+                    document_id, limit
+                )
+                if not results:
+                    return json.dumps({"success": True, "found": False, "message": "包底库中也没有找到"}, indent=2)
+                pages = [{"page_num": r["page_num"], "preview": r["markdown_content"][:300]} for r in results]
+                return json.dumps({"success": True, "found": True, "pages_found": pages, 
+                    "hint": "找到后请注册新关键词并回填数据"}, indent=2, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({"success": False, "error": str(e)}, indent=2)
+        finally:
+            await db.close()
+
+
+class BackfillFromFallbackTool(Tool):
+    """
+    [Tool] 从包底库回填数据到结构化表
+    
+    🌟 Continuous Learning Loop 的最后一步
+    """
+    
+    @property
+    def name(self) -> str:
+        return "backfill_from_fallback"
+    
+    @property
+    def description(self) -> str:
+        return "Backfill data from document_pages to structured tables after finding it."
+    
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "company_id": {"type": "integer"},
+                "year": {"type": "integer"},
+                "document_id": {"type": "integer"},
+                "page_num": {"type": "integer"},
+                "data_type": {"type": "string", "enum": ["revenue_breakdown", "financial_metrics"]},
+                "extracted_data": {"type": "object"},
+                "new_keyword": {"type": ["string", "null"]}
+            },
+            "required": ["company_id", "year", "document_id", "page_num", "data_type", "extracted_data"]
+        }
+    
+    @property
+    def read_only(self) -> bool:
+        return False
+    
+    async def execute(self, company_id: int, year: int, document_id: int, page_num: int, 
+                      data_type: str, extracted_data: Dict, new_keyword: Optional[str] = None) -> str:
+        """回填数据"""
+        from nanobot.ingestion.repository.db_client import DBClient
+        from nanobot.ingestion.utils.keyword_manager import KeywordManager
+        
+        db = DBClient()
+        await db.connect()
+        try:
+            count = 0
+            async with db.connection() as conn:
+                if data_type == "revenue_breakdown":
+                    for seg, data in extracted_data.items():
+                        await conn.execute(
+                            "INSERT INTO revenue_breakdown (company_id, year, segment_name, revenue_percentage, source_document_id, source_page) VALUES ($1,$2,$3,$4,$5,$6)",
+                            company_id, year, seg, data.get("percentage"), document_id, page_num
+                        )
+                        count += 1
+            
+            if new_keyword:
+                km = KeywordManager()
+                km.add_keyword("revenue_breakdown", new_keyword, "continuous_learning", "silver")
+            
+            return json.dumps({"success": True, "inserted": count, "keyword_registered": new_keyword is not None}, indent=2)
+        except Exception as e:
+            return json.dumps({"success": False, "error": str(e)}, indent=2)
+        finally:
+            await db.close()
+
+
 # ============================================================
 # Tool 註冊函數
 # ============================================================
@@ -656,5 +1373,14 @@ def register_ingestion_tools(registry) -> None:
     registry.register(UpdateDocumentStatusTool())
     registry.register(UpdateDynamicAttributesTool())
     registry.register(CreateReviewRecordTool())
+    registry.register(RegisterNewKeywordTool())
+    registry.register(GetKeywordStatsTool())
+    registry.register(CleanupLowPerformanceKeywordsTool())
+    registry.register(GetKeywordContextTool())
+    registry.register(InsertKeyPersonnelTool())
+    registry.register(InsertFinancialMetricsTool())
+    registry.register(InsertShareholdingTool())
+    registry.register(SearchDocumentPagesTool())  # 🌟 Continuous Learning
+    registry.register(BackfillFromFallbackTool())  # 🌟 Continuous Learning
     
-    logger.info("✅ Registered 5 ingestion tools: get_db_schema, smart_insert_document, update_document_status, update_dynamic_attributes, create_review_record")
+    logger.info("✅ Registered 14 ingestion tools including Continuous Learning Loop tools")
