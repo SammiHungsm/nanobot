@@ -36,7 +36,7 @@ except ImportError:
     logger.warning("⚠️ Pillow 未安裝，圖片裁切功能將受限")
 
 # 導入統一的 LLM 客戶端
-from ..utils.llm_client import get_llm_client, get_vision_model
+from nanobot.core.llm_core import llm_core
 
 
 class VisionParser:
@@ -60,14 +60,16 @@ class VisionParser:
     
     def _get_client(self) -> Optional["AsyncOpenAI"]:
         """獲取 OpenAI 客戶端（延遲載入）"""
+        # 🌟 使用統一的 llm_core
         if self._client is None:
-            self._client = get_llm_client()
+            self._client = llm_core
         return self._client
     
     def _get_model(self) -> str:
         """獲取 Vision 模型名稱"""
+        # 🌟 使用統一的 llm_core 的 vision_model
         if self._model is None:
-            self._model = get_vision_model()
+            self._model = llm_core.vision_model
         return self._model
     
     @staticmethod

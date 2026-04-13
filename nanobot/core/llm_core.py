@@ -215,31 +215,195 @@ class UnifiedLLMCore:
                 {"role": "user", "content": "Hello"}
             ])
         """
-        if not self.client:
-            logger.error("❌ OpenAI client not initialized")
-            raise RuntimeError("OpenAI client not initialized. Check API key.")
-        
         target_model = model or self.default_model
         provider = detect_provider(target_model)
         
         logger.debug(f"🤖 Calling LLM: {target_model} (provider={provider})")
         
         try:
-            # 🌟 调用 OpenAI-compatible API
-            response = await self.client.chat.completions.create(
-                model=target_model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                **kwargs
-            )
+            # 🌟 Provider 路由逻辑
             
-            content = response.choices[0].message.content
-            logger.debug(f"✅ LLM response: {len(content)} chars")
-            return content
+            # 处理 Ollama（本地模型）
+            if provider == "ollama":
+                return await self._call_ollama_chat(messages, target_model, temperature, max_tokens, **kwargs)
+            
+            # 处理 Anthropic（Claude）
+            elif provider == "anthropic":
+                return await self._call_anthropic_chat(messages, target_model, temperature, max_tokens, **kwargs)
+            
+            # 处理 DashScope（Qwen）
+            elif provider == "dashscope":
+                # DashScope 使用 OpenAI-compatible API（如果配置正确）
+                return await self._call_openai_compatible(messages, target_model, temperature, max_tokens, **kwargs)
+            
+            # 默认：OpenAI-compatible Provider
+            else:
+                return await self._call_openai_compatible(messages, target_model, temperature, max_tokens, **kwargs)
             
         except Exception as e:
             logger.error(f"❌ LLM call failed: {e}")
+            raise
+    
+    async def _call_openai_compatible(
+        self,
+        messages: List[Dict[str, Any]],
+        model: str,
+        temperature: float,
+        max_tokens: int,
+        **kwargs
+    ) -> str:
+        """
+        🌟 调用 OpenAI-compatible API（标准格式）
+        
+        支持：
+        - OpenAI (GPT-4o, GPT-4o-mini)
+        - DashScope (Qwen) - 如果 api_base 正确配置
+        - 其他 OpenAI-compatible Gateway（LiteLLM, OneAPI）
+        """
+        if not self.client:
+            raise RuntimeError("OpenAI client not initialized. Check API key.")
+        
+        response = await self.client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            **kwargs
+        )
+        
+        content = response.choices[0].message.content
+        logger.debug(f"✅ OpenAI response: {len(content)} chars")
+        return content
+    
+    async def _call_ollama_chat(
+        self,
+        messages: List[Dict[str, Any]],
+        model: str,
+        temperature: float,
+        max_tokens: int,
+        **kwargs
+    ) -> str:
+        """
+        🌟 调用 Ollama 本地模型
+        
+        Args:
+            messages: OpenAI 格式的 messages
+            model: Ollama 模型名称（如 "ollama/llama3"）
+            
+        Returns:
+            str: Ollama 的回复
+            
+        注意：Ollama 的 API 地址通常是 http://localhost:11434/v1
+        """
+        import httpx
+        
+        # 🌟 移除 ollama/ 前缀
+        ollama_model = model.replace("ollama/", "")
+        
+        # 🌟 Ollama API 地址（默认 localhost）
+        ollama_url = os.getenv("OLLAMA_API_BASE", "http://localhost:11434/v1")
+        
+        logger.debug(f"🦙 Calling Ollama: {ollama_model} at {ollama_url}")
+        
+        try:
+            # 🌟 使用 OpenAI-compatible 格式（Ollama 支持）
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(
+                    f"{ollama_url}/chat/completions",
+                    json={
+                        "model": ollama_model,
+                        "messages": messages,
+                        "temperature": temperature,
+                        "max_tokens": max_tokens,
+                        "stream": False
+                    }
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                    logger.debug(f"✅ Ollama response: {len(content)} chars")
+                    return content
+                else:
+                    logger.error(f"❌ Ollama failed: {response.status_code}")
+                    raise RuntimeError(f"Ollama API failed: {response.status_code}")
+                    
+        except Exception as e:
+            logger.error(f"❌ Ollama chat call failed: {e}")
+            raise
+    
+    async def _call_anthropic_chat(
+        self,
+        messages: List[Dict[str, Any]],
+        model: str,
+        temperature: float,
+        max_tokens: int,
+        **kwargs
+    ) -> str:
+        """
+        🌟 调用 Anthropic Claude
+        
+        Args:
+            messages: OpenAI 格式的 messages（需要转换）
+            model: Claude 模型名称（如 "claude-3-opus"）
+            
+        Returns:
+            str: Claude 的回复
+            
+        注意：
+        - Anthropic 的 API 格式与 OpenAI 不同
+        - 需要使用 anthropic SDK 或 LiteLLM Gateway
+        """
+        # 🌟 如果使用 LiteLLM Gateway，可以直接用 OpenAI SDK
+        # 检查 api_base 是否指向 LiteLLM
+        if self.config.get("api_base") and "litellm" in self.config.get("api_base", "").lower():
+            logger.debug("Using LiteLLM Gateway for Anthropic")
+            return await self._call_openai_compatible(messages, model, temperature, max_tokens, **kwargs)
+        
+        # 🌟 否则，需要使用 Anthropic SDK
+        try:
+            import anthropic
+            
+            # 🌟 提取 API Key
+            anthropic_key = os.getenv("ANTHROPIC_API_KEY")
+            if not anthropic_key:
+                raise RuntimeError("ANTHROPIC_API_KEY not set")
+            
+            # 🌟 转换 messages 格式（Anthropic 不支持 system 在 messages 中）
+            system_message = ""
+            anthropic_messages = []
+            
+            for msg in messages:
+                if msg["role"] == "system":
+                    system_message = msg["content"]
+                else:
+                    anthropic_messages.append({
+                        "role": msg["role"],
+                        "content": msg["content"]
+                    })
+            
+            # 🌟 调用 Anthropic SDK
+            client = anthropic.AsyncAnthropic(api_key=anthropic_key)
+            
+            response = await client.messages.create(
+                model=model.replace("anthropic/", ""),
+                max_tokens=max_tokens,
+                temperature=temperature,
+                system=system_message,
+                messages=anthropic_messages
+            )
+            
+            content = response.content[0].text
+            logger.debug(f"✅ Anthropic response: {len(content)} chars")
+            return content
+            
+        except ImportError:
+            logger.warning("⚠️ anthropic SDK not installed, trying OpenAI-compatible")
+            # Fallback: 尝试使用 OpenAI SDK（可能通过 Gateway）
+            return await self._call_openai_compatible(messages, model, temperature, max_tokens, **kwargs)
+        
+        except Exception as e:
+            logger.error(f"❌ Anthropic call failed: {e}")
             raise
     
     async def vision(

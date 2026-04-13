@@ -5,7 +5,7 @@ Base Ingestion Pipeline - 資料導入流水線基類
 - 共用的流程寫死在基類（parse、save）
 - 提取邏輯交給子類實作（extract_information）
 
-解決的問題：
+解决的问题：
 - pipeline.py 和 agentic_ingestion.py 流程 80% 重複
 - Parser、DB 寫入邏輯分散
 - 难以扩展新的 Pipeline 类型
@@ -33,6 +33,7 @@ Usage:
             return {"fast_mode": True, "text": artifacts[0]['content']}
 """
 
+import json  # 🌟 修复：移到顶部
 from abc import ABC, abstractmethod
 from typing import Dict, Any, List, Optional
 from pathlib import Path
@@ -307,4 +308,4 @@ def create_pipeline(pipeline_type: str = "agentic", **kwargs) -> BaseIngestionPi
 # 导入 json（用于 save_to_db）
 # ===========================================
 
-import json
+# 🌟 json 已在文件顶部导入，此处不再重复

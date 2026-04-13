@@ -39,7 +39,9 @@ from .extractors.financial_agent import FinancialAgent
 from .extractors.page_classifier import PageClassifier
 
 # 導入統一的 LLM 客戶端
-from .utils.llm_client import get_llm_client, get_llm_model, get_vision_model
+# 🌟 使用统一的 llm_core
+# 🌟 使用统一的 llm_core
+from nanobot.core.llm_core import llm_core
 
 # 導入 Keyword Manager（動態關鍵字管理）
 from .utils.keyword_manager import KeywordManager
@@ -215,9 +217,11 @@ class DocumentPipeline:
         self._agentic_pipeline = None
         
         # 🌟 使用統一的 LLM 客戶端
-        self.llm_client = get_llm_client()
-        self.llm_model = get_llm_model()
-        self.vision_model = get_vision_model()
+        # 🌟 使用统一的 llm_core
+        self.llm_client = llm_core
+        self.llm_model = llm_core.default_model
+        # 🌟 使用统一的 llm_core
+        self.vision_model = llm_core.vision_model
         
         # 初始化 Parser 層
         self.db = DBClient(self.db_url)

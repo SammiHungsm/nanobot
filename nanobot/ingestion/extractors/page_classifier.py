@@ -16,7 +16,8 @@ from typing import Dict, List, Optional
 from loguru import logger
 
 # 導入統一的 LLM 客戶端
-from ..utils.llm_client import get_llm_client, get_llm_model
+# 🌟 使用统一的 llm_core
+from nanobot.core.llm_core import llm_core
 
 
 class PageClassifier:
@@ -39,14 +40,16 @@ class PageClassifier:
     
     def _get_client(self):
         """獲取 OpenAI 客戶端（延遲載入）"""
+        # 🌟 使用統一的 llm_core
         if self._client is None:
-            self._client = get_llm_client()
+            self._client = llm_core
         return self._client
     
     def _get_model(self) -> str:
         """獲取 LLM 模型名稱"""
+        # 🌟 使用統一的 llm_core
         if self._model is None:
-            self._model = get_llm_model()
+            self._model = llm_core.default_model
         return self._model
     
     async def find_candidate_pages(
