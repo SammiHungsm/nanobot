@@ -53,7 +53,7 @@ class Stage1Parser:
         result = core.parse(
             pdf_path=pdf_path,
             output_dir=output_dir,
-            use_hybrid=True  # 🌟 总是 True
+            enable_hybrid=True  # 🌟 使用正确的参数名
         )
         
         logger.info(f"   ✅ 解析完成: {result.total_pages} 页, {len(result.artifacts)} artifacts")
