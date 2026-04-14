@@ -1535,27 +1535,58 @@ class DocumentPipeline(BaseIngestionPipeline):
                     )
                 
                 elif artifact_type == "image":
-                    # 🔧 修復：實際保存圖片文件（支持 base64 和外部文件）
+                    # 🔧 修復：實際保存圖片文件（支持 metadata.data、base64 和外部文件）
                     image_dir = doc_dir / "images"
                     image_dir.mkdir(parents=True, exist_ok=True)
                     
                     image_filename = f"image_{idx:04d}.png"
                     image_path = image_dir / image_filename
                     image_saved = False
+                    image_path_source = None  # 🌟 初始化变量，防止后续引用时报错
                     
-                    # 🌟 优先检查外部图片文件路径（image_path）
-                    image_path_source = artifact.get("image_path")
-                    if image_path_source and Path(image_path_source).exists():
+                    # 🌟 优先检查 metadata.data（OpenDataLoader Hybrid 模式的图片输出位置）
+                    metadata_dict = artifact.get("metadata", {})
+                    image_data_source = metadata_dict.get("data")
+                    
+                    if image_data_source and isinstance(image_data_source, str):
                         try:
-                            # 直接复制外部图片文件
-                            import shutil
-                            shutil.copy2(image_path_source, str(image_path))
-                            image_saved = True
-                            logger.debug(f"✅ 已复制外部图片: {image_path_source} → {image_path}")
+                            if image_data_source.startswith("data:image"):
+                                # data:image/png;base64,... 格式
+                                base64_data = image_data_source.split(",", 1)[1] if "," in image_data_source else image_data_source
+                                import base64
+                                image_bytes = base64.b64decode(base64_data)
+                                
+                                with open(image_path, 'wb') as f:
+                                    f.write(image_bytes)
+                                image_saved = True
+                                logger.debug(f"✅ 已保存圖片 (metadata.data data URI): {image_path}")
+                            elif len(image_data_source) > 100:
+                                # 纯 base64 字符串
+                                import base64
+                                try:
+                                    image_bytes = base64.b64decode(image_data_source)
+                                    with open(image_path, 'wb') as f:
+                                        f.write(image_bytes)
+                                    image_saved = True
+                                    logger.debug(f"✅ 已保存圖片 (metadata.data base64): {image_path}")
+                                except Exception:
+                                    pass
                         except Exception as e:
-                            logger.warning(f"⚠️ 图片复制失败: {e}")
+                            logger.warning(f"⚠️ metadata.data 图片保存失败: {e}")
                     
-                    # 🌟 如果没有外部文件，尝试从 base64 数据保存
+                    # 🌟 如果 metadata.data 没有，尝试外部图片文件路径（image_path）
+                    if not image_saved:
+                        image_path_source = artifact.get("image_path")
+                        if image_path_source and Path(image_path_source).exists():
+                            try:
+                                import shutil
+                                shutil.copy2(image_path_source, str(image_path))
+                                image_saved = True
+                                logger.debug(f"✅ 已复制外部图片: {image_path_source} → {image_path}")
+                            except Exception as e:
+                                logger.warning(f"⚠️ 图片复制失败: {e}")
+                    
+                    # 🌟 如果还是没有，尝试 artifact.image_data
                     if not image_saved:
                         image_data = artifact.get("image_data")
                         
@@ -1569,7 +1600,7 @@ class DocumentPipeline(BaseIngestionPipeline):
                                     with open(image_path, 'wb') as f:
                                         f.write(image_bytes)
                                     image_saved = True
-                                    logger.debug(f"✅ 已保存圖片 (base64 data URI): {image_path}")
+                                    logger.debug(f"✅ 已保存圖片 (image_data data URI): {image_path}")
                                 
                                 elif isinstance(image_data, str) and len(image_data) > 100:
                                     import base64
@@ -1578,7 +1609,7 @@ class DocumentPipeline(BaseIngestionPipeline):
                                         with open(image_path, 'wb') as f:
                                             f.write(image_bytes)
                                         image_saved = True
-                                        logger.debug(f"✅ 已保存圖片 (base64): {image_path}")
+                                        logger.debug(f"✅ 已保存圖片 (image_data base64): {image_path}")
                                     except Exception:
                                         pass
                                 
@@ -1590,10 +1621,9 @@ class DocumentPipeline(BaseIngestionPipeline):
                         logger.warning(f"⚠️ OpenDataLoader 未提供圖片數據，跳過保存: {image_filename}")
                     
                     # 記錄到 raw_artifacts
-                    # 🌟 N+1 效能優化：傳入整數 ID
                     await self.db.insert_raw_artifact(
                         artifact_id=f"{doc_id}_image_{idx:04d}",
-                        document_id=document_id,  # 🌟 傳入整數 ID
+                        document_id=document_id,
                         company_id=company_id,
                         file_type="image",
                         file_path=str(image_path.relative_to(self.data_dir)) if image_saved else f"{doc_id}/images/{image_filename}",
@@ -1601,7 +1631,8 @@ class DocumentPipeline(BaseIngestionPipeline):
                         metadata=json_module.dumps({
                             **metadata,
                             "image_saved": image_saved,
-                            "image_path_source": image_path_source
+                            "image_path_source": image_path_source,
+                            "image_data_source": "metadata.data" if image_data_source else "image_data"
                         })
                     )
                     
