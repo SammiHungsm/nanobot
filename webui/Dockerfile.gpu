@@ -45,9 +45,10 @@ COPY webui/static/ ./static/
 # Create data directories
 RUN mkdir -p /data/pdfs /app/uploads /app/outputs
 
-# 🌟 Copy entrypoint script (starts Hybrid server + WebUI)
-COPY webui/entrypoint.sh ./entrypoint.sh
-RUN chmod +x ./entrypoint.sh
+# 🌟 Copy entrypoint scripts
+COPY webui/entrypoint.sh /tmp/entrypoint.sh
+COPY webui/entrypoint_delayed.sh /tmp/entrypoint_delayed.sh
+RUN chmod +x /tmp/entrypoint.sh /tmp/entrypoint_delayed.sh
 
 # Create non-root user
 RUN useradd --create-home --shell /bin/bash nanobot \
@@ -70,5 +71,6 @@ ENV TORCH_DEVICE=cuda
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
-# 🌟 Use entrypoint to start Hybrid server + WebUI
-ENTRYPOINT ["./entrypoint.sh"]
+# 🌟 Use entrypoint to start Hybrid server + WebUI (GPU version uses delayed mode)
+# Note: entrypoint files are in /tmp/, docker-compose.gpu.yml overrides this
+ENTRYPOINT ["/bin/bash", "/tmp/entrypoint_delayed.sh"]

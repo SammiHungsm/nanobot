@@ -77,7 +77,7 @@ services:
       dockerfile: webui/Dockerfile.gpu  # 🌟 使用 GPU 版本 Dockerfile
     container_name: nanobot-webui
     # 🌟 GPU Version: Hybrid server 使用 GPU 加速
-    entrypoint: ["/bin/bash", "-c", "nohup opendataloader-pdf-hybrid --port 5002 --device cuda > /tmp/hybrid.log 2>&1 & sleep 10 && exec python -m app.main"]
+    entrypoint: ["/bin/bash", "/tmp/entrypoint_delayed.sh"]
     volumes:
       - ./data/uploads:/app/data/uploads
       - ./data/output:/app/data/output

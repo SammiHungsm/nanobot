@@ -53,6 +53,15 @@ from nanobot.ingestion.utils.table_merger import cross_page_merger, merge_cross_
 # 導入 Keyword Manager（動態關鍵字管理）
 from .utils.keyword_manager import KeywordManager
 
+# 🌟 导入 Stage Handlers (Orchestrator 模式)
+from .stages import (
+    Stage0Preprocessor,
+    Stage1Parser,
+    Stage2Enrichment,
+    Stage3Router,
+    Stage4Extractor,
+)
+
 
 # ===========================================
 # 跨頁表格合併工具
@@ -276,40 +285,17 @@ class DocumentPipeline(BaseIngestionPipeline):
             # Step 3: 創建文檔記錄
             await self._create_document(pdf_path, company_id, doc_id, file_hash)
             
-            # Step 4: 提取公司信息 (如果沒有 company_id)
-            # 🎯 漸進式提取：只取前 2 頁，Upsert 公司信息
-            if not company_id:
-                if progress_callback:
-                    progress_callback(20.0, "從封面提取公司元數據...")
-                company_id = await self._extract_and_create_company(pdf_path, doc_id)
-                # 注意：_extract_and_create_company 已內部處理 year 更新
-            
-            # Step 5: 智能結構化提取
-            if company_id:
-                if progress_callback:
-                    progress_callback(30.0, "智能提取結構化數據...")
-                
-                extraction_result = await self.smart_extract(
-                    pdf_path, company_id, doc_id, progress_callback
-                )
-            else:
-                extraction_result = {"status": "skipped", "reason": "no company_id"}
-            
-            # Step 6: 更新狀態
-            if progress_callback:
-                progress_callback(90.0, "更新狀態...")
-            
-            await self.db.update_document_status(doc_id, "completed", extraction_result)
-            
-            if progress_callback:
-                progress_callback(100.0, "✅ 處理完成")
-            
-            return {
-                "status": "completed",
-                "doc_id": doc_id,
-                "company_id": company_id,
-                **extraction_result
-            }
+            # 🌟 修改：直接调用 process_pdf_full（使用 Stage handlers）
+            # Stage 0: Vision 提取公司信息
+            # Stage 1: Hybrid PDF 解析
+            # Stage 2: Vision 分析图片
+            # Stage 3-4: 深度提取
+            return await self.process_pdf_full(
+                pdf_path=pdf_path,
+                company_id=company_id,
+                doc_id=doc_id,
+                progress_callback=progress_callback
+            )
             
         except Exception as e:
             logger.error(f"❌ 處理失敗: {e}")
@@ -398,6 +384,12 @@ class DocumentPipeline(BaseIngestionPipeline):
     ) -> Dict[str, Any]:
         """
         智能結構化提取
+        
+        🌟 Orchestrator 模式：此方法对应 Stage 3 + Stage 4
+        - Stage 3 (Stage3Router): 关键字扫描 + 目标页面路由
+        - Stage 4 (Stage4Extractor): 深度结构化提取
+        
+        注意：此方法保留原有实现，逐步迁移到 Stage handlers
         
         🌟 核心改进：根据用户建议，实现真正的 Agentic 写入逻辑
         - UI 决定大方向 (is_index_report, index_theme, confirmed_doc_industry)
@@ -1087,6 +1079,16 @@ class DocumentPipeline(BaseIngestionPipeline):
                     
                     logger.info(f"   🎨 使用 Vision API 分析 Page {page_num}...")
                     
+                    # 🌟 关键：在调用 Vision API 前，让 Hybrid 释放 GPU
+                    try:
+                        import requests
+                        # 尝试让 Hybrid 服务暂时卸载模型
+                        requests.post("http://localhost:5002/v1/unload", timeout=5)
+                        logger.debug("   🧹 Hybrid 模型已卸载，GPU 空闲")
+                        time.sleep(2)  # 等待 GPU 完全释放
+                    except Exception as e:
+                        logger.debug(f"   ℹ️ Hybrid unload 调用失败（可能不支持）：{e}")
+                    
                     # 将页面转换为图片
                     page = doc.load_page(page_num - 1)  # PyMuPDF 是 0-indexed
                     pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))  # 2x zoom for better quality
@@ -1337,62 +1339,108 @@ class DocumentPipeline(BaseIngestionPipeline):
             # Step 2: 創建文檔記錄
             await self._create_document(pdf_path, company_id, doc_id, file_hash)
             
-            # Step 3: 🌟 快速解析 Page 1-2（用于公司提取）
+            # Step 3: 🌟 Stage 0 - Vision API 提取封面（直接调用，不依赖 artifacts）
+            # 🎯 关键：qwen3.5:9b 先运行，完成后自动卸载，GPU 空闲给 Hybrid
             if progress_callback:
-                progress_callback(10.0, "快速解析封面...")
+                progress_callback(10.0, "Stage 0: Vision 分析封面...")
             
-            cover_artifacts = []
-            if self.opendataloader_parser:
-                # 🌟 只解析 Page 1-2（快速模式，不启用 Hybrid）
-                cover_artifacts = self.opendataloader_parser.parse_pages(pdf_path, pages=[1, 2], doc_id=doc_id)
-                logger.info(f"   ✅ 封面解析完成: {len(cover_artifacts)} 個 artifacts")
-            
-            # Step 4: 提取公司信息（如果沒有 company_id，且不是指數報告）
+            # Step 4: 🎯 Stage 0 - 提取公司信息
             if progress_callback:
-                progress_callback(20.0, "🧠 提取公司信息...")
+                progress_callback(20.0, "Stage 0: Vision 提取公司信息...")
             
             # 🌟 修正：如果是指數報告，絕對不能提取母公司！
             if not company_id and not is_index_report:
-                # 🌟 使用封面 artifacts 提取公司信息（更快）
-                company_id = await self._extract_and_create_company(pdf_path, doc_id, artifacts=cover_artifacts)
+                # 🌟 使用 Stage0Preprocessor（只用 Vision API）
+                cover_metadata = await Stage0Preprocessor.extract_cover_metadata(
+                    pdf_path=pdf_path,
+                    doc_id=doc_id,
+                    vision_model=self.vision_model,
+                    db_client=self.db
+                )
+                
+                company_id = cover_metadata.get("company_id")
+                if cover_metadata.get("year"):
+                    year = cover_metadata.get("year")
+                
                 if company_id:
-                    logger.info(f"✅ 已關聯公司: ID={company_id}")
+                    logger.info(f"✅ Stage 0 完成: company_id={company_id}, year={year}")
                 else:
-                    logger.warning("⚠️ 無法提取公司信息")
+                    logger.warning("⚠️ Stage 0 未能提取 stock_code，使用 fallback")
             elif is_index_report:
-                logger.info("ℹ️ 指數報告無需提取母公司，跳過提取")
+                logger.info("ℹ️ Stage 0: 指數報告無需提取母公司，跳過")
                 company_id = None
             
-            # Step 5: 🌟 完整解析 PDF（用于数据提取）
-            if progress_callback:
-                progress_callback(30.0, "完整解析 PDF...")
+            # 🌟 此时 qwen3.5:9b 已卸载，GPU 空闲
             
-            if self.opendataloader_parser:
-                artifacts = await self.opendataloader_parser.parse_async(pdf_path, doc_id)
-                logger.info(f"   ✅ OpenDataLoader 完整解析: {len(artifacts)} 個 artifacts")
-                
-                # 合併封面 artifacts（如果完整解析沒有 Page 1-2）
-                if cover_artifacts and not any(a.get("page_num") in [1, 2] for a in artifacts):
-                    artifacts.extend(cover_artifacts)
-                    logger.info(f"   📄 已合併封面 artifacts")
-                
-                # 保存 Artifacts
-                await self._save_opendataloader_artifacts(artifacts, doc_id, company_id, pdf_path)
-                
-                # 保存 output.json
-                output_json_path = self.data_dir / doc_id / "output.json"
-                output_json_path.parent.mkdir(parents=True, exist_ok=True)
-                import json as json_module
-                with open(output_json_path, "w", encoding="utf-8") as f:
-                    json_module.dump(artifacts, f, ensure_ascii=False, indent=2)
-                logger.info(f"   💾 已保存 output.json: {output_json_path}")
+            # 🌟 Step 4.5: 启动 Hybrid 服务（延迟启动）
+            if progress_callback:
+                progress_callback(25.0, "启动 Hybrid CUDA 服务...")
+            
+            logger.info("🔥 启动 Hybrid CUDA 服务（延迟模式）...")
+            import subprocess
+            import time
+            
+            # 调用启动脚本
+            result = subprocess.run(["/bin/bash", "/tmp/start_hybrid.sh"], capture_output=True, text=True, timeout=90)
+            if result.returncode == 0:
+                logger.info(f"   ✅ Hybrid CUDA 已启动")
+                time.sleep(3)  # 等待稳定
             else:
-                logger.warning("⚠️ OpenDataLoaderParser 未啟用")
-                artifacts = cover_artifacts
+                logger.warning(f"   ⚠️ Hybrid 启动可能失败: {result.stderr.strip()}")
             
-            # Step 6: 保存所有頁面到兜底表 (Zone 2)
+            # Step 5: 🎯 Stage 1 - 完整解析 PDF（启用 Hybrid CUDA）
             if progress_callback:
-                progress_callback(60.0, "保存所有頁面到兜底表...")
+                progress_callback(30.0, "Stage 1: PDF 解析 (Hybrid CUDA)...")
+            
+            # 🌟 使用 Stage1Parser（Orchestrator 模式）
+            output_dir = str(self.data_dir / doc_id)
+            parse_result = await Stage1Parser.parse_pdf(
+                pdf_path=pdf_path,
+                output_dir=output_dir,
+                enable_hybrid=True,
+                batch_size=10,
+                batch_delay=15
+            )
+            
+            artifacts = parse_result.get("artifacts", [])
+            logger.info(f"   ✅ Stage 1 完成: {len(artifacts)} artifacts")
+            
+            # Step 6: 🎯 Stage 2 - 保存 Artifacts + Vision 分析图片
+            if progress_callback:
+                progress_callback(50.0, "Stage 2: 保存 Artifacts + Vision 分析...")
+            
+            # 🌟 使用 Stage2Enrichment（Orchestrator 模式）
+            document_id = await self.db.get_document_internal_id(doc_id)
+            enrichment_stats = await Stage2Enrichment.save_all_artifacts(
+                artifacts=artifacts,
+                doc_id=doc_id,
+                company_id=company_id,
+                document_id=document_id,
+                data_dir=self.data_dir,
+                vision_model=self.vision_model,
+                db_client=self.db,
+                vision_limit=20
+            )
+            logger.info(f"   ✅ Stage 2 完成: {enrichment_stats['images_saved']} 图片, {enrichment_stats['entities_extracted']} 实体")
+            
+            # Step 7: 🎯 Stage 3 + Stage 4 - 智能結構化提取
+            if progress_callback:
+                progress_callback(60.0, "Stage 3: 关键字扫描...")
+            
+            # 🌟 使用 Stage3Router 扫描关键字
+            target_pages_result = await Stage3Router.find_target_pages(
+                artifacts=artifacts,
+                target_types=["revenue_breakdown", "key_personnel", "financial_metrics"],
+                keyword_json_path="/app/data/raw/search_keywords.json"
+            )
+            
+            # 获取所有候选页面
+            all_target_pages = Stage3Router.get_all_candidate_pages(target_pages_result)
+            logger.info(f"   ✅ Stage 3 完成: 找到 {len(all_target_pages)} 个候选页面")
+            
+            # 🌟 使用 Stage4Extractor 进行深度提取
+            if progress_callback:
+                progress_callback(65.0, "Stage 4: 深度结构化提取...")
             
             doc_year = await self._get_document_year(doc_id) or datetime.now().year
             
@@ -1403,27 +1451,36 @@ class DocumentPipeline(BaseIngestionPipeline):
                 "total_artifacts": len(artifacts)
             }
             
+            # 保存所有页面到兜底表 (Zone 2)
             saved_pages = await self.save_all_pages_to_fallback_table(
                 pdf_path, company_id, doc_id, doc_year,
                 artifacts=artifacts
             )
             stats["document_pages_saved"] = saved_pages
             
-            # Step 7: 智能結構化提取
-            if progress_callback:
-                progress_callback(70.0, "智能提取結構化數據...")
-            
-            extraction_result = await self.smart_extract(
-                pdf_path, company_id, doc_id, 
-                lambda p, m: progress_callback(70 + p * 0.2, m) if progress_callback else None,
-                year=doc_year,
+            # 🌟 Stage 4 提取
+            extraction_result = await Stage4Extractor.extract_structured_data(
                 artifacts=artifacts,
-                # 🌟 传递 UI 参数，让 Agent 知道报告类型
+                target_pages=all_target_pages,
+                company_id=company_id,
+                year=doc_year,
+                doc_id=doc_id,
+                document_id=document_id,
+                extraction_types=["revenue_breakdown", "key_personnel", "financial_metrics"],
+                llm_model=self.llm_model,
+                db_client=self.db,
+                progress_callback=lambda p, m: progress_callback(65 + p * 0.25, m) if progress_callback else None,
                 is_index_report=is_index_report,
                 index_theme=index_theme,
-                confirmed_doc_industry=confirmed_doc_industry
+                confirmed_doc_industry=confirmed_doc_industry,
+                merge_page_artifacts_fn=self._merge_page_artifacts
             )
-            stats["structured_extraction"] = extraction_result
+            
+            stats["structured_extraction"] = extraction_result.get("results", {})
+            stats["pages_processed"] = extraction_result.get("stats", {}).get("pages_processed", 0)
+            stats["total_extracted"] = extraction_result.get("stats", {}).get("total_extracted", 0)
+            
+            logger.info(f"   ✅ Stage 4 完成: {stats['total_extracted']} 条记录提取")
             
             if is_index_report:
                 logger.info("ℹ️ 指數報告處理完成（多公司數據已由 Agent 提取）")
@@ -1432,7 +1489,7 @@ class DocumentPipeline(BaseIngestionPipeline):
             else:
                 logger.info("✅ 一般年報結構化提取完成")
             
-            # Step 5.5: 🎯 圖文關聯映射 (跨模態 Magic)
+            # Step 8: 🎯 圖文關聯映射 (跨模態 Magic)
             if progress_callback:
                 progress_callback(92.0, "建立圖文關聯...")
             
@@ -1457,12 +1514,12 @@ class DocumentPipeline(BaseIngestionPipeline):
                 logger.warning(f"⚠️ Stage 5.5 失敗（可忽略）: {e}")
                 stats["cross_modal_links"] = 0
             
-            # Step 6: 觸發 Vanna 訓練
+            # Step 9: 觸發 Vanna 訓練
             if progress_callback:
                 progress_callback(95.0, "觸發 Vanna 訓練...")
             await self._trigger_vanna_training(doc_id)
             
-            # Step 7: 更新文檔狀態
+            # Step 10: 更新文檔狀態
             await self.db.update_document_status(doc_id, "completed", stats)
             
             if progress_callback:

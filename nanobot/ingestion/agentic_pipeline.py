@@ -112,9 +112,17 @@ class AgenticPipeline(BaseIngestionPipeline):
             # 🌟 使用 llm_core.chat() 发送 Prompt
             response = await llm_core.chat(
                 messages=[{"role": "user", "content": document_content}],
-                temperature=0.3,
+                temperature=0.1,  # 降低温度，提高准确性
                 max_tokens=3000
             )
+            
+            # 🌟 记录原始响应（用于调试）
+            logger.debug(f"   🔍 LLM raw response ({len(response)} chars): {response[:500]}...")
+            
+            # 🌟 如果响应太短，可能是错误
+            if len(response) < 50:
+                logger.warning(f"   ⚠️ LLM 响应太短 ({len(response)} chars)，可能是空响应或错误")
+                return {"success": False, "raw_response": response, "error": "response too short"}
             
             # 🌟 使用增强版 JSON 解析（非贪婪 + 括号平衡）
             result = self._parse_agent_response(response)

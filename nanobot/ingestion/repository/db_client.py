@@ -1588,3 +1588,114 @@ class DBClient:
         except Exception as e:
             logger.error(f"❌ 查詢 Artifact 關聯失敗: {e}")
             return []
+    
+    # ===========================================
+    # Entity Relations (知识图谱)
+    # ===========================================
+    
+    async def save_entity_relation(
+        self,
+        document_id: int,
+        source_entity_type: str,
+        source_entity_name: str,
+        relation_type: str,
+        target_entity_type: str,
+        target_entity_name: str,
+        source_artifact_id: str = None,
+        confidence_score: float = 0.8,
+        extraction_method: str = "llm_vision",
+        event_date: str = None,
+        event_year: int = None
+    ) -> bool:
+        """
+        保存实体关系（知识图谱）
+        
+        Args:
+            document_id: 文档 ID
+            source_entity_type: 源实体类型（person/company/event/location）
+            source_entity_name: 源实体名称
+            relation_type: 关系类型（CEO_of/partner_of/acquired/located_in）
+            target_entity_type: 目标实体类型
+            target_entity_name: 目标实体名称
+            source_artifact_id: 来源 artifact ID（可追溯）
+            confidence_score: 置信度
+            extraction_method: 提取方法
+            event_date: 事件日期
+            event_year: 事件年份
+            
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            async with self.pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO entity_relations 
+                    (document_id, source_entity_type, source_entity_name, 
+                     relation_type, target_entity_type, target_entity_name,
+                     source_artifact_id, confidence_score, extraction_method,
+                     event_date, event_year)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                    ON CONFLICT DO NOTHING
+                    """,
+                    document_id, source_entity_type, source_entity_name,
+                    relation_type, target_entity_type, target_entity_name,
+                    source_artifact_id, confidence_score, extraction_method,
+                    event_date, event_year
+                )
+                logger.debug(f"✅ Entity relation saved: {source_entity_name} -> {relation_type} -> {target_entity_name}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"❌ 保存 Entity relation 失败: {e}")
+            return False
+    
+    async def get_entity_relations(
+        self,
+        document_id: int,
+        entity_name: str = None,
+        relation_type: str = None
+    ) -> List[Dict]:
+        """
+        获取实体关系
+        
+        Args:
+            document_id: 文档 ID
+            entity_name: 实体名称（可选）
+            relation_type: 关系类型（可选）
+            
+        Returns:
+            List[Dict]: 实体关系列表
+        """
+        try:
+            async with self.pool.acquire() as conn:
+                if entity_name:
+                    rows = await conn.fetch(
+                        """
+                        SELECT * FROM entity_relations 
+                        WHERE document_id = $1 
+                        AND (source_entity_name = $2 OR target_entity_name = $2)
+                        """,
+                        document_id, entity_name
+                    )
+                elif relation_type:
+                    rows = await conn.fetch(
+                        """
+                        SELECT * FROM entity_relations 
+                        WHERE document_id = $1 AND relation_type = $2
+                        """,
+                        document_id, relation_type
+                    )
+                else:
+                    rows = await conn.fetch(
+                        """
+                        SELECT * FROM entity_relations WHERE document_id = $1
+                        """,
+                        document_id
+                    )
+                    
+                return [dict(row) for row in rows]
+                
+        except Exception as e:
+            logger.error(f"❌ 获取 Entity relations 失败: {e}")
+            return []

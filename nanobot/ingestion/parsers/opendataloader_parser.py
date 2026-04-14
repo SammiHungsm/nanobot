@@ -62,7 +62,7 @@ class OpenDataLoaderParser:
         logger.info(f"✅ 解析完成：{len(artifacts)} 個 artifacts")
         return artifacts
     
-    def parse_pages(self, pdf_path: str, pages: List[int], doc_id: str = None) -> List[Dict[str, Any]]:
+    def parse_pages(self, pdf_path: str, pages: List[int], doc_id: str = None, enable_hybrid: bool = False) -> List[Dict[str, Any]]:
         """
         🌟 只解析 PDF 的特定页面（用于快速提取封面信息）
         
@@ -70,33 +70,35 @@ class OpenDataLoaderParser:
             pdf_path: PDF 文件路径
             pages: 要解析的页码列表（如 [1, 2]）
             doc_id: 文档 ID
+            enable_hybrid: 是否启用 Hybrid 模式（默认 False = 纯 Java，节省 GPU）
             
         Returns:
             List[Dict]: Artifacts 列表
         """
-        logger.info(f"📖 快速解析 Page {pages}：{pdf_path}")
+        logger.info(f"📖 快速解析 Page {pages}：{pdf_path} (enable_hybrid={enable_hybrid})")
         
-        # 支援特定頁面快速解析
-        result = self.core.parse(pdf_path, pages=pages)
+        # 🌟 支援特定頁面快速解析，可选择启用/禁用 Hybrid
+        result = self.core.parse(pdf_path, pages=pages, use_hybrid=enable_hybrid)
         
         logger.info(f"✅ Page {pages} 解析完成：{len(result.artifacts)} 個 artifacts")
         return result.artifacts
     
-    async def parse_async(self, pdf_path: str, doc_id: str = None) -> List[Dict[str, Any]]:
+    async def parse_async(self, pdf_path: str, doc_id: str = None, enable_hybrid: bool = True) -> List[Dict[str, Any]]:
         """
         異步解析 PDF
         
         Args:
             pdf_path: PDF 文件路徑
             doc_id: 文檔 ID
+            enable_hybrid: 是否启用 Hybrid 模式（默认 True）
             
         Returns:
             List[Dict]: Artifacts 列表
         """
-        logger.info(f"📖 異步解析：{pdf_path}")
+        logger.info(f"📖 異步解析：{pdf_path} (enable_hybrid={enable_hybrid})")
         
-        # 🌟 呼叫核心的非同步方法
-        result = await self.core.parse_async(pdf_path)
+        # 🌟 呼叫核心的非同步方法，传入 enable_hybrid
+        result = await self.core.parse_async(pdf_path, enable_hybrid=enable_hybrid)
         
         logger.info(f"✅ 解析完成：{len(result.artifacts)} 個 artifacts")
         return result.artifacts
