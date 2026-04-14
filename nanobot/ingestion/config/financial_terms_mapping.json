@@ -1,229 +1,421 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "港股財務名詞標準化對照表 (Master Data Taxonomy)",
-  "version": "3.0.0",
+  "description": "港股财务名词标准化对照表 (Master Data Taxonomy) - 与数据库 Schema v2.3 对齐",
+  "version": "3.1.0",
   
-  "instruction": "【強制規則】提取數據時，請優先將財報上的名詞映射到 'core_metrics' 的 standard_name。若為未定義的指標或特定公司的業務/地區分類，請套用 fallback_rule 動態生成。",
+  "instruction": "【强制规则】提取数据时，请优先将财报上的名词映射到 'core_metrics' 的 standard_name。若为未定义的指标或特定公司的业务/地区分类，请套用 fallback_rule 动态生成。",
+  
+  "database_schema_reference": {
+    "table": "financial_metrics",
+    "key_fields": {
+      "metric_name": "VARCHAR(100) NOT NULL - 标准英文名 (Taxonomy)",
+      "metric_name_zh": "VARCHAR(100) - 标准中文名",
+      "original_metric_name": "VARCHAR(200) - 原始名称 (Traceability)",
+      "value": "NUMERIC(20, 2) - 原始值",
+      "unit": "VARCHAR(50) - 原始单位",
+      "standardized_value": "NUMERIC(20, 2) - 标准化值 (HKD)",
+      "standardized_currency": "VARCHAR(10) DEFAULT 'HKD'",
+      "fiscal_period": "VARCHAR(20) DEFAULT 'FY' - FY, H1, Q1, Q2, Q3, Q4"
+    },
+    "constraints": {
+      "unique_metric": "UNIQUE (company_id, year, fiscal_period, metric_name)"
+    }
+  },
+  
+  "fiscal_periods": {
+    "standard_names": [
+      {"code": "FY", "canonical_zh": "全年", "synonyms": ["Annual", "Year", "全年", "年度", "年度业绩", "Full Year"]},
+      {"code": "H1", "canonical_zh": "上半年", "synonyms": ["Interim", "Half Year", "上半年", "中期", "中期业绩", "First Half"]},
+      {"code": "H2", "canonical_zh": "下半年", "synonyms": ["Second Half", "下半年", "下半年业绩"]},
+      {"code": "Q1", "canonical_zh": "第一季度", "synonyms": ["First Quarter", "第一季度", "一季报", "季报"]},
+      {"code": "Q2", "canonical_zh": "第二季度", "synonyms": ["Second Quarter", "第二季度", "二季报"]},
+      {"code": "Q3", "canonical_zh": "第三季度", "synonyms": ["Third Quarter", "第三季度", "三季报"]},
+      {"code": "Q4", "canonical_zh": "第四季度", "synonyms": ["Fourth Quarter", "第四季度", "四季报"]}
+    ],
+    "default_period": "FY",
+    "description": "财政期间标准代码，用于 financial_metrics.fiscal_period 字段"
+  },
   
   "core_metrics": [
     {
       "standard_name": "revenue",
-      "canonical_zh": "營業收入",
+      "canonical_zh": "营业收入",
       "category": "income_statement",
-      "synonyms": ["Turnover", "Sales", "營業額", "收益", "收入", "Total Revenue", "Operating Revenue", "Net Revenue", "總收入", "營業收益", "銷售額"]
+      "synonyms": ["Turnover", "Sales", "营业额", "收益", "收入", "Total Revenue", "Operating Revenue", "Net Revenue", "总收入", "营业收益", "销售额", "营业收人", "收人"]
     },
     {
       "standard_name": "cost_of_sales",
-      "canonical_zh": "銷售成本",
+      "canonical_zh": "销售成本",
       "category": "income_statement",
-      "synonyms": ["Cost of Goods Sold", "COGS", "Cost of Revenue", "主營業務成本", "營業成本", "成本", "Cost of Sales and Services"]
+      "synonyms": ["Cost of Goods Sold", "COGS", "Cost of Revenue", "主营业务成本", "营业成本", "成本", "Cost of Sales and Services", "销售成本", "销货成本"]
     },
     {
       "standard_name": "gross_profit",
       "canonical_zh": "毛利",
       "category": "income_statement",
-      "synonyms": ["Gross Margin", "Total Gross Profit", "毛利潤", "毛收益", "毛利"]
+      "synonyms": ["Gross Margin", "Total Gross Profit", "毛利润", "毛收益", "毛利", "毛利率"]
     },
     {
       "standard_name": "operating_expenses",
-      "canonical_zh": "營運開支",
+      "canonical_zh": "营运开支",
       "category": "income_statement",
-      "synonyms": ["Operating Costs", "Total Operating Expenses", "OpEx", "營運費用", "經營費用", "營業費用", "經營開支"]
+      "synonyms": ["Operating Costs", "Total Operating Expenses", "OpEx", "营运费用", "经营费用", "营业费用", "经营开支", "营运支出"]
     },
     {
       "standard_name": "rd_expenses",
-      "canonical_zh": "研發開支",
+      "canonical_zh": "研发开支",
       "category": "income_statement",
-      "synonyms": ["Research and Development Expenses", "R&D Costs", "R&D expenditure", "研發費用", "研發成本", "研究及開發開支", "研發支出"]
+      "synonyms": ["Research and Development Expenses", "R&D Costs", "R&D expenditure", "研发费用", "研发成本", "研究及开发开支", "研发支出", "研发投入"]
     },
     {
       "standard_name": "selling_expenses",
-      "canonical_zh": "銷售費用",
+      "canonical_zh": "销售费用",
       "category": "income_statement",
-      "synonyms": ["Selling and Marketing Expenses", "Sales and Marketing Costs", "Selling and distribution expenses", "銷售及推廣費用", "銷售開支", "營銷費用"]
+      "synonyms": ["Selling and Marketing Expenses", "Sales and Marketing Costs", "Selling and distribution expenses", "销售及推广费用", "销售开支", "营销费用", "销售及分销费用"]
     },
     {
       "standard_name": "admin_expenses",
-      "canonical_zh": "行政費用",
+      "canonical_zh": "行政费用",
       "category": "income_statement",
-      "synonyms": ["General and Administrative Expenses", "G&A Expenses", "Administrative Costs", "管理費用", "行政管理費用", "一般及行政開支"]
+      "synonyms": ["General and Administrative Expenses", "G&A Expenses", "Administrative Costs", "管理费用", "行政管理费用", "一般及行政开支", "行政开支"]
     },
     {
       "standard_name": "finance_costs",
-      "canonical_zh": "融資成本",
+      "canonical_zh": "融资成本",
       "category": "income_statement",
-      "synonyms": ["Finance Expenses", "Interest Expense", "Financing Costs", "財務費用", "利息支出", "融資費用"]
+      "synonyms": ["Finance Expenses", "Interest Expense", "Financing Costs", "财务费用", "利息支出", "融资费用", "融资成本", "利息费用"]
+    },
+    {
+      "standard_name": "other_income",
+      "canonical_zh": "其他收入",
+      "category": "income_statement",
+      "synonyms": ["Other Revenue", "Non-operating Income", "其他收益", "其他业务收入", "杂项收入"]
     },
     {
       "standard_name": "profit_before_tax",
-      "canonical_zh": "稅前溢利",
+      "canonical_zh": "税前溢利",
       "category": "income_statement",
-      "synonyms": ["Profit Before Income Tax", "Earnings Before Tax", "PBT", "Pre-tax Profit", "稅前利潤", "除稅前溢利", "稅前盈利"]
+      "synonyms": ["Profit Before Income Tax", "Earnings Before Tax", "PBT", "Pre-tax Profit", "税前利润", "除税前溢利", "税前盈利", "税前溢利", "税前纯利"]
+    },
+    {
+      "standard_name": "tax_expense",
+      "canonical_zh": "税项",
+      "category": "income_statement",
+      "synonyms": ["Income Tax Expense", "Tax", "Taxes", "税项", "所得税", "所得税费用", "税金"]
     },
     {
       "standard_name": "net_income",
-      "canonical_zh": "純利",
+      "canonical_zh": "纯利",
       "category": "income_statement",
-      "synonyms": ["Net Profit", "Profit for the year", "淨利潤", "年度溢利", "淨收益", "淨盈利", "股東應佔溢利", "Net Earnings", "Net Profit attributable to shareholders"]
+      "synonyms": ["Net Profit", "Profit for the year", "净利润", "年度溢利", "净收益", "净盈利", "股东应占溢利", "Net Earnings", "Net Profit attributable to shareholders", "纯利", "溢利", "盈利", "利润"]
     },
     {
       "standard_name": "total_assets",
-      "canonical_zh": "資產總額",
+      "canonical_zh": "资产总额",
       "category": "balance_sheet",
-      "synonyms": ["Total Assets", "Assets", "總資產", "資產合計", "資產總計"]
+      "synonyms": ["Total Assets", "Assets", "总资产", "资产合计", "资产总计", "资产总额"]
     },
     {
       "standard_name": "total_liabilities",
-      "canonical_zh": "負債總額",
+      "canonical_zh": "负债总额",
       "category": "balance_sheet",
-      "synonyms": ["Total Liabilities", "Liabilities", "總負債", "負債合計", "負債總計"]
+      "synonyms": ["Total Liabilities", "Liabilities", "总负债", "负债合计", "负债总计", "负债总额"]
     },
     {
       "standard_name": "total_equity",
-      "canonical_zh": "權益總額",
+      "canonical_zh": "权益总额",
       "category": "balance_sheet",
-      "synonyms": ["Total Shareholders' Equity", "Net Assets", "Equity", "股東權益", "淨資產", "權益合計", "股東權益總額"]
+      "synonyms": ["Total Shareholders' Equity", "Net Assets", "Equity", "股东权益", "净资产", "权益合计", "股东权益总额", "权益总额", "净资产值"]
     },
     {
       "standard_name": "cash_and_equivalents",
-      "canonical_zh": "現金及現金等價物",
+      "canonical_zh": "现金及现金等价物",
       "category": "balance_sheet",
-      "synonyms": ["Cash", "Cash and Bank Balances", "Cash at bank and in hand", "現金", "銀行結餘", "現金及銀行結存"]
+      "synonyms": ["Cash", "Cash and Bank Balances", "Cash at bank and in hand", "现金", "银行结余", "现金及银行结存", "现金及现金等价物", "现金等价物"]
     },
     {
       "standard_name": "inventory",
-      "canonical_zh": "存貨",
+      "canonical_zh": "存货",
       "category": "balance_sheet",
-      "synonyms": ["Stock", "Inventories", "存貨", "庫存", "存貨及在製品"]
+      "synonyms": ["Stock", "Inventories", "存货", "库存", "存货及在制品", "存货净额"]
     },
     {
       "standard_name": "trade_receivables",
-      "canonical_zh": "應收貿賬款",
+      "canonical_zh": "应收贸易账款",
       "category": "balance_sheet",
-      "synonyms": ["Accounts Receivable", "Trade Debtors", "Receivables", "應收賬款", "貿易應收款項"]
+      "synonyms": ["Accounts Receivable", "Trade Debtors", "Receivables", "应收账款", "贸易应收款项", "应收贸易账款", "应收款项"]
     },
     {
       "standard_name": "trade_payables",
-      "canonical_zh": "應付貿賬款",
+      "canonical_zh": "应付贸易账款",
       "category": "balance_sheet",
-      "synonyms": ["Accounts Payable", "Trade Creditors", "Payables", "應付賬款", "貿易應付款項"]
+      "synonyms": ["Accounts Payable", "Trade Creditors", "Payables", "应付账款", "贸易应付款项", "应付贸易账款", "应付款项"]
+    },
+    {
+      "standard_name": "fixed_assets",
+      "canonical_zh": "固定资产",
+      "category": "balance_sheet",
+      "synonyms": ["Property Plant and Equipment", "PPE", "Non-current Assets", "固定资产", "物业机器及设备", "非流动资产"]
+    },
+    {
+      "standard_name": "intangible_assets",
+      "canonical_zh": "无形资产",
+      "category": "balance_sheet",
+      "synonyms": ["Intangible Assets", "Goodwill", "无形资产", "商誉", "知识产权"]
     },
     {
       "standard_name": "operating_cash_flow",
-      "canonical_zh": "經營現金流",
+      "canonical_zh": "经营现金流",
       "category": "cash_flow",
-      "synonyms": ["Cash Flow from Operations", "Net Cash from Operating Activities", "CFO", "經營活動現金淨額", "營運現金流"]
+      "synonyms": ["Cash Flow from Operations", "Net Cash from Operating Activities", "CFO", "经营活动现金净额", "营运现金流", "经营现金流", "经营现金净额"]
     },
     {
       "standard_name": "investing_cash_flow",
-      "canonical_zh": "投資現金流",
+      "canonical_zh": "投资现金流",
       "category": "cash_flow",
-      "synonyms": ["Cash Flow from Investing Activities", "Net Cash used in Investing Activities", "投資活動現金淨額"]
+      "synonyms": ["Cash Flow from Investing Activities", "Net Cash used in Investing Activities", "投资活动现金净额", "投资现金流", "投资现金净额"]
     },
     {
       "standard_name": "financing_cash_flow",
-      "canonical_zh": "融資現金流",
+      "canonical_zh": "融资现金流",
       "category": "cash_flow",
-      "synonyms": ["Cash Flow from Financing Activities", "Net Cash used in Financing Activities", "融資活動現金淨額"]
+      "synonyms": ["Cash Flow from Financing Activities", "Net Cash used in Financing Activities", "融资活动现金净额", "融资现金流", "融资现金净额"]
+    },
+    {
+      "standard_name": "free_cash_flow",
+      "canonical_zh": "自由现金流",
+      "category": "cash_flow",
+      "synonyms": ["FCF", "Free Cash Flow", "自由现金流", "自由现金流量"]
     },
     {
       "standard_name": "dividend_per_share",
       "canonical_zh": "每股股息",
       "category": "per_share",
-      "synonyms": ["DPS", "Dividends per share", "每股股利", "每股派息", "股息"]
+      "synonyms": ["DPS", "Dividends per share", "每股股利", "每股派息", "股息", "每股现金股息", "每股分红"]
     },
     {
       "standard_name": "earnings_per_share",
       "canonical_zh": "每股盈利",
       "category": "per_share",
-      "synonyms": ["EPS", "Basic EPS", "Diluted EPS", "每股收益", "基本每股盈利", "每股淨利"]
+      "synonyms": ["EPS", "Basic EPS", "Diluted EPS", "每股收益", "基本每股盈利", "每股净利", "每股盈利", "每股溢利"]
     },
     {
       "standard_name": "book_value_per_share",
-      "canonical_zh": "每股賬面值",
+      "canonical_zh": "每股账面值",
       "category": "per_share",
-      "synonyms": ["BVPS", "Net Asset Value Per Share", "每股淨資產", "每股賬面淨值"]
+      "synonyms": ["BVPS", "Net Asset Value Per Share", "每股净资产", "每股账面净值", "每股账面值", "每股净值"]
     },
     {
       "standard_name": "market_cap",
       "canonical_zh": "市值",
       "category": "market_data",
-      "synonyms": ["Market Capitalization", "Market Cap", "Market Value", "Mkt Cap", "總市值", "股票市值"]
+      "synonyms": ["Market Capitalization", "Market Cap", "Market Value", "Mkt Cap", "总市值", "股票市值", "市值"]
+    },
+    {
+      "standard_name": "ebitda",
+      "canonical_zh": "EBITDA",
+      "category": "income_statement",
+      "synonyms": ["Earnings Before Interest Taxes Depreciation and Amortization", "EBITDA", "除息税折摊前盈利"]
+    },
+    {
+      "standard_name": "roa",
+      "canonical_zh": "资产回报率",
+      "category": "ratio",
+      "synonyms": ["Return on Assets", "ROA", "资产收益率", "资产回报率"]
+    },
+    {
+      "standard_name": "roe",
+      "canonical_zh": "股东权益回报率",
+      "category": "ratio",
+      "synonyms": ["Return on Equity", "ROE", "股东权益收益率", "净资产收益率", "股东权益回报率"]
+    },
+    {
+      "standard_name": "gross_margin",
+      "canonical_zh": "毛利率",
+      "category": "ratio",
+      "synonyms": ["Gross Profit Margin", "毛利率", "毛利比率"]
+    },
+    {
+      "standard_name": "net_margin",
+      "canonical_zh": "净利率",
+      "category": "ratio",
+      "synonyms": ["Net Profit Margin", "净利率", "净利润率", "纯利率"]
+    },
+    {
+      "standard_name": "current_ratio",
+      "canonical_zh": "流动比率",
+      "category": "ratio",
+      "synonyms": ["Current Ratio", "流动比率", "流动资金比率"]
+    },
+    {
+      "standard_name": "debt_to_equity",
+      "canonical_zh": "债务权益比",
+      "category": "ratio",
+      "synonyms": ["Debt to Equity Ratio", "D/E Ratio", "债务权益比", "负债权益比", "资产负债率"]
     }
   ],
   
   "company_attributes": [
     {
       "standard_name": "chief_executive",
-      "canonical_zh": "最高行政人員",
+      "canonical_zh": "最高行政人员",
       "category": "personnel",
       "value_type": "string",
-      "synonyms": ["CEO", "Chief Executive Officer", "Chair person", "主席", "行政總裁", "執行董事", "總裁"]
+      "synonyms": ["CEO", "Chief Executive Officer", "Chair person", "主席", "行政总裁", "执行董事", "总裁", "最高行政人员"]
     },
     {
       "standard_name": "auditor",
-      "canonical_zh": "核數師",
+      "canonical_zh": "核数师",
       "category": "governance",
       "value_type": "string",
-      "synonyms": ["核數師", "審計師", "審計機構", "Auditor Firm"]
+      "synonyms": ["核数师", "审计师", "审计机构", "Auditor Firm", "核数机构"]
     },
     {
       "standard_name": "auditor_opinion",
-      "canonical_zh": "核數師意見",
+      "canonical_zh": "核数师意见",
       "category": "governance",
       "value_type": "string",
-      "synonyms": ["審計意見", "核數師意見", "Auditor's Opinion"]
+      "synonyms": ["审计意见", "核数师意见", "Auditor's Opinion", "核数师报告", "审计报告"]
     },
     {
       "standard_name": "ultimate_controlling_shareholder",
-      "canonical_zh": "最終控股股東",
+      "canonical_zh": "最终控股股东",
       "category": "governance",
       "value_type": "string",
-      "synonyms": ["最終控股股東", "實際控制人", "最終控制人", "Ultimate Controller"]
+      "synonyms": ["最终控股股东", "实际控制人", "最终控制人", "Ultimate Controller", "最终实益拥有人"]
     },
     {
       "standard_name": "principal_banker",
-      "canonical_zh": "主要銀行",
+      "canonical_zh": "主要银行",
       "category": "business",
       "value_type": "string",
-      "synonyms": ["主要銀行", "主要往來銀行", "Main Bank"]
+      "synonyms": ["主要银行", "主要往来银行", "Main Bank", "主要结算银行"]
     },
     {
       "standard_name": "major_customers",
-      "canonical_zh": "主要客戶",
+      "canonical_zh": "主要客户",
       "category": "business",
       "value_type": "array",
-      "synonyms": ["Major Customers", "主要客戶", "核心客戶", "Key Customers"]
+      "synonyms": ["Major Customers", "主要客户", "核心客户", "Key Customers", "前五大客户"]
+    },
+    {
+      "standard_name": "major_suppliers",
+      "canonical_zh": "主要供应商",
+      "category": "business",
+      "value_type": "array",
+      "synonyms": ["Major Suppliers", "主要供应商", "核心供应商", "Key Suppliers", "前五大供应商"]
     },
     {
       "standard_name": "core_technology",
-      "canonical_zh": "核心技術",
+      "canonical_zh": "核心技术",
       "category": "business",
       "value_type": "array",
-      "synonyms": ["Core Technology", "核心技術", "主要產品", "Core Products"]
+      "synonyms": ["Core Technology", "核心技术", "主要产品", "Core Products", "核心产品"]
     },
     {
       "standard_name": "business_segments",
-      "canonical_zh": "業務分部",
+      "canonical_zh": "业务分部",
       "category": "business",
       "value_type": "array",
-      "synonyms": ["Business Segments", "業務分部", "主要業務", "Main Business"]
+      "synonyms": ["Business Segments", "业务分部", "主要业务", "Main Business", "核心业务"]
+    },
+    {
+      "standard_name": "geographic_regions",
+      "canonical_zh": "经营地区",
+      "category": "business",
+      "value_type": "array",
+      "synonyms": ["Geographic Regions", "经营地区", "主要市场", "Main Markets", "销售地区"]
     }
   ],
   
+  "revenue_breakdown_segments": {
+    "segment_types": [
+      {"type": "geography", "canonical_zh": "地理分部", "description": "按地理区域划分的收入"},
+      {"type": "business", "canonical_zh": "业务分部", "description": "按业务类型划分的收入"},
+      {"type": "product", "canonical_zh": "产品分部", "description": "按产品类型划分的收入"}
+    ],
+    "common_geographies": [
+      {"standard_name": "hong_kong", "canonical_zh": "香港", "synonyms": ["Hong Kong", "HK", "香港", "港區"]},
+      {"standard_name": "mainland_china", "canonical_zh": "中国内地", "synonyms": ["Mainland China", "China", "PRC", "中国内地", "内地", "中国大陆", "中國"]},
+      {"standard_name": "europe", "canonical_zh": "欧洲", "synonyms": ["Europe", "EU", "欧洲", "歐洲"]},
+      {"standard_name": "north_america", "canonical_zh": "北美", "synonyms": ["North America", "NA", "北美", "美國", "United States", "USA"]},
+      {"standard_name": "asia_pacific", "canonical_zh": "亚太", "synonyms": ["Asia Pacific", "APAC", "亚太", "亞太", "亚太区"]},
+      {"standard_name": "other_regions", "canonical_zh": "其他地区", "synonyms": ["Other", "Others", "其他", "其他地区"]}
+    ],
+    "description": "用于 revenue_breakdown 表的 segment_type 和 segment_name 标准化"
+  },
+  
+  "key_personnel_roles": {
+    "position_types": [
+      {"type": "director", "canonical_zh": "董事", "synonyms": ["Director", "董事", "董事会成员"]},
+      {"type": "executive", "canonical_zh": "高管", "synonyms": ["Executive", "Senior Management", "高管", "管理层", "高级管理人员"]},
+      {"type": "secretary", "canonical_zh": "秘书", "synonyms": ["Secretary", "Company Secretary", "秘书", "公司秘书"]}
+    ],
+    "board_roles": [
+      {"role": "chairman", "canonical_zh": "主席", "synonyms": ["Chairman", "Chair", "主席", "董事长"]},
+      {"role": "ceo", "canonical_zh": "行政总裁", "synonyms": ["CEO", "Chief Executive", "行政总裁", "首席执行官", "总经理"]},
+      {"role": "cfo", "canonical_zh": "财务总裁", "synonyms": ["CFO", "Chief Financial Officer", "财务总裁", "首席财务官", "财务总监"]},
+      {"role": "coo", "canonical_zh": "营运总裁", "synonyms": ["COO", "Chief Operating Officer", "营运总裁", "首席营运官", "运营总监"]},
+      {"role": "executive_director", "canonical_zh": "执行董事", "synonyms": ["Executive Director", "ED", "执行董事", "执行董事"]},
+      {"role": "non_executive_director", "canonical_zh": "非执行董事", "synonyms": ["Non-Executive Director", "NED", "非执行董事", "非執行董事"]},
+      {"role": "independent_director", "canonical_zh": "独立董事", "synonyms": ["Independent Director", "ID", "独立董事", "獨立董事", "独立非执行董事"]}
+    ],
+    "committee_types": [
+      {"type": "audit", "canonical_zh": "审核委员会", "synonyms": ["Audit Committee", "审核委员会", "審核委員會", "审计委员会"]},
+      {"type": "remuneration", "canonical_zh": "薪酬委员会", "synonyms": ["Remuneration Committee", "薪酬委员会", "薪酬委員會"]},
+      {"type": "nomination", "canonical_zh": "提名委员会", "synonyms": ["Nomination Committee", "提名委员会", "提名委員會"]},
+      {"type": "risk", "canonical_zh": "风险管理委员会", "synonyms": ["Risk Committee", "风险管理委员会", "風險管理委員會"]},
+      {"type": "executive", "canonical_zh": "执行委员会", "synonyms": ["Executive Committee", "执行委员会", "執行委員會"]}
+    ],
+    "description": "用于 key_personnel 表的 position_type, board_role, committee_membership 标准化"
+  },
+  
+  "shareholding_types": {
+    "shareholder_types": [
+      {"type": "individual", "canonical_zh": "个人", "synonyms": ["Individual", "Person", "个人", "自然人"]},
+      {"type": "corporation", "canonical_zh": "企业", "synonyms": ["Corporation", "Company", "企业", "公司", "法人"]},
+      {"type": "government", "canonical_zh": "政府", "synonyms": ["Government", "State-owned", "政府", "国有", "国资"]},
+      {"type": "institutional", "canonical_zh": "机构投资者", "synonyms": ["Institutional Investor", "Fund", "机构投资者", "基金", "机构"]},
+      {"type": "trust", "canonical_zh": "信托", "synonyms": ["Trust", "信托", "家族信托"]}
+    ],
+    "description": "用于 shareholding_structure 表的 shareholder_type 标准化"
+  },
+  
   "fallback_rule": {
-    "description": "處理字典外指標與動態分類的規則",
+    "description": "处理字典外指标与动态分类的规则",
     "rules": [
-      "1. 【未知指標命名】：使用全小寫英文與底線，例如：new_custom_metric。絕對不要使用中文或特殊字符。",
-      "2. 【地區與業務劃分】：財報中的『地區收入 (Region)』或『業務分類 (Segment)』為公司特有資訊。絕對不要強行歸類！",
-      "   - 請直接將財報上的原文翻譯為小寫英文底線格式。",
-      "   - 例如：財報寫『大灣區』→ 請輸出 'greater_bay_area'",
-      "   - 例如：財報寫『雲端服務』→ 請輸出 'cloud_services'",
-      "   - 例如：財報寫『APAC』→ 請輸出 'apac'",
-      "3. 【數據類型判斷】：",
-      "   - 數值型（金額、百分比）→ 寫入 financial_metrics (EAV)",
-      "   - 文字型（人名、公司名）→ 寫入 companies.extra_data (JSONB)",
-      "   - 陣列型（客戶列表、產品線）→ 寫入 companies.extra_data (JSONB)"
+      "1. 【未知指标命名】：使用全小写英文与下划线，例如：new_custom_metric。绝对不要使用中文或特殊字符。",
+      "2. 【地区与业务划分】：财报中的『地区收入 (Region)』或『业务分类 (Segment)』为公司特有信息。绝对不要强行归类！",
+      "   - 请直接将财报上的原文翻译为小写英文下划线格式。",
+      "   - 例如：财报写『大湾区』→ 请输出 'greater_bay_area'",
+      "   - 例如：财报写『云端服务』→ 请输出 'cloud_services'",
+      "   - 例如：财报写『APAC』→ 请输出 'apac'",
+      "3. 【数据类型判断】：",
+      "   - 数值型（金额、百分比）→ 写入 financial_metrics (EAV)",
+      "   - 文字型（人名、公司名）→ 写入 companies.extra_data (JSONB)",
+      "   - 阵列型（客户列表、产品线）→ 写入 companies.extra_data (JSONB)",
+      "4. 【财政期间判断】：",
+      "   - 年报 → fiscal_period = 'FY'",
+      "   - 中期报告 → fiscal_period = 'H1'",
+      "   - 季报 → fiscal_period = 'Q1/Q2/Q3/Q4'",
+      "5. 【货币标准化】：所有金额必须转换为 standardized_value (HKD)",
+      "   - 使用 standardized_currency = 'HKD'",
+      "   - 保留原始值在 value 和 unit 字段"
+    ]
+  },
+  
+  "units": {
+    "currency": [
+      {"code": "HKD", "canonical_zh": "港元", "synonyms": ["HKD", "Hong Kong Dollar", "港元", "港币", "$HK"]},
+      {"code": "USD", "canonical_zh": "美元", "synonyms": ["USD", "US Dollar", "美元", "$US"]},
+      {"code": "RMB", "canonical_zh": "人民币", "synonyms": ["RMB", "CNY", "Chinese Yuan", "人民币", "人民币元", "￥"]},
+      {"code": "EUR", "canonical_zh": "欧元", "synonyms": ["EUR", "Euro", "欧元", "€"]},
+      {"code": "GBP", "canonical_zh": "英镑", "synonyms": ["GBP", "British Pound", "英镑", "£"]}
+    ],
+    "magnitude": [
+      {"code": "million", "canonical_zh": "百万", "synonyms": ["Million", "M", "百万", "百万港元", "百万美元"]},
+      {"code": "thousand", "canonical_zh": "千", "synonyms": ["Thousand", "K", "千", "千元"]},
+      {"code": "billion", "canonical_zh": "十亿", "synonyms": ["Billion", "B", "十亿", "十亿元"]}
     ]
   }
 }
