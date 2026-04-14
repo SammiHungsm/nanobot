@@ -116,19 +116,15 @@ class AgenticPipeline(BaseIngestionPipeline):
                 max_tokens=3000
             )
             
-            # 🌟 解析 JSON
-            import json
-            import re
+            # 🌟 使用增强版 JSON 解析（非贪婪 + 括号平衡）
+            result = self._parse_agent_response(response)
             
-            json_match = re.search(r'\{[\s\S]*\}', response)
-            
-            if json_match:
-                result = json.loads(json_match.group(0))
+            if "parse_error" not in result and "raw_response" not in result:
                 logger.info(f"✅ process_document 完成: {len(result)} 个数据项")
                 return {"success": True, "data": result, "raw_response": response}
             else:
                 logger.warning("⚠️ 无法解析 JSON，返回原始响应")
-                return {"success": False, "raw_response": response, "error": "no JSON found"}
+                return {"success": False, "raw_response": response, "error": result.get("parse_error", "parse failed")}
             
         except Exception as e:
             logger.error(f"❌ process_document 失败: {e}")
@@ -198,76 +194,62 @@ class AgenticPipeline(BaseIngestionPipeline):
         return prompt
     
     def _parse_agent_response(self, response: str) -> Dict[str, Any]:
-        """解析 Agent 的 JSON 回复"""
+        """
+        解析 Agent 的 JSON 回复，增强容错能力
+        
+        修复：使用非贪婪模式提取 JSON，防止 LLM 多余文字干扰
+        """
         import json
         import re
         
-        json_match = re.search(r'\{[\s\S]*\}', response)
+        # 1. 優先嘗試提取 Markdown 區塊 ```json ... ``` (使用非貪婪模式 *?)
+        md_match = re.search(r'```json\s*([\s\S]*?)\s*```', response)
+        if md_match:
+            json_str = md_match.group(1).strip()
+            try:
+                data = json.loads(json_str)
+                logger.info(f"✅ Markdown JSON 解析成功")
+                return data
+            except json.JSONDecodeError as e:
+                logger.warning(f"⚠️ Markdown JSON 解析失败，嘗試其他方法: {e}")
         
+        # 2. 嘗試提取第一個完整的 JSON 物件 (使用非貪婪模式，配合 balance braces)
+        # 匹配從 { 到 }，確保括號平衡
+        brace_count = 0
+        start_idx = None
+        for i, char in enumerate(response):
+            if char == '{':
+                if start_idx is None:
+                    start_idx = i
+                brace_count += 1
+            elif char == '}':
+                brace_count -= 1
+                if brace_count == 0 and start_idx is not None:
+                    json_str = response[start_idx:i+1]
+                    try:
+                        data = json.loads(json_str)
+                        logger.info(f"✅ Balanced brace JSON 解析成功 (位置 {start_idx}-{i})")
+                        return data
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"⚠️ JSON 解析失败 (位置 {start_idx}-{i}): {e}")
+                        # 重置，尋找下一個可能的 JSON
+                        start_idx = None
+                        continue
+        
+        # 3. 最後嘗試：貪婪模式但只取第一個 JSON (fallback)
+        json_match = re.search(r'\{[\s\S]*?\}', response)  # 非貪婪
         if json_match:
             json_str = json_match.group(0)
             try:
                 data = json.loads(json_str)
+                logger.info(f"✅ Fallback JSON 解析成功")
                 return data
             except json.JSONDecodeError as e:
                 logger.warning(f"⚠️ JSON 解析失败: {e}")
-                return {"raw_response": response, "parse_error": str(e)}
         
-        else:
-            logger.warning("⚠️ 未找到 JSON 格式")
-            return {"raw_response": response}
-    
-    async def process_document(
-        self,
-        document_content: str,
-        filename: str,
-        user_hints: Dict[str, Any] = None
-    ) -> Dict[str, Any]:
-        """
-        🎯 兼容接口：用于 pipeline.py 的 smart_extract
-        
-        旧的 AgenticIngestionOrchestrator 有这个方法，新的 AgenticPipeline 需要兼容
-        
-        Args:
-            document_content: 文档内容（通常是 Prompt）
-            filename: 文件名
-            user_hints: 用户提示
-            
-        Returns:
-            Dict: 处理结果
-            
-        实现：
-        - 接收 Stage 5 Prompt（不叠加 Stage 0 的 System Prompt）
-        - 使用 llm_core.chat() 发送 Prompt
-        - 返回结构化结果
-        """
-        logger.info("🤖 AgenticPipeline.process_document 开始处理...")
-        
-        try:
-            # 🌟 使用 llm_core.chat() 发送 Prompt
-            response = await llm_core.chat(
-                messages=[{"role": "user", "content": document_content}],
-                temperature=0.3,  # 低温度，确保准确性
-                max_tokens=3000
-            )
-            
-            # 🌟 解析 JSON（LLM 应返回 JSON 格式）
-            import json
-            import re
-            
-            json_match = re.search(r'\{[\s\S]*\}', response)
-            
-            if json_match:
-                result = json.loads(json_match.group(0))
-                logger.info(f"✅ process_document 完成: {len(result)} 个数据项")
-                return {"success": True, "data": result, "raw_response": response}
-            else:
-                logger.warning("⚠️ 无法解析 JSON，返回原始响应")
-                return {"success": False, "raw_response": response, "error": "no JSON found"}
-            
-        except Exception as e:
-            logger.error(f"❌ process_document 失败: {e}")
-            return {"success": False, "error": str(e)}
+        # 4. 完全失敗，返回原始響應
+        logger.warning("⚠️ 未找到有效 JSON 格式")
+        return {"raw_response": response, "parse_error": "no valid JSON found"}
 
 
 # ===========================================

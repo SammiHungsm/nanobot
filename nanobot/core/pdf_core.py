@@ -117,12 +117,12 @@ class OpenDataLoaderCore:
     3. 统一输出结构（标准化 JSON Schema）
     """
     
-    def __init__(self, enable_hybrid: bool = False, hybrid_url: str = None):
+    def __init__(self, enable_hybrid: bool = True, hybrid_url: str = None):
         """
         初始化
         
         Args:
-            enable_hybrid: 是否启用 Hybrid AI 视觉模式
+            enable_hybrid: 是否启用 Hybrid AI 视觉模式（默认 True = 启用 GPU 加速 + 图片处理）
             hybrid_url: Hybrid 服务器 URL（默认从环境变量获取）
         """
         self.enable_hybrid = enable_hybrid
@@ -217,6 +217,29 @@ class OpenDataLoaderCore:
         logger.info(f"   输出目录: {output_dir}")
         logger.info(f"   Hybrid 模式: {use_hybrid}")
         
+        # 🌟 新增：分批处理以避免 Hybrid 累积崩溃
+        # 如果 Hybrid 模式且页数 > 100，分批处理每批 30 页
+        BATCH_SIZE = 30  # 每批处理 30 页（避免 Hybrid 累积崩溃）
+        
+        # 获取总页数
+        try:
+            import fitz  # PyMuPDF
+            doc = fitz.open(pdf_path)
+            total_pages = len(doc)
+            doc.close()
+        except:
+            # 如果 PyMuPDF 不可用，假设需要分批处理
+            total_pages = 300  # 大 PDF 假设需要分批
+        
+        need_batch = use_hybrid and total_pages > 100
+        
+        if need_batch:
+            logger.info(f"🔄 大 PDF ({total_pages} 页)，启用分批处理 (每批 {BATCH_SIZE} 页)")
+            return self._parse_in_batches(
+                pdf_path, output_dir, total_pages, BATCH_SIZE,
+                use_hybrid, image_output, image_format
+            )
+        
         # 🌟 统一参数格式：format 使用字符串（逗号分隔）
         format_str = "markdown,json"
         
@@ -285,6 +308,190 @@ class OpenDataLoaderCore:
         )
         
         return result
+    
+    def _parse_in_batches(
+        self,
+        pdf_path: str,
+        output_dir: str,
+        total_pages: int,
+        batch_size: int,
+        use_hybrid: bool,
+        image_output: str,
+        image_format: str
+    ) -> PDFParseResult:
+        """
+        🔄 分批处理大 PDF
+        
+        解决问题：Hybrid 服务在累积处理后崩溃
+        
+        策略：
+        1. 将 PDF 分成多个批次（每批 batch_size 页）
+        2. 每批之间增加延迟让 Hybrid 清理资源
+        3. 合并所有批次的结果
+        """
+        import time
+        import shutil
+        
+        # 计算批次
+        batches = []
+        for start in range(1, total_pages + 1, batch_size):
+            end = min(start + batch_size - 1, total_pages)
+            batches.append((start, end))
+        
+        logger.info(f"📦 分成 {len(batches)} 批处理: {batches}")
+        
+        # 创建主输出目录
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        
+        # 合并结果用
+        all_artifacts = []
+        all_tables = []
+        all_images = []
+        all_markdown = ""
+        metadata = {
+            "filename": Path(pdf_path).name,
+            "hybrid_enabled": use_hybrid,
+            "hybrid_device": "CUDA" if self.use_cuda else "CPU",
+            "batch_processed": True,
+            "batch_count": len(batches)
+        }
+        
+        # 分批处理
+        for batch_idx, (start, end) in enumerate(batches):
+            logger.info(f"📦 处理批次 {batch_idx + 1}/{len(batches)}: Pages {start}-{end}")
+            
+            # 创建批次临时目录
+            batch_dir = output_path / f"batch_{batch_idx:03d}"
+            batch_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 构建页码字符串
+            pages_str = ",".join(str(p) for p in range(start, end + 1))
+            
+            # 调用 OpenDataLoader（单批）
+            try:
+                convert_kwargs = {
+                    'input_path': pdf_path,
+                    'output_dir': str(batch_dir),
+                    'format': "markdown,json",
+                    'image_output': image_output,
+                    'image_format': image_format,
+                    'pages': pages_str,
+                }
+                
+                if use_hybrid:
+                    device = "CUDA GPU" if self.use_cuda else "CPU"
+                    logger.info(f"   🚀 Hybrid 模式: {device}")
+                    convert_kwargs['hybrid'] = "docling-fast"
+                    convert_kwargs['hybrid_mode'] = "full"
+                    convert_kwargs['hybrid_url'] = self.hybrid_url
+                    convert_kwargs['hybrid_timeout'] = "300000"  # 300 秒（单批更快）
+                    convert_kwargs['hybrid_fallback'] = True
+                
+                self.module.convert(**convert_kwargs)
+                
+                # 读取批次结果
+                batch_result = self._read_and_normalize(str(batch_dir), pdf_path, use_hybrid)
+                
+                # 合并结果
+                all_artifacts.extend(batch_result.artifacts)
+                all_tables.extend(batch_result.tables)
+                all_images.extend(batch_result.images)
+                all_markdown += batch_result.markdown + "\n\n"
+                
+                logger.info(f"   ✅ 批次 {batch_idx + 1} 完成: {len(batch_result.artifacts)} artifacts")
+                
+                # 🌟 关键：批次间延迟，让 Hybrid 清理资源
+                if batch_idx < len(batches) - 1:
+                    delay = 5  # 5 秒延迟
+                    logger.info(f"   ⏳ 等待 {delay} 秒让 Hybrid 清理资源...")
+                    time.sleep(delay)
+                    
+                    # 🌟 请求 Hybrid 重置（如果支持）
+                    try:
+                        import requests
+                        # 尝试调用 Hybrid 的清理接口
+                        requests.post(f"{self.hybrid_url}/v1/reset", timeout=5)
+                        logger.debug("   🔄 Hybrid 资源已重置")
+                    except:
+                        pass  # 如果不支持，忽略
+                
+            except Exception as e:
+                logger.error(f"   ❌ 批次 {batch_idx + 1} 失败: {e}")
+                # 尝试 fallback 到纯 Java
+                if use_hybrid:
+                    logger.warning("   ⚠️ 尝试纯 Java fallback...")
+                    try:
+                        for key in ['hybrid', 'hybrid_mode', 'hybrid_url', 'hybrid_timeout', 'hybrid_fallback']:
+                            convert_kwargs.pop(key, None)
+                        self.module.convert(**convert_kwargs)
+                        batch_result = self._read_and_normalize(str(batch_dir), pdf_path, False)
+                        all_artifacts.extend(batch_result.artifacts)
+                        all_tables.extend(batch_result.tables)
+                        all_images.extend(batch_result.images)
+                        all_markdown += batch_result.markdown + "\n\n"
+                        logger.info(f"   ✅ Java fallback 完成")
+                    except Exception as e2:
+                        logger.error(f"   ❌ Java fallback 也失败: {e2}")
+        
+        # 合并 Markdown 文件到主目录
+        main_md = output_path / f"{Path(pdf_path).stem}.md"
+        with open(main_md, 'w', encoding='utf-8') as f:
+            f.write(all_markdown)
+        
+        # 🌟 关键：合并跨页表格（修复分批处理切断问题）
+        if all_tables:
+            try:
+                from nanobot.ingestion.utils.table_merger import cross_page_merger
+                logger.info(f"🔗 检查并合并跨页表格...")
+                merged_tables = cross_page_merger.merge_tables_batch(all_tables)
+                all_tables = merged_tables
+                
+                # 同步更新 artifacts 中的表格
+                table_artifacts_count = 0
+                for artifact in all_artifacts:
+                    if artifact.get('type') == 'table':
+                        table_artifacts_count += 1
+                
+                # 如果表格数量减少了，说明有合并发生
+                if len(all_tables) < table_artifacts_count:
+                    logger.info(f"   ✅ 跨页表格合并: {table_artifacts_count} → {len(all_tables)} 个表格")
+                    # 重建 artifacts 列表中的表格部分
+                    non_table_artifacts = [a for a in all_artifacts if a.get('type') != 'table']
+                    table_artifacts = []
+                    for table in all_tables:
+                        table_artifacts.append({
+                            'type': 'table',
+                            'content_json': table,
+                            'page_num': table.get('page_num', table.get('source_pages', [0])[0]),
+                            'metadata': {
+                                'is_merged': table.get('is_merged', False),
+                                'source_pages': table.get('source_pages', [])
+                            }
+                        })
+                    all_artifacts = non_table_artifacts + table_artifacts
+            except ImportError:
+                logger.warning("⚠️ table_merger 未找到，跳过跨页表格合并")
+            except Exception as e:
+                logger.warning(f"⚠️ 跨页表格合并失败: {e}")
+        
+        logger.info(
+            f"✅ 分批解析完成: {total_pages} 页, "
+            f"{len(all_tables)} 个表格, {len(all_images)} 张图片, "
+            f"{len(all_artifacts)} 个 artifacts"
+        )
+        
+        return PDFParseResult(
+            file_path=pdf_path,
+            total_pages=total_pages,
+            markdown=all_markdown,
+            artifacts=all_artifacts,
+            tables=all_tables,
+            images=all_images,
+            metadata=metadata,
+            hybrid_enabled=use_hybrid,
+            hybrid_device="CUDA" if self.use_cuda else "CPU"
+        )
     
     def _read_and_normalize(
         self,

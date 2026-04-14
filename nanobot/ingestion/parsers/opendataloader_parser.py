@@ -30,12 +30,12 @@ class OpenDataLoaderParser:
     不碰資料庫，不碰 LLM。
     """
     
-    def __init__(self, enable_hybrid: bool = False):
+    def __init__(self, enable_hybrid: bool = True):
         """
         初始化
         
         Args:
-            enable_hybrid: 是否启用 Hybrid AI 视觉模式（默认 False = 纯 Java）
+            enable_hybrid: 是否启用 Hybrid AI 视觉模式（默认 True = 启用 GPU 加速 + 图片处理）
         """
         self.core = OpenDataLoaderCore(enable_hybrid=enable_hybrid)
         logger.info(f"✅ OpenDataLoaderParser 初始化完成 (hybrid={enable_hybrid})")
