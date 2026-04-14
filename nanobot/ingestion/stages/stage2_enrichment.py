@@ -200,6 +200,15 @@ class Stage2Enrichment:
         artifact_content = enriched_content if enriched_content else artifact.get("content", "")
         
         if db_client:
+            # 🌟 修复：把 content 合并到 metadata 中（insert_raw_artifact 没有 content 参数）
+            full_metadata = {
+                **metadata,
+                "content": artifact_content,  # Enriched Markdown 存入 metadata
+                "image_saved": image_saved,
+                "vision_extracted": len(entities_extracted) > 0,
+                "entities_count": len(entities_extracted),
+                "figure_number": vision_result.get("figure_number", "") if vision_result else ""
+            }
             await db_client.insert_raw_artifact(
                 artifact_id=f"{doc_id}_image_{idx:04d}",
                 document_id=document_id,
@@ -207,14 +216,7 @@ class Stage2Enrichment:
                 file_type="image",
                 file_path=str(image_path.relative_to(data_dir)) if image_saved else f"{doc_id}/images/{image_filename}",
                 page_num=page_num,
-                content=artifact_content,  # 🌟 存入 Enriched Markdown
-                metadata=json.dumps({
-                    **metadata,
-                    "image_saved": image_saved,
-                    "vision_extracted": len(entities_extracted) > 0,
-                    "entities_count": len(entities_extracted),
-                    "figure_number": vision_result.get("figure_number", "") if vision_result else ""
-                })
+                metadata=json.dumps(full_metadata)
             )
         
         return image_saved, entities_extracted

@@ -217,38 +217,35 @@ class OpenDataLoaderCore:
         logger.info(f"   输出目录: {output_dir}")
         logger.info(f"   Hybrid 模式: {use_hybrid}")
         
-        # 🌟 新增：分批处理以避免 Hybrid 累积崩溃
-        # 如果 Hybrid 模式且页数 > 100，分批处理每批 10 页
-        BATCH_SIZE = 10  # 每批处理 10 页（RTX 4060 8GB VRAM 保守设置）
-        BATCH_DELAY = 15  # 每批之间等待 15 秒让 CUDA 完全清理
+        # 🌟 Batch 配置：Cache Cleaner 已在后台运行，不需要 sleep
+        # 保留 batch 概念以便追踪进度，但移除等待时间
+        BATCH_SIZE = 10  # 每批处理 10 页（进度追踪用）
+        BATCH_DELAY = 0  # 🌟 移除 sleep：Cache Cleaner 自动清理 GPU 内存
         
-        # 🌟 关键修复：先检查是否指定了特定页面
-        # 如果指定了特定页面，只使用纯 Java 解析（快速模式），不分批
+        # 🌟 检查是否指定了特定页面
         if pages is not None:
             if isinstance(pages, list):
                 pages_str = ",".join(str(p) for p in pages)
             else:
                 pages_str = pages
-            logger.info(f"⚡ 快速模式：只解析 Page {pages_str}（纯 Java，不启动 Hybrid/分批）")
-            use_hybrid = False  # 🌟 强制禁用 Hybrid
-            need_batch = False  # 🌟 既然是特定少量页面，绝对不需要分批！
+            logger.info(f"⚡ 快速模式：只解析 Page {pages_str}")
+            use_hybrid = False  # 特定页面用纯 Java
         else:
             pages_str = None
             
-            # 只有在需要完整解析时才获取总页数并判断是否分批
+            # 获取总页数判断是否需要分批
             try:
                 import fitz  # PyMuPDF
                 doc = fitz.open(pdf_path)
                 total_pages = len(doc)
                 doc.close()
             except:
-                # 如果 PyMuPDF 不可用，假设需要分批处理
-                total_pages = 300  # 大 PDF 假设需要分批
+                total_pages = 300
             
             need_batch = use_hybrid and total_pages > 100
         
         if need_batch:
-            logger.info(f"🔄 大 PDF ({total_pages} 页)，启用分批处理 (每批 {BATCH_SIZE} 页, 延迟 {BATCH_DELAY} 秒)")
+            logger.info(f"🔄 大 PDF ({total_pages} 页)，启用分批处理 (每批 {BATCH_SIZE} 页)")
             return self._parse_in_batches(
                 pdf_path, output_dir, total_pages, BATCH_SIZE, BATCH_DELAY,
                 use_hybrid, image_output, image_format
@@ -404,40 +401,23 @@ class OpenDataLoaderCore:
                 
                 logger.info(f"   ✅ 批次 {batch_idx + 1} 完成: {len(batch_result.artifacts)} artifacts")
                 
-                # 🌟 关键：批次间延迟，让 Hybrid 清理资源
-                if batch_idx < len(batches) - 1:
-                    delay = batch_delay  # 使用传入的延迟参数
-                    
-                    # 🌟 改进：在等待期间保持活跃，避免被系统杀死
-                    # 分段等待 + 轻量级健康检查
-                    for wait_sec in range(delay):
+                # 🌟 批次间清理：Cache Cleaner 已在后台运行，只需调用 clear_cache
+                # 不需要 sleep，直接清理并继续下一批
+                if batch_idx < len(batches) - 1 and batch_delay > 0:
+                    # 如果需要延迟（batch_delay > 0），才执行 sleep
+                    for wait_sec in range(batch_delay):
                         time.sleep(1)
-                        # 每秒发送一次健康检查保持活跃
-                        if wait_sec % 5 == 0:  # 每 5 秒发送一次
-                            try:
-                                import requests
-                                requests.get(f"{self.hybrid_url}/health", timeout=2)
-                            except:
-                                pass
-                    
-                    logger.info(f"   ⏳ 等待 {delay} 秒完成，开始下一批")
-                    
-                    # 🌟 强制清空 CUDA 快取（关键修复）
+                    logger.info(f"   ⏳ 等待 {batch_delay} 秒完成")
+                
+                # 🌟 每批结束后尝试清空 CUDA cache
+                if batch_idx < len(batches) - 1:
                     try:
                         import requests
-                        # 尝试调用 Hybrid 的清理接口
                         resp = requests.post(f"{self.hybrid_url}/v1/clear_cache", timeout=10)
                         if resp.status_code == 200:
                             logger.debug("   🧹 CUDA cache 已清空")
-                        else:
-                            logger.debug(f"   ⚠️ 清理接口返回: {resp.status_code}")
                     except Exception as e:
                         logger.debug(f"   ⚠️ 清理接口调用失败（忽略）: {e}")
-                        # 尝试通过其他方式触发清理
-                        try:
-                            requests.get(f"{self.hybrid_url}/health", timeout=5)
-                        except:
-                            pass
                 
             except Exception as e:
                 logger.error(f"   ❌ 批次 {batch_idx + 1} 失败: {e}")
