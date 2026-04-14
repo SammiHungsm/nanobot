@@ -114,9 +114,10 @@ class UnifiedLLMCore:
             
             self.config: Config = resolve_config_env_vars(load_config(config_path))
             self.default_model = self.config.agents.defaults.model
-            self.vision_model = os.getenv("VISION_MODEL", "gpt-4o")  # Vision 模型可能不同
+            # 🌟 Vision 模型跟随 config.json（优先级：env var > config.json > 默认值）
+            self.vision_model = os.getenv("VISION_MODEL") or getattr(self.config.agents.defaults, 'vision_model', 'gpt-4o')
             
-            logger.info(f"✅ UnifiedLLMCore initialized using official config (model={self.default_model})")
+            logger.info(f"✅ UnifiedLLMCore initialized using official config (model={self.default_model}, vision={self.vision_model})")
         else:
             self.config = None
             self.default_model = os.getenv("DEFAULT_LLM_MODEL", "gpt-4o-mini")

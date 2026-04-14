@@ -1108,46 +1108,85 @@ class DocumentPipeline(BaseIngestionPipeline):
 只返回 JSON，不要其他解释。
 """
                     
+                    # 🌟 使用 config.json 配置的 vision_model（跟随 llm_core 设置）
                     vision_response = await llm_core.vision(
                         img_base64,
                         prompt,
-                        model="qwen3.5-plus"  # 使用云端 API
+                        model=self.vision_model  # 跟随 config.json 或 VISION_MODEL 环境变量
                     )
                     
-                    # 解析 JSON 响应
+                    # 🌟 记录原始响应（用于调试）
+                    logger.debug(f"   🔍 Vision raw response: {vision_response[:500]}...")
+                    
+                    # 🌟 解析 JSON 响应（使用非贪婪 + 括号平衡，防止 Extra data 错误）
                     import json as json_module
                     import re
-                    json_match = re.search(r'\{[\s\S]*\}', vision_response)
-                    if json_match:
-                        vision_result = json_module.loads(json_match.group(0))
-                        
+                    
+                    vision_result = None
+                    
+                    # 优先尝试提取 Markdown 区块 ```json ... ```
+                    md_match = re.search(r'```json\s*([\s\S]*?)\s*```', vision_response)
+                    if md_match:
+                        json_str = md_match.group(1).strip()
+                        try:
+                            vision_result = json_module.loads(json_str)
+                            logger.debug(f"   ✅ Markdown JSON parsed: {vision_result}")
+                        except json_module.JSONDecodeError as e:
+                            logger.warning(f"   ⚠️ Markdown JSON parse failed: {e}")
+                            md_match = None  # 继续尝试其他方法
+                    
+                    if not md_match:
+                        # 尝试括号平衡提取第一个完整 JSON
+                        brace_count = 0
+                        start_idx = None
+                        for i, char in enumerate(vision_response):
+                            if char == '{':
+                                if start_idx is None:
+                                    start_idx = i
+                                brace_count += 1
+                            elif char == '}':
+                                brace_count -= 1
+                                if brace_count == 0 and start_idx is not None:
+                                    json_str = vision_response[start_idx:i+1]
+                                    try:
+                                        vision_result = json_module.loads(json_str)
+                                        logger.debug(f"   ✅ Brace JSON parsed: {vision_result}")
+                                        break  # 成功解析
+                                    except json_module.JSONDecodeError as e:
+                                        logger.warning(f"   ⚠️ Brace JSON parse failed at {start_idx}-{i}: {e}")
+                                        start_idx = None  # 继续寻找下一个 JSON
+                    
+                    if vision_result:
                         vision_stock = vision_result.get("stock_code")
                         vision_year = vision_result.get("year")
                         vision_name_en = vision_result.get("name_en")
                         vision_name_zh = vision_result.get("name_zh")
                         
-                        # 只有 stock_code 有效才算成功
+                        # 🌟 增量保存策略：先保存找到的部分信息，继续处理下一页
+                        if vision_name_en or vision_name_zh:
+                            name_en = vision_name_en or name_en
+                            name_zh = vision_name_zh or name_zh
+                            logger.info(f"   ✅ Vision Page {page_num} 提取 name: {name_en or name_zh}")
+                        
+                        if vision_year:
+                            try:
+                                year = int(vision_year)
+                                logger.info(f"   ✅ Vision Page {page_num} 提取 year: {year}")
+                            except ValueError:
+                                logger.warning(f"   ⚠️ Vision 提取嘅 year ({vision_year}) 無法轉為整數")
+                        
+                        # 只有 stock_code 有效才算完全成功
                         if vision_stock:
                             stock_code = vision_stock
                             logger.info(f"   ✅ Vision Page {page_num} 提取 stock_code: {stock_code}")
-                            
-                            if vision_year:
-                                try:
-                                    year = int(vision_year)
-                                    logger.info(f"   ✅ Vision Page {page_num} 提取 year: {year}")
-                                except ValueError:
-                                    logger.warning(f"   ⚠️ Vision 提取嘅 year ({vision_year}) 無法轉為整數")
-                            
-                            if vision_name_en or vision_name_zh:
-                                name_en = vision_name_en or name_en
-                                name_zh = vision_name_zh or name_zh
-                                logger.info(f"   ✅ Vision Page {page_num} 提取 name: {name_en or name_zh}")
-                            
+                            logger.info(f"   🎉 完整提取完成，停止搜索")
                             break  # 成功，不再尝试其他页面
                         else:
-                            logger.info(f"   ⚠️ Vision Page {page_num} 未找到 stock_code，继续尝试...")
+                            # 🌟 有部分信息但缺少 stock_code，记录并继续
+                            logger.info(f"   ⚠️ Vision Page {page_num} 有部分信息但缺少 stock_code，继续尝试下一页...")
+                            logger.info(f"   📊 已提取: name={name_en or name_zh}, year={year}")
                     else:
-                        logger.info(f"   ⚠️ Vision Page {page_num} 无法解析 JSON，继续尝试...")
+                        logger.warning(f"   ⚠️ Vision Page {page_num} 无法解析 JSON，原始响应: {vision_response[:200]}")
                 
                 doc.close()
                     

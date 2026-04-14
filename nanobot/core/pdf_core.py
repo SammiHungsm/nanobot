@@ -218,40 +218,44 @@ class OpenDataLoaderCore:
         logger.info(f"   Hybrid 模式: {use_hybrid}")
         
         # 🌟 新增：分批处理以避免 Hybrid 累积崩溃
-        # 如果 Hybrid 模式且页数 > 100，分批处理每批 30 页
-        BATCH_SIZE = 30  # 每批处理 30 页（避免 Hybrid 累积崩溃）
+        # 如果 Hybrid 模式且页数 > 100，分批处理每批 10 页
+        BATCH_SIZE = 10  # 每批处理 10 页（RTX 4060 8GB VRAM 保守设置）
+        BATCH_DELAY = 15  # 每批之间等待 15 秒让 CUDA 完全清理
         
-        # 获取总页数
-        try:
-            import fitz  # PyMuPDF
-            doc = fitz.open(pdf_path)
-            total_pages = len(doc)
-            doc.close()
-        except:
-            # 如果 PyMuPDF 不可用，假设需要分批处理
-            total_pages = 300  # 大 PDF 假设需要分批
-        
-        need_batch = use_hybrid and total_pages > 100
-        
-        if need_batch:
-            logger.info(f"🔄 大 PDF ({total_pages} 页)，启用分批处理 (每批 {BATCH_SIZE} 页)")
-            return self._parse_in_batches(
-                pdf_path, output_dir, total_pages, BATCH_SIZE,
-                use_hybrid, image_output, image_format
-            )
-        
-        # 🌟 统一参数格式：format 使用字符串（逗号分隔）
-        format_str = "markdown,json"
-        
-        # 🌟 统一参数格式：pages 使用字符串（逗号分隔）
+        # 🌟 关键修复：先检查是否指定了特定页面
+        # 如果指定了特定页面，只使用纯 Java 解析（快速模式），不分批
         if pages is not None:
             if isinstance(pages, list):
                 pages_str = ",".join(str(p) for p in pages)
             else:
                 pages_str = pages
-            logger.info(f"   页码范围: {pages_str}")
+            logger.info(f"⚡ 快速模式：只解析 Page {pages_str}（纯 Java，不启动 Hybrid/分批）")
+            use_hybrid = False  # 🌟 强制禁用 Hybrid
+            need_batch = False  # 🌟 既然是特定少量页面，绝对不需要分批！
         else:
             pages_str = None
+            
+            # 只有在需要完整解析时才获取总页数并判断是否分批
+            try:
+                import fitz  # PyMuPDF
+                doc = fitz.open(pdf_path)
+                total_pages = len(doc)
+                doc.close()
+            except:
+                # 如果 PyMuPDF 不可用，假设需要分批处理
+                total_pages = 300  # 大 PDF 假设需要分批
+            
+            need_batch = use_hybrid and total_pages > 100
+        
+        if need_batch:
+            logger.info(f"🔄 大 PDF ({total_pages} 页)，启用分批处理 (每批 {BATCH_SIZE} 页, 延迟 {BATCH_DELAY} 秒)")
+            return self._parse_in_batches(
+                pdf_path, output_dir, total_pages, BATCH_SIZE, BATCH_DELAY,
+                use_hybrid, image_output, image_format
+            )
+        
+        # 🌟 统一参数格式：format 使用字符串（逗号分隔）
+        format_str = "markdown,json"
         
         # 构建 convert() 参数
         convert_kwargs = {
@@ -262,11 +266,9 @@ class OpenDataLoaderCore:
             'image_format': image_format,
         }
         
-        # 🌟 如果指定了特定页面，只使用纯 Java 解析（快速模式）
+        # 🌟 如果指定了特定页面（pages_str 已在前面处理）
         if pages_str:
             convert_kwargs['pages'] = pages_str
-            use_hybrid = False  # 🌟 强制禁用 Hybrid（特定页面不需要 AI）
-            logger.info(f"⚡ 快速模式：只解析 Page {pages_str}（纯 Java，不启动 Hybrid）")
         
         # 🌟 启用 Hybrid AI 视觉模式
         if use_hybrid:
@@ -315,6 +317,7 @@ class OpenDataLoaderCore:
         output_dir: str,
         total_pages: int,
         batch_size: int,
+        batch_delay: int,  # 🌟 新增参数
         use_hybrid: bool,
         image_output: str,
         image_format: str
@@ -403,18 +406,38 @@ class OpenDataLoaderCore:
                 
                 # 🌟 关键：批次间延迟，让 Hybrid 清理资源
                 if batch_idx < len(batches) - 1:
-                    delay = 5  # 5 秒延迟
-                    logger.info(f"   ⏳ 等待 {delay} 秒让 Hybrid 清理资源...")
-                    time.sleep(delay)
+                    delay = batch_delay  # 使用传入的延迟参数
                     
-                    # 🌟 请求 Hybrid 重置（如果支持）
+                    # 🌟 改进：在等待期间保持活跃，避免被系统杀死
+                    # 分段等待 + 轻量级健康检查
+                    for wait_sec in range(delay):
+                        time.sleep(1)
+                        # 每秒发送一次健康检查保持活跃
+                        if wait_sec % 5 == 0:  # 每 5 秒发送一次
+                            try:
+                                import requests
+                                requests.get(f"{self.hybrid_url}/health", timeout=2)
+                            except:
+                                pass
+                    
+                    logger.info(f"   ⏳ 等待 {delay} 秒完成，开始下一批")
+                    
+                    # 🌟 强制清空 CUDA 快取（关键修复）
                     try:
                         import requests
                         # 尝试调用 Hybrid 的清理接口
-                        requests.post(f"{self.hybrid_url}/v1/reset", timeout=5)
-                        logger.debug("   🔄 Hybrid 资源已重置")
-                    except:
-                        pass  # 如果不支持，忽略
+                        resp = requests.post(f"{self.hybrid_url}/v1/clear_cache", timeout=10)
+                        if resp.status_code == 200:
+                            logger.debug("   🧹 CUDA cache 已清空")
+                        else:
+                            logger.debug(f"   ⚠️ 清理接口返回: {resp.status_code}")
+                    except Exception as e:
+                        logger.debug(f"   ⚠️ 清理接口调用失败（忽略）: {e}")
+                        # 尝试通过其他方式触发清理
+                        try:
+                            requests.get(f"{self.hybrid_url}/health", timeout=5)
+                        except:
+                            pass
                 
             except Exception as e:
                 logger.error(f"   ❌ 批次 {batch_idx + 1} 失败: {e}")
