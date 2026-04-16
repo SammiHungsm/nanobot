@@ -49,6 +49,9 @@ class DBClient:
         self.pool_size = pool_size
         self.max_inactive_connection_lifetime = max_inactive_connection_lifetime
         
+        # 🌟 Schema 缓存：存储表结构，避免硬编码字段名错误
+        self._schema_cache: Dict[str, set] = {}  # table_name -> set(column_names)
+        
         logger.info(f"DBClient initialized (pool_size={pool_size})")
     
     def _resolve_env_vars(self, url: str) -> str:
@@ -83,10 +86,48 @@ class DBClient:
             # 🔧 同時創建單連接（向後兼容 self.conn）
             self._conn = await asyncpg.connect(self.db_url)
             
+            # 🌟 加载 schema 缓存
+            await self._load_schema_cache()
+            
             logger.info(f"✅ 數據庫連接池創建成功 (size={self.pool_size})")
         except Exception as e:
             logger.error(f"❌ 創建數據庫連接池失敗：{e}")
             raise
+    
+    async def _load_schema_cache(self):
+        """🌟 加载所有表的列名到缓存"""
+        try:
+            tables = ['entity_relations', 'companies', 'documents', 'financial_metrics', 
+                      'revenue_breakdown', 'key_personnel', 'document_pages']
+            for table in tables:
+                rows = await self._conn.fetch(
+                    "SELECT column_name FROM information_schema.columns WHERE table_name = $1",
+                    table
+                )
+                self._schema_cache[table] = {row['column_name'] for row in rows}
+            logger.debug(f"✅ Schema 缓存加载完成: {len(self._schema_cache)} 个表")
+        except Exception as e:
+            logger.warning(f"⚠️ Schema 缓存加载失败: {e}")
+    
+    def _validate_columns(self, table: str, columns: list) -> tuple:
+        """🌟 验证字段名并返回有效字段"""
+        if table not in self._schema_cache:
+            return columns, []  # 如果没有缓存，直接返回
+        
+        valid = []
+        invalid = []
+        schema = self._schema_cache[table]
+        
+        for col in columns:
+            if col in schema:
+                valid.append(col)
+            else:
+                invalid.append(col)
+        
+        if invalid:
+            logger.warning(f"⚠️ 表 {table} 缺少字段: {invalid}，将被跳过")
+        
+        return valid, invalid
     
     @property
     def conn(self):
@@ -1633,14 +1674,14 @@ class DBClient:
                     INSERT INTO entity_relations 
                     (document_id, source_entity_type, source_entity_name, 
                      relation_type, target_entity_type, target_entity_name,
-                     source_artifact_id, confidence_score, extraction_method,
+                     source_artifact_id, extraction_confidence,
                      event_date, event_year)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                     ON CONFLICT DO NOTHING
                     """,
                     document_id, source_entity_type, source_entity_name,
                     relation_type, target_entity_type, target_entity_name,
-                    source_artifact_id, confidence_score, extraction_method,
+                    source_artifact_id, confidence_score,
                     event_date, event_year
                 )
                 logger.debug(f"✅ Entity relation saved: {source_entity_name} -> {relation_type} -> {target_entity_name}")

@@ -61,8 +61,9 @@ class Stage2Enrichment:
         vision_processed = 0
         
         for idx, artifact in enumerate(artifacts):
+            # 🌟 FIX: Docling 用 "page number"，不是 "page_num"
             artifact_type = artifact.get("type")
-            page_num = artifact.get("page_num")
+            page_num = artifact.get("page_num") or artifact.get("page number")
             metadata = artifact.get("metadata", {})
             
             try:
@@ -112,8 +113,11 @@ class Stage2Enrichment:
         
         # 保存表格 JSON 文件
         table_json_path = doc_dir / f"table_{idx:04d}.json"
+        # 🌟 FIX: Docling 輸出的 artifacts 直接有表格數據，冇 content_json
+        # 保存整個 artifact（除去 data 屬性，太大了）
+        table_content = {k: v for k, v in artifact.items() if k != "data"}
         with open(table_json_path, 'w', encoding='utf-8') as f:
-            json.dump(artifact.get("content_json", {}), f, ensure_ascii=False, indent=2)
+            json.dump(table_content, f, ensure_ascii=False, indent=2)
         
         # 记录到 raw_artifacts
         if db_client:
@@ -287,20 +291,8 @@ class Stage2Enrichment:
             
             entities = vision_result.get("entities", [])
             
-            # 🌟 写入 entity_relations
-            if db_client and entities:
-                for ent in entities:
-                    await db_client.save_entity_relation(
-                        document_id=document_id,
-                        source_entity_type=ent.get("type", "unknown"),
-                        source_entity_name=ent.get("source", ""),
-                        relation_type=ent.get("relation", "related_to"),
-                        target_entity_type=ent.get("target_type", "unknown"),
-                        target_entity_name=ent.get("target", ""),
-                        source_artifact_id=f"{doc_id}_image_{idx:04d}",
-                        confidence_score=0.85,
-                        extraction_method="llm_vision"
-                    )
+            # 🌟 不在此处写入 entity_relations（FK 约束要求先插入 artifact）
+            # entity_relations 将在 insert_raw_artifact 之后由调用者处理
             
             logger.info(f"   ✅ Vision 提取完成: {len(entities)} 个实体")
             return vision_result, entities

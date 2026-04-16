@@ -1458,6 +1458,18 @@ class DocumentPipeline(BaseIngestionPipeline):
             )
             stats["document_pages_saved"] = saved_pages
             
+            # 🌟 FIX: 清理 CUDA cache 以释放 GPU 内存给 Ollama LLM
+            # PDF 处理完成后 Docling 可能仍占用大量 GPU 内存
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    import gc
+                    gc.collect()
+                    logger.info("   🧹 CUDA cache 已清理，释放 GPU 内存给 LLM")
+            except Exception as e:
+                logger.warning(f"   ⚠️ CUDA cache 清理失败: {e}")
+            
             # 🌟 Stage 4 提取
             extraction_result = await Stage4Extractor.extract_structured_data(
                 artifacts=artifacts,
