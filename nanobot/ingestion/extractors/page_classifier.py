@@ -232,18 +232,22 @@ async def find_revenue_breakdown_pages(
     Returns:
         List[int]: 頁碼列表
     """
-    import fitz
+    # 🌟 v3.2: 使用 LlamaParse 的 artifacts，不需要 PyMuPDF
+    # 从 LlamaParse raw output 加载文字
+    from nanobot.core.pdf_core import PDFParser
     
-    # 提取所有頁面文字
+    parser = PDFParser()
+    result = parser.load_from_raw_output(Path(pdf_path).name)
+    
+    # 提取所有页面文字
     pages_text = {}
-    doc = fitz.open(pdf_path)
-    for page_num in range(len(doc)):
-        page = doc.load_page(page_num)
-        pages_text[page_num + 1] = page.get_text("text")
-    doc.close()
+    for artifact in result.artifacts:
+        if artifact.get("type") == "text":
+            page_num = artifact.get("page", 0)
+            pages_text[page_num] = artifact.get("content", "")
     
     # 使用 PageClassifier 進行分類
     classifier = PageClassifier()
-    result = await classifier.find_candidate_pages(pages_text, ["revenue_breakdown"])
+    classifier_result = await classifier.find_candidate_pages(pages_text, ["revenue_breakdown"])
     
-    return result.get("revenue_breakdown", [])
+    return classifier_result.get("revenue_breakdown", [])

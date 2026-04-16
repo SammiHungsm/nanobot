@@ -1,4 +1,4 @@
-# Nanobot WebUI - Python Dependencies (v2.0 Refactored)
+# Nanobot WebUI - Python Dependencies (v3.0 - LlamaParse only)
 
 # Web Framework
 fastapi==0.104.1
@@ -16,9 +16,9 @@ aiohttp>=3.9.0  # Required for gateway streaming
 python-multipart==0.0.6
 aiofiles==23.2.1
 
-# PDF Processing
-opendataloader-pdf[cpu]>=2.2.0  # Match version with main pyproject.toml
-PyMuPDF>=1.23.0
+# 🌟 LlamaParse Cloud Parser（替代 OpenDataLoader）
+# 支持 130+ 格式 + 本地文件上传 + Agentic OCR
+llama_cloud>=2.3.0
 
 # Logging
 loguru>=0.7.0

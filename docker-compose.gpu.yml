@@ -1,204 +1,97 @@
-x-common-config: &common-config
-  build:
-    context: .
-    dockerfile: Dockerfile
-  volumes:
-    - ./config:/app/config
-    - ~/.nanobot:/root/.nanobot
-    - pdf_upload_data:/data/pdfs  # Named volume for PDF uploads
-    - ./data/raw:/app/data/raw
+# ===========================================
+# Docker Compose GPU Override (v3.2)
+# ===========================================
+# 用于启用 GPU 加速 LLM 推理
+# 
+# 使用方式：
+# docker-compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+#
+# 注意：
+# - PDF 解析使用 LlamaParse Cloud API（不需要本地 GPU）
+# - GPU 仅用于 LLM 推理（Ollama/vLLM）
+# - 需要安装 NVIDIA Container Toolkit
+#
+# 前置条件：
+# 1. 安装 NVIDIA 驱动
+# 2. 安装 NVIDIA Container Toolkit: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html
+# 3. 运行 nvidia-ctk system configure --set=nvidia-container-cli.no-cgroups=true
+# ===========================================
 
 services:
-  # PostgreSQL Database - Financial Metrics Storage
-  postgres-financial:
-    image: pgvector/pgvector:pg16
-    container_name: postgres-financial
-    restart: unless-stopped
-    ports:
-      - "5433:5432"
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-annual_reports}
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres_password_change_me}
-      POSTGRES_INITDB_ARGS: "-E UTF8"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./storage/init_complete.sql:/docker-entrypoint-initdb.d/init.sql
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    deploy:
-      resources:
-        limits:
-          cpus: '1'
-          memory: 1G
-    command: >
-      postgres 
-      -c shared_preload_libraries=vector 
-      -c max_connections=200
-
-  # Nanobot Gateway - Main bot service
+  # ===========================================
+  # Nanobot Gateway - GPU 加速 LLM 推理
+  # ===========================================
   nanobot-gateway:
-    container_name: nanobot-gateway
-    <<: *common-config
-    command: ["nanobot", "gateway", "--config", "/app/config/config.json"]
-    restart: unless-stopped
-    ports:
-      - "18790:18790"
-      - "8081:8081"
-    environment:
-      - NANOBOT_CONFIG=/app/config/config.json
-      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
-      - HTTPX_LOG_LEVEL=DEBUG
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres_password_change_me}@postgres-financial:5432/${POSTGRES_DB:-annual_reports}
-      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
-      - DASHSCOPE_API_BASE=${DASHSCOPE_API_BASE:-https://coding.dashscope.aliyuncs.com/v1}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-    volumes:
-      - ./config:/app/config
-      - ~/.nanobot:/root/.nanobot
-      - ./data/uploads:/app/data/uploads  
-      - ./data/raw:/app/data/raw      
-    depends_on:
-      postgres-financial:
-        condition: service_healthy
     deploy:
       resources:
-        limits:
-          cpus: '1'
-          memory: 1G
-
-  # Web UI - Financial Chat Interface (GPU Version)
-  nanobot-webui:
-    build:
-      context: .
-      dockerfile: webui/Dockerfile.gpu  # 🌟 使用 GPU 版本 Dockerfile
-    container_name: nanobot-webui
-    # 🌟 GPU Version: Hybrid server 使用 GPU 加速
-    entrypoint: ["/bin/bash", "/tmp/entrypoint_delayed.sh"]
-    volumes:
-      - ./data/uploads:/app/data/uploads
-      - ./data/output:/app/data/output
-      - ./data/raw:/app/data/raw
-      - ./nanobot:/app/nanobot:ro  
-      - ./config:/app/config  
-    ports:
-      - "3000:8080"
-    environment:
-      - UPLOAD_DIR=/app/data/uploads
-      - OUTPUT_DIR=/app/data/output
-      - DATA_DIR=/app/data/raw
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres_password_change_me}@postgres-financial:5432/${POSTGRES_DB:-annual_reports}
-      - GATEWAY_URL=http://nanobot-gateway:8081
-      - PYTHONUNBUFFERED=1
-      - PYTHONPATH=/app
-      - JAVA_OPTS=-Xmx2g -Xms512m  
-      - _JAVA_OPTIONS=-Xmx2g -Xms512m
-      - NANOBOT_CONFIG=/app/config/config.json  
-      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      # 🌟 GPU Version: Enable CUDA
-      - USE_CUDA=true
-      - TORCH_DEVICE=cuda
-    depends_on:
-      postgres-financial:
-        condition: service_healthy
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          cpus: '2'
-          memory: 8G
         reservations:
           devices:
             - driver: nvidia
-              count: 1
-              capabilities: [gpu]  # 🌟 GPU 资源配置
-  
-  # Vanna AI Service - Text-to-SQL with persistence
-  vanna-service:
-    build:
-      context: ./vanna-service
-      dockerfile: Dockerfile
-    container_name: vanna-service
-    volumes:
-      - vanna_data:/app/data
-      - vanna_onnx_cache:/root/.cache/chroma
-      - ./data/vanna:/app/data/chromadb
-      - ./config:/app/config
-      - ~/.nanobot:/root/.nanobot
-      - ./vanna-service/start.py:/app/start.py:ro
-      - ./vanna-service/vanna_training.py:/app/vanna_training.py:ro
-    environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres_password_change_me}@postgres-financial:5432/${POSTGRES_DB:-annual_reports}
-      - VANNA_MODEL=${VANNA_MODEL:-financial-sql}
-      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
-      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
-      - DASHSCOPE_API_BASE=${DASHSCOPE_API_BASE:-https://coding.dashscope.aliyuncs.com/v1}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - ANONYMIZED_TELEMETRY=False
-      - CHROMA_TELEMETRY=False
-    depends_on:
-      postgres-financial:
-        condition: service_healthy
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-  
-  # Ingestion Service - PDF Processing
-  ingestion-worker:
-    <<: *common-config
-    container_name: ingestion-worker
-    profiles:
-      - worker
-    command: ["python", "-m", "nanobot.ingestion.batch_processor"]
-    environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres_password_change_me}@postgres-financial:5432/${POSTGRES_DB:-annual_reports}
-      - DATA_DIR=/app/data/raw
-      - PDF_INPUT_DIR=/data/pdfs
-      - MAX_CONCURRENT_TASKS=${MAX_CONCURRENT_TASKS:-5}
-      - BATCH_SIZE=${BATCH_SIZE:-10}
-      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - USE_CUDA=true
-      - TORCH_DEVICE=cuda
-    depends_on:
-      - postgres-financial
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          cpus: '1'
-          memory: 2G
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
+              count: all
               capabilities: [gpu]
-  
-  nanobot-cli:
-    <<: *common-config
-    profiles:
-      - cli
-    command: ["status"]
-    stdin_open: true
-    tty: true
+    environment:
+      # 🌟 GPU 配置
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      # 🌟 Torch 配置
+      - TORCH_DEVICE=cuda
+      - CUDA_VISIBLE_DEVICES=0
+      # 🌟 LLM Backend（可选：local 或 ollama）
+      - LLM_BACKEND=${LLM_BACKEND:-api}  # 默认 API，可改为 local/ollama
+      # 🌟 vLLM 配置（如果使用 local 模式）
+      - VLLM_PORT=${VLLM_PORT:-5000}
+      - VLLM_MODEL=${VLLM_MODEL:-Qwen/Qwen2.5-VL-7B-Instruct}
+      # 🌟 Ollama 配置（如果使用 ollama 模式）
+      - OLLAMA_HOST=${OLLAMA_HOST:-host.docker.internal:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5-vl:7b}
+    volumes:
+      # 🌟 添加 CUDA 相关 volume（可选）
+      - /usr/lib/wsl/lib:/usr/lib/wsl/lib:ro  # WSL2 GPU 支持
 
+  # ===========================================
+  # Vanna Service - GPU 加速（可选）
+  # ===========================================
+  vanna-service:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - TORCH_DEVICE=cuda
+
+  # ===========================================
+  # Ollama 服务（可选 - 如果想在 Docker 内运行）
+  # ===========================================
+  # 注意：通常 Ollama 在本机运行，而不是 Docker 内
+  # 如果想在 Docker 内运行，取消注释以下配置
+  #
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   container_name: ollama
+  #   ports:
+  #     - "11434:11434"
+  #   volumes:
+  #     - ollama_data:/root/.ollama
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: all
+  #             capabilities: [gpu]
+  #   environment:
+  #     - NVIDIA_VISIBLE_DEVICES=all
+  #     - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+  #   restart: unless-stopped
+
+# ===========================================
+# Volumes
+# ===========================================
 volumes:
-  postgres_data:
+  ollama_data:
     driver: local
-  vanna_data:
-    driver: local
-  vanna_onnx_cache:
-    driver: local
-  pdf_upload_data:
-    driver: local
-
-networks:
-  default:
-    driver: bridge

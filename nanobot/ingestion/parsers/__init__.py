@@ -1,11 +1,11 @@
 """
-Parsers Module - PDF 解析層
+Parsers Module - PDF 解析層 (v3.2)
 
-提供 OpenDataLoader 解析功能。
+提供 PDF 解析功能。
 
-⚠️ VisionParser 和 FastParser 已废弃，使用 nanobot.core.pdf_core 替代
+🌟 v3.2: 只使用 LlamaParse Cloud API
 """
 
-from .opendataloader_parser import OpenDataLoaderParser
+from nanobot.core.pdf_core import PDFParser, PDFParseResult
 
-__all__ = ["OpenDataLoaderParser"]
+__all__ = ["PDFParser", "PDFParseResult"]

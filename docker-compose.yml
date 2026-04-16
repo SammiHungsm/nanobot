@@ -40,7 +40,6 @@ services:
       -c max_connections=200
 
   # Nanobot Gateway - Main bot service
-  # Nanobot Gateway - Main bot service
   nanobot-gateway:
     container_name: nanobot-gateway
     <<: *common-config
@@ -57,13 +56,14 @@ services:
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
       - DASHSCOPE_API_BASE=${DASHSCOPE_API_BASE:-https://coding.dashscope.aliyuncs.com/v1}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      # 🌟 新增：Hybrid URL（指向 nanobot-webui 容器）
-      - HYBRID_URL=http://nanobot-webui:5002
+      # 🌟 LlamaParse API Key
+      - LLAMA_CLOUD_API_KEY=${LLAMA_CLOUD_API_KEY}
+      - LLAMAPARSE_TIER=${LLAMAPARSE_TIER:-agentic}
     volumes:
       - ./config:/app/config
       - ~/.nanobot:/root/.nanobot
       - ./data/uploads:/app/data/uploads  
-      - ./data/raw:/app/data/raw      
+      - ./data/raw:/app/data/raw
     depends_on:
       postgres-financial:
         condition: service_healthy
@@ -79,10 +79,7 @@ services:
       context: .
       dockerfile: webui/Dockerfile
     container_name: nanobot-webui
-    # 🌟 使用 entrypoint 启动 Hybrid + WebUI
-    entrypoint: ["/bin/bash", "-c", "nohup opendataloader-pdf-hybrid --port 5002 --device cpu > /tmp/hybrid.log 2>&1 & sleep 10 && exec python -m app.main"]
     volumes:
-      # 🌟 修正：全部統一掛載到 /app/data/ 底下，並修正 outputs 為 output
       - ./data/uploads:/app/data/uploads
       - ./data/output:/app/data/output
       - ./data/raw:/app/data/raw
@@ -91,7 +88,6 @@ services:
     ports:
       - "3000:8080"
     environment:
-      # 🌟 修正：環境變數名稱與 config.py 完全對齊
       - UPLOAD_DIR=/app/data/uploads
       - OUTPUT_DIR=/app/data/output
       - DATA_DIR=/app/data/raw
@@ -99,13 +95,12 @@ services:
       - GATEWAY_URL=http://nanobot-gateway:8081
       - PYTHONUNBUFFERED=1
       - PYTHONPATH=/app
-      - JAVA_OPTS=-Xmx2g -Xms512m  
-      - _JAVA_OPTIONS=-Xmx2g -Xms512m
       - NANOBOT_CONFIG=/app/config/config.json  
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      # 🌟 新增：Hybrid URL（容器内自引用）
-      - HYBRID_URL=http://localhost:5002
+      # 🌟 LlamaParse API Key
+      - LLAMA_CLOUD_API_KEY=${LLAMA_CLOUD_API_KEY}
+      - LLAMAPARSE_TIER=${LLAMAPARSE_TIER:-agentic}
     depends_on:
       postgres-financial:
         condition: service_healthy
@@ -114,7 +109,7 @@ services:
       resources:
         limits:
           cpus: '2'
-          memory: 4G
+          memory: 2G
   
   # Vanna AI Service - Text-to-SQL with persistence
   vanna-service:
@@ -123,27 +118,25 @@ services:
       dockerfile: Dockerfile
     container_name: vanna-service
     volumes:
-      - vanna_data:/app/data                    # Named volume for persistence
-      - vanna_onnx_cache:/root/.cache/chroma    # 🔧 持久化 ONNX embedding model (加速啟動)
-      - ./data/vanna:/app/data/chromadb         # 🔧 額外掛載 ChromaDB 到本地，方便開發時查看
+      - vanna_data:/app/data
+      - vanna_onnx_cache:/root/.cache/chroma
+      - ./data/vanna:/app/data/chromadb
       - ./config:/app/config
       - ~/.nanobot:/root/.nanobot
-      - ./vanna-service/start.py:/app/start.py:ro  # 🔧 開發模式：掛載 Python 代碼，無需 rebuild
+      - ./vanna-service/start.py:/app/start.py:ro
       - ./vanna-service/vanna_training.py:/app/vanna_training.py:ro
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres_password_change_me}@postgres-financial:5432/${POSTGRES_DB:-annual_reports}
       - VANNA_MODEL=${VANNA_MODEL:-financial-sql}
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
-      # 🔑 API Keys for Vanna OpenAI-compatible LLM
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
       - DASHSCOPE_API_BASE=${DASHSCOPE_API_BASE:-https://coding.dashscope.aliyuncs.com/v1}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      # 🔧 禁用 ChromaDB telemetry（避免警告）
       - ANONYMIZED_TELEMETRY=False
       - CHROMA_TELEMETRY=False
     depends_on:
       postgres-financial:
-        condition: service_healthy  # ✅ 等待 PostgreSQL 完全启动
+        condition: service_healthy
     restart: unless-stopped
     deploy:
       resources:
@@ -164,11 +157,11 @@ services:
       - PDF_INPUT_DIR=/data/pdfs
       - MAX_CONCURRENT_TASKS=${MAX_CONCURRENT_TASKS:-5}
       - BATCH_SIZE=${BATCH_SIZE:-10}
-      # 🔑 API Keys for PDF processing
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      # 🌟 新增：Hybrid URL（指向 nanobot-webui 容器）
-      - HYBRID_URL=http://nanobot-webui:5002
+      # 🌟 LlamaParse API Key
+      - LLAMA_CLOUD_API_KEY=${LLAMA_CLOUD_API_KEY}
+      - LLAMAPARSE_TIER=${LLAMAPARSE_TIER:-agentic}
     depends_on:
       - postgres-financial
     restart: unless-stopped
@@ -191,7 +184,7 @@ volumes:
     driver: local
   vanna_data:
     driver: local
-  vanna_onnx_cache:                    # 🔧 持久化 ONNX embedding model cache
+  vanna_onnx_cache:
     driver: local
   pdf_upload_data:
     driver: local

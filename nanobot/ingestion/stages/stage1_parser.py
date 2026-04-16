@@ -1,9 +1,12 @@
 """
-Stage 1: OpenDataLoader 基础解析
+Stage 1: LlamaParse 基础解析 (v3.2)
 
 职责：
-- 调用 OpenDataLoader Hybrid (CUDA GPU) 解析 PDF
+- 调用 LlamaParse Cloud API 解析 PDF
 - 返回 raw_artifacts (tables, images, text_chunks)
+- 自动保存 raw results（省钱，可复用）
+
+🌟 v3.2: 完全移除 OpenDataLoader
 """
 
 import os
@@ -12,59 +15,129 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 from loguru import logger
 
-from nanobot.core.pdf_core import OpenDataLoaderCore
+from nanobot.core.pdf_core import PDFParser, PDFParseResult
 
 
 class Stage1Parser:
-    """Stage 1: OpenDataLoader 基础解析"""
+    """Stage 1: LlamaParse 基础解析"""
     
     @staticmethod
     async def parse_pdf(
         pdf_path: str,
-        output_dir: str,
-        enable_hybrid: bool = True,  # 🌟 总是启用 Hybrid（GPU 或 CPU 自动检测）
-        batch_size: int = 10,
-        batch_delay: int = 15
+        output_dir: str = None,
+        doc_id: str = None,
+        tier: str = "agentic",
+        save_result: bool = True,
+        skip_if_saved: bool = True
     ) -> Dict[str, Any]:
         """
         解析 PDF，返回 artifacts
         
-        🌟 总是使用 Hybrid 模式（GPU/CPU 自动检测）
-        - 有 GPU → CUDA Docling
-        - 无 GPU → CPU Docling
-        - 无 Java only mode
-        
         Args:
             pdf_path: PDF 文件路径
-            output_dir: 输出目录
-            enable_hybrid: 总是 True（由 Hybrid 服务自动检测 GPU/CPU）
-            batch_size: 分批大小（大 PDF 时使用）
-            batch_delay: 批次间延迟
+            output_dir: 输出目录（默认 data/raw/llamaparse/{pdf_filename}）
+            doc_id: 文档 ID（可选）
+            tier: LlamaParse 解析层级（agentic/cost_effective/fast）
+            save_result: 是否自动保存结果
+            skip_if_saved: 如果已保存，是否跳过解析
             
         Returns:
-            Dict: {"artifacts": List, "total_pages": int, "output_json": str}
+            Dict[str, Any]: 解析结果
         """
-        logger.info(f"📄 Stage 1: 开始 Hybrid 解析...")
-        logger.info(f"   Hybrid 模式: 总是启用（GPU/CPU 自动检测）")
+        pdf_path = Path(pdf_path)
+        if not pdf_path.exists():
+            raise FileNotFoundError(f"PDF not found: {pdf_path}")
         
-        # 🌟 总是使用 Hybrid（设备由 start_hybrid.sh 自动检测）
-        core = OpenDataLoaderCore(enable_hybrid=True)
+        pdf_filename = pdf_path.name
         
-        result = core.parse(
-            pdf_path=pdf_path,
-            output_dir=output_dir,
-            enable_hybrid=True  # 🌟 使用正确的参数名
-        )
+        # 🌟 检查是否已有保存的结果
+        parser = PDFParser(tier=tier)
         
-        logger.info(f"   ✅ 解析完成: {result.total_pages} 页, {len(result.artifacts)} artifacts")
+        if skip_if_saved:
+            try:
+                logger.info(f"📂 检查已保存结果: {pdf_filename}")
+                result = parser.load_from_raw_output(pdf_filename)
+                logger.info(f"✅ 使用已保存结果（不扣费）")
+                return Stage1Parser._convert_result(result, doc_id)
+            except FileNotFoundError:
+                logger.info(f"   未找到已保存结果，开始新解析")
         
+        # 🌟 调用 LlamaParse
+        logger.info(f"🚀 LlamaParse 解析: {pdf_path}")
+        result: PDFParseResult = await parser.parse_async(str(pdf_path))
+        
+        # 🌟 保存结果
+        if save_result:
+            logger.info(f"💾 Raw output 已保存到: {result.raw_output_dir}")
+        
+        return Stage1Parser._convert_result(result, doc_id)
+    
+    @staticmethod
+    def _convert_result(result: PDFParseResult, doc_id: str = None) -> Dict[str, Any]:
+        """
+        将 PDFParseResult 转换为 Stage 1 输出格式
+        
+        Args:
+            result: LlamaParse 结果
+            doc_id: 文档 ID
+            
+        Returns:
+            Dict[str, Any]: Stage 1 输出
+        """
         return {
-            "artifacts": result.artifacts,
+            "success": True,
+            "doc_id": doc_id,
+            "job_id": result.job_id,
             "total_pages": result.total_pages,
+            "markdown": result.markdown,
             "tables": result.tables,
             "images": result.images,
-            "markdown": result.markdown,
-            "output_dir": output_dir,
-            "hybrid_enabled": True,
-            "hybrid_device": result.hybrid_device  # cuda 或 cpu
+            "artifacts": result.artifacts,
+            "metadata": {
+                "parser": "llamaparse",
+                "tier": result.tier,
+                "raw_output_dir": result.raw_output_dir,
+                "char_count": len(result.markdown),
+                "table_count": len(result.tables),
+                "image_count": len(result.images)
+            }
         }
+    
+    @staticmethod
+    async def parse_pdf_url(
+        url: str,
+        doc_id: str = None,
+        tier: str = "agentic"
+    ) -> Dict[str, Any]:
+        """
+        解析 URL PDF
+        
+        Args:
+            url: PDF URL
+            doc_id: 文档 ID
+            tier: 解析层级
+            
+        Returns:
+            Dict[str, Any]: 解析结果
+        """
+        parser = PDFParser(tier=tier)
+        result: PDFParseResult = await parser.parse_url_async(url)
+        
+        return Stage1Parser._convert_result(result, doc_id)
+    
+    @staticmethod
+    def load_saved_result(pdf_filename: str, job_id: str = None) -> Dict[str, Any]:
+        """
+        加载已保存的结果（不扣费）
+        
+        Args:
+            pdf_filename: PDF 文件名
+            job_id: 任务 ID（可选）
+            
+        Returns:
+            Dict[str, Any]: 解析结果
+        """
+        parser = PDFParser()
+        result: PDFParseResult = parser.load_from_raw_output(pdf_filename, job_id)
+        
+        return Stage1Parser._convert_result(result)

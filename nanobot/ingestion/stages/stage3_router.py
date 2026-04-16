@@ -1,10 +1,10 @@
 """
-Stage 3: 关键字扫描与目标页面路由
+Stage 3: 关键字扫描与目标页面路由 (v3.2)
 
 职责：
 - 在 artifacts 中搜索关键字
 - 返回候选页面列表
-- 记录关键词使用情况
+- 🌟 v3.2: 处理 LlamaParse 的 artifacts（使用 'page' 字段）
 """
 
 import os
@@ -94,7 +94,8 @@ class Stage3Router:
         # 扫描每个 artifact
         for artifact in artifacts:
             artifact_type = artifact.get("type")
-            page_num = artifact.get("page_num")
+            # 🌟 v3.2: LlamaParse 使用 'page' 字段
+            page_num = artifact.get("page")
             
             # 只在有文字或表格的区块搜索
             if artifact_type == "text_chunk":

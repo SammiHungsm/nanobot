@@ -77,7 +77,8 @@ class Stage4Extractor:
                 progress_callback(progress, f"提取 Page {page_num}...")
             
             # 从 artifacts 中提取该页面的所有内容
-            page_artifacts = [a for a in artifacts if a.get("page_num") == page_num]
+            # 🌟 v3.2: LlamaParse 使用 'page' 字段，不是 'page_num'
+            page_artifacts = [a for a in artifacts if a.get("page") == page_num]
             
             if not page_artifacts:
                 logger.warning(f"   ⚠️ Page {page_num} 在 artifacts 中找不到，跳过")

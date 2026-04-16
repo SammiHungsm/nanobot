@@ -1,86 +1,117 @@
 """
-PDF Core - OpenDataLoader 统一封装层
+PDF Core - LlamaParse 统一封装层 (v3.2)
 
-🎯 解决的问题：
-1. 代码重复：Agent/Ingestion/WebUI 三处各自实现
-2. Docker 网络问题：localhost:5002 在容器内指向错误
-3. API 参数不一致：format 参数一个是 List，一个是 String
-4. JSON 结构预期冲突：不同 Parser 预期不同的 JSON Schema
+🎯 简化架构：
+- 移除 OpenDataLoader Hybrid
+- 移除 Docling GPU/CPU
+- 只使用 LlamaParse Cloud API
 
-统一架构：
-- 所有底层 API 调用集中在这一个文件
-- 使用环境变量处理 Hybrid URL
-- 统一 format 参数为字符串格式
-- 提供 normalize_output() 函数统一 JSON 结构
+优势：
+- ✅ 支持 130+ 格式（PDF, DOCX, PPTX 等）
+- ✅ 支持本地文件上传
+- ✅ Agentic OCR（高精度）
+- ✅ 内置异步支持
+- ✅ job_id 缓存（避免重复扣费）
+- ✅ **完整 Raw Output 保存（按 PDF 文件名分文件夹）**
+- ✅ **图片下载并保存到本地**
 
 Usage:
-    from nanobot.core.pdf_core import OpenDataLoaderCore
+    from nanobot.core.pdf_core import PDFParser
     
-    # 统一的调用方式
-    core = OpenDataLoaderCore()
-    result = core.parse(pdf_path, enable_hybrid=True)
+    # 同步解析（自动保存所有 raw output）
+    parser = PDFParser()
+    result = parser.parse("report.pdf")
     
-    # 自动标准化 JSON 结构
-    normalized = core.normalize_output(result)
+    # 异步解析
+    result = await parser.parse_async("report.pdf")
+    
+    # URL 解析
+    result = parser.parse_url("https://example.com/report.pdf")
+    
+    # 从已保存的 raw output 加载（不扣费）
+    result = parser.load_from_raw_output("report.pdf", "job_xxx")
 """
 
 import os
 import json
 import asyncio
 import tempfile
+import httpx
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Union
 from dataclasses import dataclass, asdict
+from datetime import datetime
 from loguru import logger
 
 
 # ===========================================
-# 环境变量配置（解决 Docker 网络问题）
+# 环境变量
 # ===========================================
 
-def get_hybrid_url() -> str:
+def get_llamaparse_api_key() -> Optional[str]:
+    """获取 Llama Cloud API Key"""
+    return os.environ.get("LLAMA_CLOUD_API_KEY")
+
+
+def get_llamaparse_tier() -> str:
+    """获取解析层级（默认 agentic）"""
+    return os.environ.get("LLAMAPARSE_TIER", "agentic")
+
+
+def get_data_dir() -> str:
     """
-    获取 Hybrid 服务器 URL（支持 Docker 环境）
-    
-    Docker 环境中：
-    - 如果 HYBRID_URL 未设置，自动检测是否在容器内
-    - 在容器内：使用 http://nanobot-webui:5002（容器间通信）
-    - 本地开发：使用 http://localhost:5002
+    获取 Raw Data 存储目录
     
     Returns:
-        str: Hybrid 服务器 URL
+        str: data/raw 目录路径
     """
-    hybrid_url = os.environ.get("HYBRID_URL")
-    
-    if hybrid_url:
-        return hybrid_url
-    
-    # 🌟 自动检测是否在 Docker 容器内
-    # 方法 1: 检查 /.dockerenv 文件是否存在
-    # 方法 2: 检查环境变量 HOSTNAME 或容器特有的变量
-    is_docker = os.path.exists("/.dockerenv") or \
-                os.environ.get("HOSTNAME") or \
-                os.environ.get("KUBERNETES_SERVICE_HOST")
-    
-    if is_docker:
-        # 在 Docker 容器内，使用服务名（容器间通信）
-        default_url = "http://nanobot-webui:5002"
-        logger.info(f"🐳 Docker 环境：Hybrid URL = {default_url}")
-    else:
-        # 本地开发，使用 localhost
-        default_url = "http://localhost:5002"
-        logger.info(f"💻 本地环境：Hybrid URL = {default_url}")
-    
-    return default_url
+    return os.environ.get("DATA_DIR", "/app/data/raw")
 
 
-def get_cuda_enabled() -> bool:
-    """获取是否启用 CUDA"""
-    return os.environ.get("USE_CUDA", "false").lower() == "true"
+def get_raw_output_dir(pdf_filename: str = None) -> Path:
+    """
+    获取 LlamaParse Raw Output 存储目录
+    
+    🌟 v3.2: 按 PDF 文件名创建文件夹
+    
+    结构：
+    data/raw/
+    └── llamaparse/
+        └── report.pdf/              ← 按 PDF 文件名
+            ├── job_xxx.json         ← 完整的 API 响应
+            ├── job_xxx_meta.json    ← 元数据
+            ├── markdown.md          ← 完整 Markdown（方便查看）
+            ├── markdown_page1.md    ← 每页 Markdown
+            ├── markdown_page2.md
+            └── images/              ← 图片文件夹
+                ├── screenshot_page1.png
+                ├── embedded_page2.jpg
+                └── ...
+        └── another.pdf/
+            └── job_yyy/
+            └── ...
+    
+    Args:
+        pdf_filename: PDF 文件名（不含路径）
+        
+    Returns:
+        Path: data/raw/llamaparse/{pdf_filename} 目录
+    """
+    data_dir = Path(get_data_dir())
+    raw_output_dir = data_dir / "llamaparse"
+    
+    if pdf_filename:
+        # 🌟 按 PDF 文件名创建子文件夹
+        # 移除扩展名，避免文件夹名称重复
+        pdf_name = Path(pdf_filename).stem  # report.pdf → report
+        raw_output_dir = raw_output_dir / pdf_name
+    
+    raw_output_dir.mkdir(parents=True, exist_ok=True)
+    return raw_output_dir
 
 
 # ===========================================
-# 统一的输出结构（标准化 JSON Schema）
+# 统一的输出结构
 # ===========================================
 
 @dataclass
@@ -88,218 +119,196 @@ class PDFParseResult:
     """
     🎯 统一的 PDF 解析结果结构
     
-    无论 OpenDataLoader 原始输出是什么格式，都标准化为这个结构。
+    与 OpenDataLoader 的旧结构保持兼容，便于现有代码迁移。
     """
     file_path: str
     total_pages: int
     markdown: str  # 完整的 Markdown 文本
-    artifacts: List[Dict[str, Any]]  # 标准化的 Artifacts 列表
+    artifacts: List[Dict[str, Any]]  # 页面级别的 artifacts
     tables: List[Dict[str, Any]]  # 表格列表
-    images: List[Dict[str, Any]]  # 图片列表
-    metadata: Dict[str, Any]  # 元数据（文件名、解析时间等）
+    images: List[Dict[str, Any]]  # 图片列表（包含本地路径）
+    metadata: Dict[str, Any]  # 元数据
     
-    # 🌟 新增：Hybrid 模式信息
-    hybrid_enabled: bool = False
-    hybrid_device: str = "CPU"
+    # 🌟 LlamaParse 特有
+    job_id: Optional[str] = None  # 保存 job_id 避免重复扣费
+    tier: str = "agentic"
+    
+    # 🌟 Raw Output 路径
+    raw_output_dir: Optional[str] = None  # 保存原始 API 响应的目录
 
 
 # ===========================================
-# 核心类：OpenDataLoader 统一封装
+# PDF Parser 类（LlamaParse only）
 # ===========================================
 
-class OpenDataLoaderCore:
+class PDFParser:
     """
-    OpenDataLoader-PDF 统一封装
+    PDF Parser - LlamaParse only
     
-    🎯 解决所有架构问题：
-    1. 统一 API 调用（所有参数格式一致）
-    2. 自动处理 Hybrid URL（Docker/本地环境）
-    3. 统一输出结构（标准化 JSON Schema）
+    🌟 简化架构，移除所有 Hybrid/Docling/OpenDataLoader 依赖
+    
+    🌟 **完整保存 Raw Output 到 data/raw/llamaparse/{pdf_filename}/**
+    
+    使用方式：
+    1. 同步解析：parser.parse("file.pdf")
+    2. 异步解析：await parser.parse_async("file.pdf")
+    3. URL 解析：parser.parse_url("https://...")
+    4. 从 raw output 加载：parser.load_from_raw_output("report.pdf", "job_xxx")（不扣费）
     """
     
-    def __init__(self, enable_hybrid: bool = True, hybrid_url: str = None):
+    def __init__(
+        self,
+        api_key: str = None,
+        tier: str = None,
+        enable_images: bool = True,
+        enable_tables: bool = True,
+        save_raw_output: bool = True,  # 🌟 默认保存 raw output
+        download_images: bool = True   # 🌟 默认下载图片到本地
+    ):
         """
         初始化
         
         Args:
-            enable_hybrid: 是否启用 Hybrid AI 视觉模式（默认 True = 启用 GPU 加速 + 图片处理）
-            hybrid_url: Hybrid 服务器 URL（默认从环境变量获取）
+            api_key: Llama Cloud API Key（默认从环境变量）
+            tier: 解析层级（默认从环境变量，或 "agentic"）
+                - "agentic": Agentic OCR（高精度）
+                - "cost_effective": 平衡模式
+                - "fast": 快速模式
+            enable_images: 是否提取图片
+            enable_tables: 是否提取表格
+            save_raw_output: 是否保存原始 API 响应到 data/raw（默认 True）
+            download_images: 是否下载图片到本地（默认 True）
         """
-        self.enable_hybrid = enable_hybrid
-        self.hybrid_url = hybrid_url or get_hybrid_url()
-        self.use_cuda = get_cuda_enabled()
+        self.api_key = api_key or get_llamaparse_api_key()
+        self.tier = tier or get_llamaparse_tier()
+        self.enable_images = enable_images
+        self.enable_tables = enable_tables
+        self.save_raw_output = save_raw_output
+        self.download_images = download_images
         
-        # 检查安装
-        self._check_installation()
+        if not self.api_key:
+            raise ValueError(
+                "❌ LLAMA_CLOUD_API_KEY 未设置！\n"
+                "请在 .env 文件中添加：\n"
+                "LLAMA_CLOUD_API_KEY=llx-your-api-key\n"
+                "获取 API Key: https://cloud.llamaindex.ai"
+            )
         
-        logger.info(
-            f"✅ OpenDataLoaderCore 初始化完成 "
-            f"(hybrid={enable_hybrid}, device={self.hybrid_url}, cuda={self.use_cuda})"
-        )
-    
-    def _check_installation(self):
-        """检查 opendataloader_pdf 是否安装"""
+        # 导入 LlamaParse SDK
         try:
-            import opendataloader_pdf
-            self.module = opendataloader_pdf
-            logger.info("✅ opendataloader_pdf 已安装")
+            from llama_cloud import LlamaCloud, AsyncLlamaCloud
+            self.client = LlamaCloud(api_key=self.api_key)
+            self.async_client = AsyncLlamaCloud(api_key=self.api_key)
+            logger.info(f"✅ PDFParser 初始化完成 (tier={self.tier}, save_raw={save_raw_output}, download_images={download_images})")
         except ImportError:
-            logger.error("❌ opendataloader_pdf 未安装。请运行: pip install opendataloader-pdf")
-            raise
+            raise ImportError(
+                "❌ llama_cloud SDK 未安装！\n"
+                "请运行: pip install llama_cloud>=2.3.0"
+            )
     
-    def parse(
-        self,
-        pdf_path: str,
-        output_dir: str = None,
-        pages: Union[List[int], str] = None,
-        enable_hybrid: bool = None,
-        image_output: str = "embedded",
-        image_format: str = "png"
-    ) -> PDFParseResult:
+    # ===========================================
+    # 同步方法
+    # ===========================================
+    
+    def parse(self, file_path: str) -> PDFParseResult:
         """
-        🎯 统一的 PDF 解析方法
+        解析本地 PDF 文件
+        
+        🌟 自动保存所有 raw output 到 data/raw/llamaparse/{pdf_filename}/
         
         Args:
-            pdf_path: PDF 文件路径
-            output_dir: 输出目录（默认使用临时目录）
-            pages: 要解析的页码（可以是 list 或逗号分隔的字符串）
-            enable_hybrid: 是否启用 Hybrid（默认使用初始化时的设置）
-            image_output: 图片输出方式（"embedded" 或 "external"）
-            image_format: 图片格式（"png", "jpg" 等）
+            file_path: PDF 文件路径
             
         Returns:
-            PDFParseResult: 统一的解析结果
-            
-        Example:
-            # 基础解析（纯 Java）
-            result = core.parse("report.pdf")
-            
-            # Hybrid AI 视觉解析
-            result = core.parse("report.pdf", enable_hybrid=True)
-            
-            # 只解析特定页面（快速模式）
-            result = core.parse("report.pdf", pages=[1, 2])
-            # 或
-            result = core.parse("report.pdf", pages="1,2")
+            PDFParseResult
         """
-        pdf_path = Path(pdf_path)
-        if not pdf_path.exists():
-            raise FileNotFoundError(f"PDF 文件不存在: {pdf_path}")
+        logger.info(f"🚀 LlamaParse 解析: {file_path}")
         
-        # 使用传入的 enable_hybrid 或初始化时的设置
-        use_hybrid = enable_hybrid if enable_hybrid is not None else self.enable_hybrid
+        # 1. 上传文件
+        file_obj = self.client.files.create(
+            file=Path(file_path),
+            purpose="parse"
+        )
+        file_id = file_obj.id
+        logger.info(f"   ✅ 文件上传成功: file_id={file_id}")
         
-        # 🌟 使用临时目录或指定的输出目录
-        if output_dir is None:
-            with tempfile.TemporaryDirectory() as temp_dir:
-                return self._parse_internal(
-                    str(pdf_path), temp_dir, pages, use_hybrid, image_output, image_format
-                )
-        else:
-            output_dir = Path(output_dir)
-            output_dir.mkdir(parents=True, exist_ok=True)
-            return self._parse_internal(
-                str(pdf_path), str(output_dir), pages, use_hybrid, image_output, image_format
-            )
+        # 2. 创建解析任务
+        job = self.client.parsing.create(
+            tier=self.tier,
+            version="latest",
+            file_id=file_id
+        )
+        job_id = job.id
+        logger.info(f"   🔍 解析任务创建: job_id={job_id}")
+        
+        # 3. 等待解析完成
+        response = self._wait_for_completion(job_id)
+        
+        # 4. 🌟 保存完整的 raw output（按 PDF 文件名）
+        pdf_filename = Path(file_path).name
+        raw_output_dir = self._save_full_raw_output(response, pdf_filename)
+        
+        # 5. 🌟 下载图片到本地
+        if self.download_images:
+            self._download_images(response, raw_output_dir)
+        
+        # 6. 提取结果
+        result = self._extract_result(response, file_path)
+        result.raw_output_dir = str(raw_output_dir)
+        
+        # 7. 更新图片路径为本地路径
+        result = self._update_image_paths(result, raw_output_dir)
+        
+        logger.info(
+            f"✅ 解析完成: {result.total_pages} 页, "
+            f"{len(result.tables)} 个表格, {len(result.images)} 张图片, "
+            f"raw output 已保存: {raw_output_dir}"
+        )
+        
+        return result
     
-    def _parse_internal(
-        self,
-        pdf_path: str,
-        output_dir: str,
-        pages: Union[List[int], str],
-        use_hybrid: bool,
-        image_output: str,
-        image_format: str
-    ) -> PDFParseResult:
-        """内部解析逻辑"""
+    def parse_url(self, url: str) -> PDFParseResult:
+        """
+        解析 URL PDF
         
-        logger.info(f"📄 开始解析 PDF: {pdf_path}")
-        logger.info(f"   输出目录: {output_dir}")
-        logger.info(f"   Hybrid 模式: {use_hybrid}")
+        🌟 自动保存所有 raw output
         
-        # 🌟 Batch 配置：Cache Cleaner 已在后台运行，不需要 sleep
-        # 保留 batch 概念以便追踪进度，但移除等待时间
-        BATCH_SIZE = 10  # 每批处理 10 页（进度追踪用）
-        BATCH_DELAY = 0  # 🌟 移除 sleep：Cache Cleaner 自动清理 GPU 内存
-        
-        # 🌟 检查是否指定了特定页面
-        if pages is not None:
-            if isinstance(pages, list):
-                pages_str = ",".join(str(p) for p in pages)
-            else:
-                pages_str = pages
-            logger.info(f"⚡ 快速模式：只解析 Page {pages_str}")
-            use_hybrid = False  # 特定页面用纯 Java
-        else:
-            pages_str = None
+        Args:
+            url: PDF URL
             
-            # 获取总页数判断是否需要分批
-            try:
-                import fitz  # PyMuPDF
-                doc = fitz.open(pdf_path)
-                total_pages = len(doc)
-                doc.close()
-            except:
-                total_pages = 300
-            
-            need_batch = use_hybrid and total_pages > 100
+        Returns:
+            PDFParseResult
+        """
+        logger.info(f"🚀 LlamaParse 解析 URL: {url}")
         
-        if need_batch:
-            logger.info(f"🔄 大 PDF ({total_pages} 页)，启用分批处理 (每批 {BATCH_SIZE} 页)")
-            return self._parse_in_batches(
-                pdf_path, output_dir, total_pages, BATCH_SIZE, BATCH_DELAY,
-                use_hybrid, image_output, image_format
-            )
+        # 从 URL 提取文件名
+        url_filename = Path(url).name or "url_document.pdf"
         
-        # 🌟 统一参数格式：format 使用字符串（逗号分隔）
-        format_str = "markdown,json"
+        # 创建解析任务
+        job = self.client.parsing.create(
+            tier=self.tier,
+            version="latest",
+            source_url=url
+        )
+        job_id = job.id
+        logger.info(f"   🔍 解析任务创建: job_id={job_id}")
         
-        # 构建 convert() 参数
-        convert_kwargs = {
-            'input_path': pdf_path,
-            'output_dir': output_dir,
-            'format': format_str,  # 🌟 统一使用字符串格式
-            'image_output': image_output,
-            'image_format': image_format,
-        }
+        # 等待解析完成
+        response = self._wait_for_completion(job_id)
         
-        # 🌟 如果指定了特定页面（pages_str 已在前面处理）
-        if pages_str:
-            convert_kwargs['pages'] = pages_str
+        # 🌟 保存完整的 raw output
+        raw_output_dir = self._save_full_raw_output(response, url_filename)
         
-        # 🌟 启用 Hybrid AI 视觉模式
-        if use_hybrid:
-            device = "CUDA GPU" if self.use_cuda else "CPU"
-            logger.info(f"🚀 Hybrid AI 视觉模式：启动 {device} 解析（Docling 模型）")
-            
-            convert_kwargs['hybrid'] = "docling-fast"
-            # 🎯 修正：改为 "full"，确保表格/图片/扫描件全部强制交给 Backend 处理
-            convert_kwargs['hybrid_mode'] = "full"  
-            convert_kwargs['hybrid_url'] = self.hybrid_url  # 🌟 从环境变量获取
-            # 🎯 实际测试：Java wrapper 期望字符串格式 (不是整数)
-            convert_kwargs['hybrid_timeout'] = "600000"  # 600 秒（字符串格式）
-            convert_kwargs['hybrid_fallback'] = True  # Hybrid 失败时 fallback 到 Java
+        # 🌟 下载图片
+        if self.download_images:
+            self._download_images(response, raw_output_dir)
         
-        # 🚀 调用 OpenDataLoader
-        try:
-            logger.debug(f"🔧 调用 opendataloader_pdf.convert()")
-            logger.debug(f"   参数: {json.dumps(convert_kwargs, indent=2)}")
-            
-            self.module.convert(**convert_kwargs)
-            
-        except Exception as e:
-            logger.error(f"❌ OpenDataLoader 解析失败: {e}")
-            if use_hybrid and convert_kwargs.get('hybrid_fallback'):
-                logger.warning("⚠️ Hybrid 失败，尝试 fallback 到纯 Java 解析...")
-                # 移除 Hybrid 参数，重新尝试
-                for key in ['hybrid', 'hybrid_mode', 'hybrid_url', 'hybrid_timeout', 'hybrid_fallback']:
-                    convert_kwargs.pop(key, None)
-                self.module.convert(**convert_kwargs)
-            else:
-                raise
+        # 提取结果
+        result = self._extract_result(response, url)
+        result.raw_output_dir = str(raw_output_dir)
         
-        # 🎯 读取输出文件并标准化
-        result = self._read_and_normalize(output_dir, pdf_path, use_hybrid)
+        # 更新图片路径
+        result = self._update_image_paths(result, raw_output_dir)
         
         logger.info(
             f"✅ 解析完成: {result.total_pages} 页, "
@@ -308,778 +317,809 @@ class OpenDataLoaderCore:
         
         return result
     
-    def _parse_in_batches(
-        self,
-        pdf_path: str,
-        output_dir: str,
-        total_pages: int,
-        batch_size: int,
-        batch_delay: int,  # 🌟 新增参数
-        use_hybrid: bool,
-        image_output: str,
-        image_format: str
-    ) -> PDFParseResult:
+    # ===========================================
+    # 异步方法
+    # ===========================================
+    
+    async def parse_async(self, file_path: str) -> PDFParseResult:
         """
-        🔄 分批处理大 PDF
+        异步解析本地 PDF 文件
         
-        解决问题：Hybrid 服务在累积处理后崩溃
-        
-        策略：
-        1. 将 PDF 分成多个批次（每批 batch_size 页）
-        2. 每批之间增加延迟让 Hybrid 清理资源
-        3. 合并所有批次的结果
+        🌟 自动保存所有 raw output
         """
-        import time
-        import shutil
+        logger.info(f"🚀 LlamaParse 异步解析: {file_path}")
         
-        # 计算批次
-        batches = []
-        for start in range(1, total_pages + 1, batch_size):
-            end = min(start + batch_size - 1, total_pages)
-            batches.append((start, end))
+        # 1. 上传文件
+        file_obj = await self.async_client.files.create(
+            file=Path(file_path),
+            purpose="parse"
+        )
+        file_id = file_obj.id
+        logger.info(f"   ✅ 文件上传成功: file_id={file_id}")
         
-        logger.info(f"📦 分成 {len(batches)} 批处理: {batches}")
+        # 2. 创建解析任务
+        job = await self.async_client.parsing.create(
+            tier=self.tier,
+            version="latest",
+            file_id=file_id
+        )
+        job_id = job.id
+        logger.info(f"   🔍 解析任务创建: job_id={job_id}")
         
-        # 创建主输出目录
-        output_path = Path(output_dir)
-        output_path.mkdir(parents=True, exist_ok=True)
+        # 3. 异步等待完成
+        response = await self._wait_for_completion_async(job_id)
         
-        # 合并结果用
-        all_artifacts = []
-        all_tables = []
-        all_images = []
-        all_markdown = ""
-        metadata = {
-            "filename": Path(pdf_path).name,
-            "hybrid_enabled": use_hybrid,
-            "hybrid_device": "CUDA" if self.use_cuda else "CPU",
-            "batch_processed": True,
-            "batch_count": len(batches)
-        }
+        # 4. 🌟 保存完整的 raw output
+        pdf_filename = Path(file_path).name
+        raw_output_dir = self._save_full_raw_output(response, pdf_filename)
         
-        # 分批处理
-        for batch_idx, (start, end) in enumerate(batches):
-            logger.info(f"📦 处理批次 {batch_idx + 1}/{len(batches)}: Pages {start}-{end}")
-            
-            # 创建批次临时目录
-            batch_dir = output_path / f"batch_{batch_idx:03d}"
-            batch_dir.mkdir(parents=True, exist_ok=True)
-            
-            # 构建页码字符串
-            pages_str = ",".join(str(p) for p in range(start, end + 1))
-            
-            # 调用 OpenDataLoader（单批）
-            try:
-                convert_kwargs = {
-                    'input_path': pdf_path,
-                    'output_dir': str(batch_dir),
-                    'format': "markdown,json",
-                    'image_output': image_output,
-                    'image_format': image_format,
-                    'pages': pages_str,
-                }
-                
-                if use_hybrid:
-                    device = "CUDA GPU" if self.use_cuda else "CPU"
-                    logger.info(f"   🚀 Hybrid 模式: {device}")
-                    convert_kwargs['hybrid'] = "docling-fast"
-                    convert_kwargs['hybrid_mode'] = "full"
-                    convert_kwargs['hybrid_url'] = self.hybrid_url
-                    convert_kwargs['hybrid_timeout'] = "300000"  # 300 秒（单批更快）
-                    convert_kwargs['hybrid_fallback'] = True
-                
-                self.module.convert(**convert_kwargs)
-                
-                # 读取批次结果
-                batch_result = self._read_and_normalize(str(batch_dir), pdf_path, use_hybrid)
-                
-                # 合并结果
-                all_artifacts.extend(batch_result.artifacts)
-                all_tables.extend(batch_result.tables)
-                all_images.extend(batch_result.images)
-                all_markdown += batch_result.markdown + "\n\n"
-                
-                logger.info(f"   ✅ 批次 {batch_idx + 1} 完成: {len(batch_result.artifacts)} artifacts")
-                
-                # 🌟 批次间清理：Cache Cleaner 已在后台运行，只需调用 clear_cache
-                # 不需要 sleep，直接清理并继续下一批
-                if batch_idx < len(batches) - 1 and batch_delay > 0:
-                    # 如果需要延迟（batch_delay > 0），才执行 sleep
-                    for wait_sec in range(batch_delay):
-                        time.sleep(1)
-                    logger.info(f"   ⏳ 等待 {batch_delay} 秒完成")
-                
-                # 🌟 每批结束后尝试清空 CUDA cache
-                if batch_idx < len(batches) - 1:
-                    try:
-                        import requests
-                        resp = requests.post(f"{self.hybrid_url}/v1/clear_cache", timeout=10)
-                        if resp.status_code == 200:
-                            logger.debug("   🧹 CUDA cache 已清空")
-                    except Exception as e:
-                        logger.debug(f"   ⚠️ 清理接口调用失败（忽略）: {e}")
-                
-            except Exception as e:
-                logger.error(f"   ❌ 批次 {batch_idx + 1} 失败: {e}")
-                # 尝试 fallback 到纯 Java
-                if use_hybrid:
-                    logger.warning("   ⚠️ 尝试纯 Java fallback...")
-                    try:
-                        for key in ['hybrid', 'hybrid_mode', 'hybrid_url', 'hybrid_timeout', 'hybrid_fallback']:
-                            convert_kwargs.pop(key, None)
-                        self.module.convert(**convert_kwargs)
-                        batch_result = self._read_and_normalize(str(batch_dir), pdf_path, False)
-                        all_artifacts.extend(batch_result.artifacts)
-                        all_tables.extend(batch_result.tables)
-                        all_images.extend(batch_result.images)
-                        all_markdown += batch_result.markdown + "\n\n"
-                        logger.info(f"   ✅ Java fallback 完成")
-                    except Exception as e2:
-                        logger.error(f"   ❌ Java fallback 也失败: {e2}")
+        # 5. 🌟 异步下载图片
+        if self.download_images:
+            await self._download_images_async(response, raw_output_dir)
         
-        # 合并 Markdown 文件到主目录
-        main_md = output_path / f"{Path(pdf_path).stem}.md"
-        with open(main_md, 'w', encoding='utf-8') as f:
-            f.write(all_markdown)
+        # 6. 提取结果
+        result = self._extract_result(response, file_path)
+        result.raw_output_dir = str(raw_output_dir)
         
-        # 🌟 关键：合并跨页表格（修复分批处理切断问题）
-        if all_tables:
-            try:
-                from nanobot.ingestion.utils.table_merger import cross_page_merger
-                logger.info(f"🔗 检查并合并跨页表格...")
-                merged_tables = cross_page_merger.merge_tables_batch(all_tables)
-                all_tables = merged_tables
-                
-                # 同步更新 artifacts 中的表格
-                table_artifacts_count = 0
-                for artifact in all_artifacts:
-                    if artifact.get('type') == 'table':
-                        table_artifacts_count += 1
-                
-                # 如果表格数量减少了，说明有合并发生
-                if len(all_tables) < table_artifacts_count:
-                    logger.info(f"   ✅ 跨页表格合并: {table_artifacts_count} → {len(all_tables)} 个表格")
-                    # 重建 artifacts 列表中的表格部分
-                    non_table_artifacts = [a for a in all_artifacts if a.get('type') != 'table']
-                    table_artifacts = []
-                    for table in all_tables:
-                        table_artifacts.append({
-                            'type': 'table',
-                            'content_json': table,
-                            'page_num': table.get('page_num', table.get('source_pages', [0])[0]),
-                            'metadata': {
-                                'is_merged': table.get('is_merged', False),
-                                'source_pages': table.get('source_pages', [])
-                            }
-                        })
-                    all_artifacts = non_table_artifacts + table_artifacts
-            except ImportError:
-                logger.warning("⚠️ table_merger 未找到，跳过跨页表格合并")
-            except Exception as e:
-                logger.warning(f"⚠️ 跨页表格合并失败: {e}")
+        # 7. 更新图片路径
+        result = self._update_image_paths(result, raw_output_dir)
         
         logger.info(
-            f"✅ 分批解析完成: {total_pages} 页, "
-            f"{len(all_tables)} 个表格, {len(all_images)} 张图片, "
-            f"{len(all_artifacts)} 个 artifacts"
-        )
-        
-        return PDFParseResult(
-            file_path=pdf_path,
-            total_pages=total_pages,
-            markdown=all_markdown,
-            artifacts=all_artifacts,
-            tables=all_tables,
-            images=all_images,
-            metadata=metadata,
-            hybrid_enabled=use_hybrid,
-            hybrid_device="CUDA" if self.use_cuda else "CPU"
-        )
-    
-    def _read_and_normalize(
-        self,
-        output_dir: str,
-        pdf_path: str,
-        use_hybrid: bool
-    ) -> PDFParseResult:
-        """
-        🎯 读取输出文件并标准化为统一结构
-        
-        解决问题：不同 Parser 预期的 JSON Schema 不同
-        """
-        output_path = Path(output_dir)
-        
-        # 查找输出文件
-        md_files = list(output_path.glob("*.md"))
-        json_files = list(output_path.glob("*.json"))
-        
-        # 读取 Markdown
-        markdown = ""
-        for md_file in sorted(md_files):
-            markdown += md_file.read_text(encoding='utf-8') + "\n\n"
-        
-        # 🎯 读取 JSON 并标准化
-        tables = []
-        images = []
-        artifacts = []
-        metadata = {
-            "filename": Path(pdf_path).name,
-            "hybrid_enabled": use_hybrid,
-            "hybrid_device": "CUDA" if self.use_cuda else "CPU"
-        }
-        total_pages = 0
-        
-        # 🌟 检查是否有外部图片文件（OpenDataLoader image_output="external"）
-        image_files = list(output_path.glob("images/*")) + \
-                      list(output_path.glob("*.png")) + \
-                      list(output_path.glob("*.jpg")) + \
-                      list(output_path.glob("*.jpeg"))
-        
-        if image_files:
-            logger.info(f"📸 发现 {len(image_files)} 个外部图片文件")
-        
-        for json_file in sorted(json_files):
-            try:
-                with open(json_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                
-                # 🎯 标准化 JSON 结构（兼容多种 Schema）
-                normalized = self._normalize_json(data)
-                
-                tables.extend(normalized['tables'])
-                images.extend(normalized['images'])
-                artifacts.extend(normalized['artifacts'])
-                
-                if 'total_pages' in normalized['metadata']:
-                    total_pages = normalized['metadata']['total_pages']
-                
-                metadata.update(normalized['metadata'])
-                
-            except Exception as e:
-                logger.warning(f"⚠️ 读取 JSON 文件失败 {json_file}: {e}")
-        
-        # 🌟 如果 JSON 中没有图片数据，检查外部图片文件
-        if not images and image_files:
-            import base64
-            logger.info(f"📸 从外部文件加载图片数据...")
-            for idx, img_file in enumerate(sorted(image_files)):
-                try:
-                    # 读取图片文件为 base64
-                    with open(img_file, 'rb') as f:
-                        img_bytes = f.read()
-                    img_base64 = base64.b64encode(img_bytes).decode('utf-8')
-                    
-                    # 推测图片 MIME 类型
-                    img_ext = img_file.suffix.lower()
-                    mime_type = {
-                        '.png': 'image/png',
-                        '.jpg': 'image/jpeg',
-                        '.jpeg': 'image/jpeg',
-                        '.gif': 'image/gif',
-                        '.webp': 'image/webp'
-                    }.get(img_ext, 'image/png')
-                    
-                    # 构造 data URI
-                    img_data_uri = f"data:{mime_type};base64,{img_base64}"
-                    
-                    # 尝试从文件名提取页码（如 image_page1.png）
-                    page_num = 0
-                    for part in img_file.stem.split('_'):
-                        if 'page' in part.lower():
-                            try:
-                                page_num = int(part.replace('page', '').replace('Page', '').replace('PAGE', ''))
-                            except:
-                                pass
-                    
-                    images.append({
-                        'page_num': page_num,
-                        'image_data': img_data_uri,
-                        'image_path': str(img_file),
-                        'metadata': {'source': 'external_file'}
-                    })
-                    artifacts.append({
-                        'type': 'image',
-                        'image_data': img_data_uri,
-                        'image_path': str(img_file),
-                        'page_num': page_num,
-                        'metadata': {'source': 'external_file'}
-                    })
-                    logger.debug(f"✅ 加载图片: {img_file.name} (page {page_num})")
-                except Exception as e:
-                    logger.warning(f"⚠️ 图片文件读取失败 {img_file}: {e}")
-        
-        # 🎯 修正 2：防止 TempDir 被刪除導致圖片黑洞！
-        # 趁 temp_dir 仲未被自動刪除，強制將所有實體圖片轉成 Base64 塞入 image_data
-        import base64
-        import mimetypes
-        
-        for artifact in artifacts:
-            if artifact.get('type') == 'image' and not artifact.get('image_data'):
-                img_path = artifact.get('image_path')
-                if img_path and Path(img_path).exists():
-                    try:
-                        with open(img_path, 'rb') as f:
-                            img_bytes = f.read()
-                        img_base64 = base64.b64encode(img_bytes).decode('utf-8')
-                        mime_type = mimetypes.guess_type(img_path)[0] or 'image/png'
-                        artifact['image_data'] = f"data:{mime_type};base64,{img_base64}"
-                        
-                        # 同步更新 images 列表
-                        for img in images:
-                            if img.get('image_path') == img_path:
-                                img['image_data'] = artifact['image_data']
-                        
-                        logger.debug(f"✅ TempDir 图片转换 Base64: {img_path}")
-                    except Exception as e:
-                        logger.warning(f"⚠️ 臨時目錄圖片轉換 Base64 失敗 {img_path}: {e}")
-        
-        return PDFParseResult(
-            file_path=str(pdf_path),
-            total_pages=total_pages,
-            markdown=markdown,
-            artifacts=artifacts,
-            tables=tables,
-            images=images,
-            metadata=metadata,
-            hybrid_enabled=use_hybrid,
-            hybrid_device="CUDA" if self.use_cuda else "CPU"
-        )
-    
-    def _normalize_json(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        🎯 标准化 JSON 结构
-        
-        OpenDataLoader 可能返回以下几种结构：
-        1. {"pages": [...]} - 每页包含内容
-        2. {"kids": [...]} - 类似 PDF 结构
-        3. {"content": [...]} - 内容列表
-        4. {"tables": [...], "images": [...], "elements": [...]} - 已分类
-        
-        统一标准化为：
-        {
-            "tables": [...],
-            "images": [...],
-            "artifacts": [...],
-            "metadata": {...}
-        }
-        """
-        normalized = {
-            'tables': [],
-            'images': [],
-            'artifacts': [],
-            'metadata': {}
-        }
-        
-        # 🌟 情况 1: 已经是分类结构
-        if 'tables' in data:
-            normalized['tables'] = data['tables']
-            # 🎯 修正 1：將 tables 塞入 artifacts
-            for table in data['tables']:
-                normalized['artifacts'].append({
-                    'type': 'table',
-                    'content_json': table,
-                    'page_num': table.get('page', table.get('page_num', 0)),
-                    'metadata': table.get('metadata', {})
-                })
-        
-        if 'images' in data:
-            normalized['images'] = data['images']
-            # 🎯 修正 1：將 images 塞入 artifacts
-            for img in data['images']:
-                normalized['artifacts'].append({
-                    'type': 'image',
-                    'image_data': img.get('image_data'),
-                    'image_path': img.get('image_path') or img.get('path'),
-                    'page_num': img.get('page', img.get('page_num', 0)),
-                    'metadata': img.get('metadata', {})
-                })
-        
-        if 'elements' in data:
-            for elem in data['elements']:
-                normalized['artifacts'].append({
-                    'type': elem.get('type', 'unknown'),
-                    'content': elem.get('content', ''),
-                    'page_num': elem.get('page', 0),
-                    'bbox': elem.get('bbox'),
-                    'metadata': elem.get('metadata', {})
-                })
-        
-        # 🌟 情况 2: pages 结构
-        if 'pages' in data:
-            normalized['metadata']['total_pages'] = len(data['pages'])
-            for page_idx, page in enumerate(data['pages']):
-                page_num = page.get('page_num', page_idx + 1)
-                
-                # 从页面提取表格、图片、文字
-                if 'tables' in page:
-                    for table in page['tables']:
-                        table['page_num'] = page_num
-                        normalized['tables'].append(table)
-                        normalized['artifacts'].append({
-                            'type': 'table',
-                            'content_json': table,
-                            'page_num': page_num,
-                            'metadata': table.get('metadata', {})
-                        })
-                
-                if 'images' in page:
-                    for img in page['images']:
-                        img['page_num'] = page_num
-                        normalized['images'].append(img)
-                        normalized['artifacts'].append({
-                            'type': 'image',
-                            'image_data': img.get('image_data'),
-                            'page_num': page_num,
-                            'metadata': img.get('metadata', {})
-                        })
-                
-                if 'text' in page:
-                    normalized['artifacts'].append({
-                        'type': 'text_chunk',
-                        'content': page['text'],
-                        'page_num': page_num,
-                        'metadata': {}
-                    })
-        
-        # 🌟 情况 3: kids 结构（OpenDataLoader 实际结构）
-        if 'kids' in data:
-            self._extract_from_kids(data['kids'], normalized)
-        
-        # 🌟 情况 4: content 结构
-        if 'content' in data:
-            for idx, item in enumerate(data['content']):
-                item_type = item.get('type', 'unknown')
-                # 🎯 修正：如果元素是图片，必须读取 image_data
-                normalized['artifacts'].append({
-                    'type': item_type,
-                    'content': item.get('content', ''),
-                    'image_data': item.get('image_data') or item.get('image'),  # 补回这行
-                    'image_path': item.get('image_path'),  # 补回这行
-                    'page_num': item.get('page', 0),
-                    'bbox': item.get('bbox'),
-                    'metadata': item.get('metadata', {})
-                })
-        
-        # 🌟 提取元数据
-        if 'metadata' in data:
-            normalized['metadata'].update(data['metadata'])
-        
-        # 🌟 OpenDataLoader 特殊字段
-        if 'number of pages' in data:
-            normalized['metadata']['total_pages'] = data['number of pages']
-        
-        return normalized
-    
-    def _extract_from_kids(self, kids: List[Dict], normalized: Dict):
-        """
-        🎯 从 kids 结构提取内容（修正版）
-        
-        OpenDataLoader 的实际结构：
-        - kids 是扁平列表，包含所有元素
-        - 每个元素有 type, page number, content
-        - 直接遍历，按类型分类
-        
-        之前的错误：检查 kid.get('type') == 'page'
-        正确的逻辑：直接处理 paragraph, heading, table 等元素
-        """
-        for kid in kids:
-            kid_type = kid.get('type', 'unknown')
-            page_num = kid.get('page number', 0)
-            content = kid.get('content', '')
-            
-            # 🌟 根据类型分类
-            if kid_type == 'table':
-                # 表格元素
-                normalized['tables'].append({
-                    'page_num': page_num,
-                    'content': content,
-                    'metadata': kid
-                })
-                normalized['artifacts'].append({
-                    'type': 'table',
-                    'content': content,
-                    'page_num': page_num,
-                    'metadata': kid
-                })
-            
-            elif kid_type in ['image', 'image_screenshot', 'screenshot', 'figure']:
-                # 图片元素（支持多种类型名称）
-                # 🌟 尝试从多个字段提取图片数据
-                image_data = kid.get('image_data') or kid.get('image') or kid.get('content')
-                
-                # 检查是否有外部图片文件路径
-                image_path = kid.get('image_path') or kid.get('file_path') or kid.get('path')
-                
-                normalized['images'].append({
-                    'page_num': page_num,
-                    'content': content,
-                    'image_data': image_data,
-                    'image_path': image_path,
-                    'metadata': kid
-                })
-                normalized['artifacts'].append({
-                    'type': 'image',
-                    'content': content,
-                    'image_data': image_data,
-                    'image_path': image_path,
-                    'page_num': page_num,
-                    'metadata': kid
-                })
-            
-            elif kid_type in ['paragraph', 'heading', 'text']:
-                # 文字元素（合并为 text_chunk）
-                normalized['artifacts'].append({
-                    'type': 'text_chunk',
-                    'content': content,
-                    'page_num': page_num,
-                    'metadata': kid
-                })
-            
-            elif kid_type == 'list':
-                # 列表元素
-                normalized['artifacts'].append({
-                    'type': 'list',
-                    'content': content,
-                    'page_num': page_num,
-                    'metadata': kid
-                })
-            
-            else:
-                # 其他元素（保留原类型）
-                normalized['artifacts'].append({
-                    'type': kid_type,
-                    'content': content,
-                    'page_num': page_num,
-                    'metadata': kid
-                })
-            
-            # 如果 kids 下还有 kids，继续递归
-            if 'kids' in kid:
-                self._extract_from_kids(kid['kids'], normalized)
-    
-    async def parse_async(
-        self,
-        pdf_path: str,
-        output_dir: str = None,
-        pages: Union[List[int], str] = None,
-        enable_hybrid: bool = None
-    ) -> PDFParseResult:
-        """
-        异步解析 PDF（将阻塞操作放到背景线程）
-        
-        Args:
-            pdf_path: PDF 文件路径
-            output_dir: 输出目录
-            pages: 要解析的页码
-            enable_hybrid: 是否启用 Hybrid
-            
-        Returns:
-            PDFParseResult: 统一的解析结果
-        """
-        logger.info(f"📄 异步解析 PDF: {pdf_path}")
-        
-        # 使用 asyncio.to_thread 将阻塞操作放到背景
-        result = await asyncio.to_thread(
-            self.parse,
-            pdf_path,
-            output_dir,
-            pages,
-            enable_hybrid
+            f"✅ 解析完成: {result.total_pages} 页, "
+            f"{len(result.tables)} 个表格, {len(result.images)} 张图片"
         )
         
         return result
     
-    def to_artifacts_list(self, result: PDFParseResult) -> List[Dict[str, Any]]:
+    async def parse_url_async(self, url: str) -> PDFParseResult:
         """
-        🎯 将 PDFParseResult 转换为 Artifacts 列表格式
+        异步解析 URL PDF
         
-        用于 Ingestion Parser 层（兼容现有的 _convert_to_artifacts）
-        
-        Args:
-            result: PDFParseResult
-            
-        Returns:
-            List[Dict]: Artifacts 列表
+        🌟 自动保存所有 raw output
         """
-        return result.artifacts
+        logger.info(f"🚀 LlamaParse 异步解析 URL: {url}")
+        
+        url_filename = Path(url).name or "url_document.pdf"
+        
+        # 创建解析任务
+        job = await self.async_client.parsing.create(
+            tier=self.tier,
+            version="latest",
+            source_url=url
+        )
+        job_id = job.id
+        logger.info(f"   🔍 解析任务创建: job_id={job_id}")
+        
+        # 异步等待完成
+        response = await self._wait_for_completion_async(job_id)
+        
+        # 🌟 保存完整的 raw output
+        raw_output_dir = self._save_full_raw_output(response, url_filename)
+        
+        # 🌟 异步下载图片
+        if self.download_images:
+            await self._download_images_async(response, raw_output_dir)
+        
+        # 提取结果
+        result = self._extract_result(response, url)
+        result.raw_output_dir = str(raw_output_dir)
+        
+        # 更新图片路径
+        result = self._update_image_paths(result, raw_output_dir)
+        
+        logger.info(
+            f"✅ 解析完成: {result.total_pages} 页, "
+            f"{len(result.tables)} 个表格, {len(result.images)} 张图片"
+        )
+        
+        return result
     
-    def to_parsed_pdf(self, result: PDFParseResult) -> 'ParsedPDF':
+    # ===========================================
+    # 🌟 完整保存 Raw Output（按 PDF 文件名）
+    # ===========================================
+    
+    def _save_full_raw_output(self, response: Any, pdf_filename: str) -> Path:
         """
-        🎯 将 PDFParseResult 转换为 ParsedPDF 格式
+        保存完整的 API 响应到 data/raw/llamaparse/{pdf_filename}/
         
-        用于 Agent Tools 层（兼容现有的 OpenDataLoaderPDF.parse 返回值）
+        🌟 v3.2: 按 PDF 文件名创建文件夹，保存所有字段
+        
+        保存结构：
+        data/raw/llamaparse/{pdf_filename}/
+        ├── {job_id}.json          ← 完整的 ParsingGetResponse（所有字段）
+        ├── {job_id}_meta.json     ← 元数据（file_path, created_at）
+        ├── markdown.md            ← 完整 Markdown（方便查看）
+        ├── markdown_page{n}.md    ← 每页 Markdown
+        └── images/                ← 图片文件夹（稍后下载）
+        
+        Args:
+            response: LlamaParse ParsingGetResponse
+            pdf_filename: PDF 文件名
+            
+        Returns:
+            Path: 保存的目录路径
+        """
+        if not self.save_raw_output:
+            return None
+        
+        job_id = response.job.id
+        
+        # 🌟 按 PDF 文件名创建目录
+        raw_output_dir = get_raw_output_dir(pdf_filename)
+        
+        # 🌟 使用 model_dump() 获取完整的 API 响应
+        try:
+            if hasattr(response, 'model_dump'):
+                raw_dict = response.model_dump()
+            elif hasattr(response, 'dict'):
+                raw_dict = response.dict()
+            else:
+                raw_dict = self._manual_serialize_full_response(response)
+        except Exception as e:
+            logger.warning(f"   ⚠️ model_dump() 失败，使用手动序列化: {e}")
+            raw_dict = self._manual_serialize_full_response(response)
+        
+        # 1. 保存完整的 API 响应 JSON
+        raw_json_path = raw_output_dir / f"{job_id}.json"
+        with open(raw_json_path, 'w', encoding='utf-8') as f:
+            json.dump(raw_dict, f, ensure_ascii=False, indent=2)
+        logger.info(f"   💾 完整 API 响应已保存: {raw_json_path}")
+        
+        # 2. 保存元数据
+        meta_json_path = raw_output_dir / f"{job_id}_meta.json"
+        meta_data = {
+            "job_id": job_id,
+            "pdf_filename": pdf_filename,
+            "tier": self.tier,
+            "created_at": datetime.now().isoformat(),
+            "parser": "llamaparse",
+            "fields_saved": list(raw_dict.keys())  # 🌟 记录保存的所有字段
+        }
+        with open(meta_json_path, 'w', encoding='utf-8') as f:
+            json.dump(meta_data, f, ensure_ascii=False, indent=2)
+        
+        # 3. 🌟 保存完整 Markdown（方便查看）
+        markdown_full = raw_dict.get("markdown_full", "")
+        if markdown_full:
+            markdown_path = raw_output_dir / "markdown.md"
+            with open(markdown_path, 'w', encoding='utf-8') as f:
+                f.write(markdown_full)
+            logger.info(f"   💾 Markdown 已保存: {markdown_path}")
+        
+        # 4. 🌟 保存每页 Markdown（方便查看）
+        markdown_pages = raw_dict.get("markdown", {}).get("pages", [])
+        for page in markdown_pages:
+            if page.get("success") and page.get("markdown"):
+                page_num = page.get("page_number", 0)
+                page_markdown_path = raw_output_dir / f"markdown_page{page_num}.md"
+                with open(page_markdown_path, 'w', encoding='utf-8') as f:
+                    f.write(page.get("markdown", ""))
+        
+        # 5. 🌟 保存完整纯文本
+        text_full = raw_dict.get("text_full", "")
+        if text_full:
+            text_path = raw_output_dir / "text.txt"
+            with open(text_path, 'w', encoding='utf-8') as f:
+                f.write(text_full)
+            logger.info(f"   💾 Text 已保存: {text_path}")
+        
+        # 6. 创建图片文件夹
+        images_dir = raw_output_dir / "images"
+        images_dir.mkdir(parents=True, exist_ok=True)
+        
+        logger.info(f"   ✅ Raw output 保存完成: {raw_output_dir}")
+        
+        return raw_output_dir
+    
+    def _manual_serialize_full_response(self, response: Any) -> Dict:
+        """
+        手动序列化完整的 ParsingGetResponse
+        
+        🌟 保存所有字段（不只是 job 和 markdown_full）
+        
+        官方 API 返回的字段：
+        - job: Job → id, status, tier, created_at, error_message
+        - markdown_full: str → 完整 Markdown
+        - markdown: Markdown → pages（每页 Markdown）
+        - text_full: str → 完纯文本
+        - text: Text → pages（每页文本）
+        - items: Items → pages（结构化 items，包含表格、标题等）
+        - images_content_metadata: ImagesContentMetadata → images（图片元数据）
+        - metadata: Metadata → pages（页面元数据）
+        - result_content_metadata: Dict → 结果文件元数据
+        - job_metadata: Dict → 任务执行元数据
+        - raw_parameters: Dict → 原始参数
+        """
+        result = {}
+        
+        # 🌟 保存所有字段
+        # 1. job
+        if hasattr(response, 'job') and response.job:
+            job = response.job
+            result["job"] = {
+                "id": job.id,
+                "status": job.status,
+                "tier": getattr(job, 'tier', self.tier),
+                "created_at": str(job.created_at) if hasattr(job, 'created_at') and job.created_at else None,
+                "error_message": getattr(job, 'error_message', None),
+                "name": getattr(job, 'name', None),
+                "project_id": getattr(job, 'project_id', None),
+                "updated_at": str(job.updated_at) if hasattr(job, 'updated_at') and job.updated_at else None,
+            }
+        
+        # 2. markdown_full
+        result["markdown_full"] = getattr(response, 'markdown_full', "") or ""
+        
+        # 3. markdown.pages
+        if hasattr(response, 'markdown') and response.markdown:
+            markdown_obj = response.markdown
+            if hasattr(markdown_obj, 'pages'):
+                result["markdown"] = {
+                    "pages": [
+                        {
+                            "page_number": p.page_number,
+                            "markdown": getattr(p, 'markdown', "") or "",
+                            "success": getattr(p, 'success', True),
+                            "error": getattr(p, 'error', None),
+                            "header": getattr(p, 'header', None),
+                            "footer": getattr(p, 'footer', None),
+                        }
+                        for p in markdown_obj.pages
+                    ]
+                }
+        
+        # 4. text_full
+        result["text_full"] = getattr(response, 'text_full', "") or ""
+        
+        # 5. text.pages
+        if hasattr(response, 'text') and response.text:
+            text_obj = response.text
+            if hasattr(text_obj, 'pages'):
+                result["text"] = {
+                    "pages": [
+                        {
+                            "page_number": p.page_number,
+                            "text": getattr(p, 'text', "") or "",
+                        }
+                        for p in text_obj.pages
+                    ]
+                }
+        
+        # 6. items.pages（结构化数据）
+        if hasattr(response, 'items') and response.items:
+            items_obj = response.items
+            if hasattr(items_obj, 'pages'):
+                result["items"] = {
+                    "pages": [
+                        self._serialize_items_page(p)
+                        for p in items_obj.pages
+                    ]
+                }
+        
+        # 7. images_content_metadata（图片元数据）
+        if hasattr(response, 'images_content_metadata') and response.images_content_metadata:
+            images_meta = response.images_content_metadata
+            if hasattr(images_meta, 'images'):
+                result["images_content_metadata"] = {
+                    "images": [
+                        {
+                            "filename": img.filename,
+                            "index": getattr(img, 'index', 0),
+                            "presigned_url": getattr(img, 'presigned_url', None),
+                            "category": getattr(img, 'category', None),
+                            "content_type": getattr(img, 'content_type', None),
+                            "size_bytes": getattr(img, 'size_bytes', None),
+                            "bbox": {
+                                "x": img.bbox.x if img.bbox else None,
+                                "y": img.bbox.y if img.bbox else None,
+                                "w": img.bbox.w if img.bbox else None,
+                                "h": img.bbox.h if img.bbox else None,
+                            } if img.bbox else None,
+                        }
+                        for img in images_meta.images
+                    ],
+                    "total_count": getattr(images_meta, 'total_count', 0),
+                }
+        
+        # 8. metadata（页面元数据）
+        if hasattr(response, 'metadata') and response.metadata:
+            metadata_obj = response.metadata
+            if hasattr(metadata_obj, 'pages'):
+                result["metadata"] = {
+                    "pages": [
+                        {
+                            "page_number": p.page_number,
+                            "confidence": getattr(p, 'confidence', None),
+                            "cost_optimized": getattr(p, 'cost_optimized', None),
+                            "original_orientation_angle": getattr(p, 'original_orientation_angle', None),
+                            "printed_page_number": getattr(p, 'printed_page_number', None),
+                            "slide_section_name": getattr(p, 'slide_section_name', None),
+                            "speaker_notes": getattr(p, 'speaker_notes', None),
+                            "triggered_auto_mode": getattr(p, 'triggered_auto_mode', None),
+                        }
+                        for p in metadata_obj.pages
+                    ]
+                }
+        
+        # 9. result_content_metadata（结果文件元数据）
+        if hasattr(response, 'result_content_metadata') and response.result_content_metadata:
+            result["result_content_metadata"] = {
+                key: {
+                    "exists": getattr(meta, 'exists', None),
+                    "size_bytes": getattr(meta, 'size_bytes', 0),
+                    "presigned_url": getattr(meta, 'presigned_url', None),
+                }
+                for key, meta in response.result_content_metadata.items()
+            }
+        
+        # 10. job_metadata
+        result["job_metadata"] = getattr(response, 'job_metadata', None)
+        
+        # 11. raw_parameters
+        result["raw_parameters"] = getattr(response, 'raw_parameters', None)
+        
+        return result
+    
+    def _serialize_items_page(self, page: Any) -> Dict:
+        """
+        序列化 items.pages 中的单个页面
+        
+        🌟 items 包含结构化数据：
+        - TextItem: 文本
+        - HeadingItem: 标题
+        - ListItem: 列表
+        - TableItem: 表格
+        - ImageItem: 图片
+        - CodeItem: 代码
+        - LinkItem: 链接
+        """
+        result = {
+            "page_number": page.page_number,
+            "success": getattr(page, 'success', True),
+            "error": getattr(page, 'error', None),
+            "page_width": getattr(page, 'page_width', None),
+            "page_height": getattr(page, 'page_height', None),
+            "items": [],
+        }
+        
+        if hasattr(page, 'items') and page.items:
+            for item in page.items:
+                item_dict = {}
+                if hasattr(item, 'model_dump'):
+                    item_dict = item.model_dump()
+                elif hasattr(item, '__dict__'):
+                    item_dict = {
+                        "type": getattr(item, 'type', 'unknown'),
+                        "value": str(item),
+                    }
+                    # 尝试提取更多字段
+                    for attr in ['text', 'level', 'rows', 'cols', 'bbox', 'url', 'src']:
+                        if hasattr(item, attr):
+                            item_dict[attr] = getattr(item, attr)
+                else:
+                    item_dict = {"type": "unknown", "value": str(item)}
+                
+                result["items"].append(item_dict)
+        
+        return result
+    
+    # ===========================================
+    # 🌟 下载图片到本地
+    # ===========================================
+    
+    def _download_images(self, response: Any, raw_output_dir: Path) -> None:
+        """
+        同步下载图片到本地
+        
+        Args:
+            response: LlamaParse ParsingGetResponse
+            raw_output_dir: Raw output 目录
+        """
+        images_dir = raw_output_dir / "images"
+        images_dir.mkdir(parents=True, exist_ok=True)
+        
+        if not hasattr(response, 'images_content_metadata') or not response.images_content_metadata:
+            return
+        
+        images = response.images_content_metadata.images
+        if not images:
+            return
+        
+        logger.info(f"   📥 开始下载 {len(images)} 张图片...")
+        
+        downloaded = 0
+        for img in images:
+            url = getattr(img, 'presigned_url', None)
+            filename = getattr(img, 'filename', f"image_{getattr(img, 'index', 0)}.png")
+            
+            if not url:
+                continue
+            
+            try:
+                # 下载图片
+                response_http = httpx.get(url, timeout=60)
+                if response_http.status_code == 200:
+                    img_path = images_dir / filename
+                    with open(img_path, 'wb') as f:
+                        f.write(response_http.content)
+                    downloaded += 1
+                    logger.debug(f"      ✅ {filename} ({len(response_http.content)} bytes)")
+            except Exception as e:
+                logger.warning(f"      ⚠️ 下载失败 {filename}: {e}")
+        
+        logger.info(f"   ✅ 图片下载完成: {downloaded}/{len(images)} 张")
+    
+    async def _download_images_async(self, response: Any, raw_output_dir: Path) -> None:
+        """
+        异步下载图片到本地
+        """
+        images_dir = raw_output_dir / "images"
+        images_dir.mkdir(parents=True, exist_ok=True)
+        
+        if not hasattr(response, 'images_content_metadata') or not response.images_content_metadata:
+            return
+        
+        images = response.images_content_metadata.images
+        if not images:
+            return
+        
+        logger.info(f"   📥 异步下载 {len(images)} 张图片...")
+        
+        downloaded = 0
+        async with httpx.AsyncClient(timeout=60) as client:
+            for img in images:
+                url = getattr(img, 'presigned_url', None)
+                filename = getattr(img, 'filename', f"image_{getattr(img, 'index', 0)}.png")
+                
+                if not url:
+                    continue
+                
+                try:
+                    response_http = await client.get(url)
+                    if response_http.status_code == 200:
+                        img_path = images_dir / filename
+                        with open(img_path, 'wb') as f:
+                            f.write(response_http.content)
+                        downloaded += 1
+                        logger.debug(f"      ✅ {filename}")
+                except Exception as e:
+                    logger.warning(f"      ⚠️ 下载失败 {filename}: {e}")
+        
+        logger.info(f"   ✅ 图片下载完成: {downloaded}/{len(images)} 张")
+    
+    def _update_image_paths(self, result: PDFParseResult, raw_output_dir: Path) -> PDFParseResult:
+        """
+        更新图片路径为本地路径
         
         Args:
             result: PDFParseResult
+            raw_output_dir: Raw output 目录
             
         Returns:
-            ParsedPDF: 兼容旧格式的对象
+            PDFParseResult（更新后的）
         """
-        from dataclasses import dataclass
+        images_dir = raw_output_dir / "images"
         
-        # 导入旧格式的 dataclass（如果存在）
-        try:
-            from nanobot.agent.tools.pdf_parser import ParsedPDF, ExtractedElement, BoundingBox
-        except ImportError:
-            # 如果不存在，定义兼容的 dataclass
-            @dataclass
-            class BoundingBox:
-                x: float
-                y: float
-                width: float
-                height: float
-                page: int
-            
-            @dataclass
-            class ExtractedElement:
-                element_type: str
-                content: str
-                bbox: BoundingBox
-                level: Optional[int] = None
-                metadata: Optional[Dict[str, Any]] = None
-            
-            @dataclass
-            class ParsedPDF:
-                file_path: str
-                total_pages: int
-                markdown: str
-                elements: List[ExtractedElement]
-                tables: List[Dict[str, Any]]
-                images: List[Dict[str, Any]]
-                metadata: Dict[str, Any]
+        for img in result.images:
+            filename = img.get("filename", "")
+            if filename:
+                local_path = images_dir / filename
+                if local_path.exists():
+                    img["local_path"] = str(local_path)
         
-        # 转换 artifacts 为 ExtractedElement 列表
-        elements = []
-        for artifact in result.artifacts:
-            bbox_data = artifact.get('bbox', {})
-            bbox = BoundingBox(
-                x=bbox_data.get('x', 0),
-                y=bbox_data.get('y', 0),
-                width=bbox_data.get('width', 0),
-                height=bbox_data.get('height', 0),
-                page=artifact.get('page_num', 0)
+        return result
+    
+    # ===========================================
+    # 🌟 从 Raw Output 加载（不扣费）
+    # ===========================================
+    
+    def load_from_raw_output(self, pdf_filename: str, job_id: str = None) -> PDFParseResult:
+        """
+        从已保存的 raw output 加载结果（完全不扣费）
+        
+        🌟 v3.2: 按 PDF 文件名查找
+        
+        Args:
+            pdf_filename: PDF 文件名
+            job_id: 任务 ID（可选，如果不提供则自动查找最新的）
+            
+        Returns:
+            PDFParseResult
+            
+        Raises:
+            FileNotFoundError: 如果 raw output 文件不存在
+        """
+        logger.info(f"📂 从 raw output 加载: {pdf_filename}")
+        
+        # 1. 按 PDF 文件名获取目录
+        raw_output_dir = get_raw_output_dir(pdf_filename)
+        
+        # 2. 如果没有提供 job_id，查找最新的
+        if not job_id:
+            job_ids = sorted([
+                f.stem for f in raw_output_dir.glob("*.json")
+                if not f.stem.endswith("_meta")
+            ])
+            if not job_ids:
+                raise FileNotFoundError(f"没有找到 raw output: {raw_output_dir}")
+            job_id = job_ids[-1]  # 最新的 job_id
+            logger.info(f"   🔍 自动查找最新 job_id: {job_id}")
+        
+        # 3. 加载 raw JSON
+        raw_json_path = raw_output_dir / f"{job_id}.json"
+        if not raw_json_path.exists():
+            raise FileNotFoundError(f"Raw output 文件不存在: {raw_json_path}")
+        
+        with open(raw_json_path, 'r', encoding='utf-8') as f:
+            raw_data = json.load(f)
+        
+        # 4. 加载元数据
+        meta_json_path = raw_output_dir / f"{job_id}_meta.json"
+        if meta_json_path.exists():
+            with open(meta_json_path, 'r', encoding='utf-8') as f:
+                meta_data = json.load(f)
+        else:
+            meta_data = {}
+        
+        # 5. 构建 PDFParseResult
+        result = self._build_result_from_raw(raw_data, meta_data.get("pdf_filename", pdf_filename))
+        result.raw_output_dir = str(raw_output_dir)
+        
+        # 6. 更新图片路径
+        result = self._update_image_paths(result, raw_output_dir)
+        
+        logger.info(
+            f"✅ 加载完成（不扣费）: {result.total_pages} 页, "
+            f"from: {raw_json_path}"
+        )
+        
+        return result
+    
+    # ===========================================
+    # 等待解析完成
+    # ===========================================
+    
+    def _wait_for_completion(self, job_id: str, max_wait: int = 300) -> Any:
+        """等待解析任务完成（同步）"""
+        import time
+        
+        start_time = time.time()
+        
+        while True:
+            response = self.client.parsing.get(job_id=job_id)
+            status = response.job.status
+            
+            if status == "COMPLETED":
+                logger.info(f"   ✅ 解析完成: job_id={job_id}")
+                return response
+            
+            elif status == "FAILED":
+                error_msg = response.job.error_message or "未知错误"
+                raise ValueError(f"LlamaParse 解析失败: {error_msg}")
+            
+            elif status in ["PENDING", "RUNNING"]:
+                elapsed = time.time() - start_time
+                if elapsed > max_wait:
+                    raise TimeoutError(f"解析超时: {max_wait}s")
+                
+                logger.debug(f"   ⏳ 等待中... status={status}, elapsed={elapsed:.1f}s")
+                time.sleep(2)
+            
+            elif status == "CANCELLED":
+                raise ValueError(f"解析任务已取消: job_id={job_id}")
+            
+            else:
+                raise ValueError(f"未知状态: {status}")
+    
+    async def _wait_for_completion_async(self, job_id: str, max_wait: int = 300) -> Any:
+        """等待解析任务完成（异步）"""
+        start_time = asyncio.get_event_loop().time()
+        
+        while True:
+            response = await self.async_client.parsing.get(job_id=job_id)
+            status = response.job.status
+            
+            if status == "COMPLETED":
+                logger.info(f"   ✅ 解析完成: job_id={job_id}")
+                return response
+            
+            elif status == "FAILED":
+                error_msg = response.job.error_message or "未知错误"
+                raise ValueError(f"LlamaParse 解析失败: {error_msg}")
+            
+            elif status in ["PENDING", "RUNNING"]:
+                elapsed = asyncio.get_event_loop().time() - start_time
+                if elapsed > max_wait:
+                    raise TimeoutError(f"解析超时: {max_wait}s")
+                
+                logger.debug(f"   ⏳ 异步等待中... status={status}")
+                await asyncio.sleep(2)
+            
+            elif status == "CANCELLED":
+                raise ValueError(f"解析任务已取消: job_id={job_id}")
+            
+            else:
+                raise ValueError(f"未知状态: {status}")
+    
+    # ===========================================
+    # 提取结果
+    # ===========================================
+    
+    def _extract_result(self, response: Any, file_path: str) -> PDFParseResult:
+        """从 ParsingGetResponse 提取结构化结果"""
+        job = response.job
+        job_id = job.id
+        
+        # 提取完整 Markdown
+        markdown_full = response.markdown_full or ""
+        
+        # 如果没有 markdown_full，从 pages 拼接
+        if not markdown_full and response.markdown:
+            markdown_full = "\n\n".join(
+                page.markdown for page in response.markdown.pages
+                if hasattr(page, 'markdown') and page.success
             )
-            
-            element = ExtractedElement(
-                element_type=artifact.get('type', 'unknown'),
-                content=artifact.get('content', ''),
-                bbox=bbox,
-                metadata=artifact.get('metadata', {})
-            )
-            elements.append(element)
         
-        return ParsedPDF(
-            file_path=result.file_path,
-            total_pages=result.total_pages,
-            markdown=result.markdown,
-            elements=elements,
-            tables=result.tables,
-            images=result.images,
-            metadata=result.metadata
+        # 提取页数
+        total_pages = 0
+        if response.markdown and response.markdown.pages:
+            total_pages = len(response.markdown.pages)
+        elif response.items and response.items.pages:
+            total_pages = len(response.items.pages)
+        
+        # 提取 Artifacts（页面级别）
+        artifacts = []
+        if response.markdown and response.markdown.pages:
+            for page in response.markdown.pages:
+                if hasattr(page, 'markdown') and page.success and page.markdown:
+                    artifacts.append({
+                        "type": "text",
+                        "page": page.page_number,
+                        "content": page.markdown,
+                        "parser": "llamaparse"
+                    })
+        elif response.text and response.text.pages:
+            for page in response.text.pages:
+                if page.text:
+                    artifacts.append({
+                        "type": "text",
+                        "page": page.page_number,
+                        "content": page.text,
+                        "parser": "llamaparse"
+                    })
+        
+        # 提取表格（从 items.pages）
+        tables = []
+        if self.enable_tables and response.items and response.items.pages:
+            for page in response.items.pages:
+                if hasattr(page, 'items') and page.success:
+                    for item in page.items:
+                        if hasattr(item, 'type') and item.type == 'table':
+                            tables.append({
+                                "type": "table",
+                                "page": page.page_number,
+                                "content": item.__dict__ if hasattr(item, '__dict__') else str(item),
+                                "rows": getattr(item, 'rows', 0)
+                            })
+        
+        # 提取图片（从 images_content_metadata）
+        images = []
+        if self.enable_images and response.images_content_metadata:
+            for img_meta in response.images_content_metadata.images:
+                images.append({
+                    "type": "image",
+                    "filename": img_meta.filename,
+                    "page": getattr(img_meta, 'page_number', 0),
+                    "url": img_meta.presigned_url,
+                    "category": img_meta.category,
+                    "size_bytes": img_meta.size_bytes,
+                    "bbox": img_meta.bbox.__dict__ if img_meta.bbox else None
+                })
+        
+        return PDFParseResult(
+            file_path=file_path,
+            total_pages=total_pages,
+            markdown=markdown_full,
+            artifacts=artifacts,
+            tables=tables,
+            images=images,
+            metadata={
+                "parser": "llamaparse",
+                "tier": self.tier,
+                "version": "latest",
+                "job_id": job_id,
+                "status": job.status,
+                "char_count": len(markdown_full),
+                "table_count": len(tables),
+                "image_count": len(images)
+            },
+            job_id=job_id,
+            tier=self.tier
+        )
+    
+    def _build_result_from_raw(self, raw_data: Dict, pdf_filename: str) -> PDFParseResult:
+        """从 raw dict 构建 PDFParseResult"""
+        job = raw_data.get("job", {})
+        job_id = job.get("id", "")
+        
+        markdown_full = raw_data.get("markdown_full", "")
+        
+        markdown_data = raw_data.get("markdown", {})
+        pages = markdown_data.get("pages", [])
+        total_pages = len(pages)
+        
+        artifacts = []
+        for page in pages:
+            if page.get("success") and page.get("markdown"):
+                artifacts.append({
+                    "type": "text",
+                    "page": page.get("page_number", 0),
+                    "content": page.get("markdown", ""),
+                    "parser": "llamaparse"
+                })
+        
+        tables = []
+        items_data = raw_data.get("items", {})
+        items_pages = items_data.get("pages", [])
+        for page in items_pages:
+            if page.get("success"):
+                for item in page.get("items", []):
+                    if item.get("type") == "table":
+                        tables.append({
+                            "type": "table",
+                            "page": page.get("page_number", 0),
+                            "content": item,
+                            "rows": item.get("rows", 0)
+                        })
+        
+        images = []
+        images_meta = raw_data.get("images_content_metadata", {})
+        images_list = images_meta.get("images", [])
+        for img in images_list:
+            images.append({
+                "type": "image",
+                "filename": img.get("filename", ""),
+                "url": img.get("presigned_url", ""),
+                "category": img.get("category", ""),
+                "size_bytes": img.get("size_bytes", 0),
+                "bbox": img.get("bbox"),
+            })
+        
+        return PDFParseResult(
+            file_path=pdf_filename,
+            total_pages=total_pages,
+            markdown=markdown_full,
+            artifacts=artifacts,
+            tables=tables,
+            images=images,
+            metadata={
+                "parser": "llamaparse",
+                "tier": self.tier,
+                "job_id": job_id,
+                "status": job.get("status", "COMPLETED"),
+                "char_count": len(markdown_full),
+                "table_count": len(tables),
+                "image_count": len(images),
+                "loaded_from": "raw_output"
+            },
+            job_id=job_id,
+            tier=self.tier
         )
 
 
 # ===========================================
-# 工厂函数与便捷函数
+# 导出
 # ===========================================
 
-def create_pdf_core(enable_hybrid: bool = False) -> OpenDataLoaderCore:
-    """
-    创建 OpenDataLoaderCore 实例
-    
-    Args:
-        enable_hybrid: 是否启用 Hybrid
-        
-    Returns:
-        OpenDataLoaderCore
-    """
-    return OpenDataLoaderCore(enable_hybrid=enable_hybrid)
-
-
-def parse_pdf(
-    pdf_path: str,
-    enable_hybrid: bool = False,
-    pages: Union[List[int], str] = None
-) -> PDFParseResult:
-    """
-    便捷函数：快速解析 PDF
-    
-    Args:
-        pdf_path: PDF 文件路径
-        enable_hybrid: 是否启用 Hybrid
-        pages: 要解析的页码
-        
-    Returns:
-        PDFParseResult
-    """
-    core = create_pdf_core(enable_hybrid=enable_hybrid)
-    return core.parse(pdf_path, pages=pages)
-
-
-async def parse_pdf_async(
-    pdf_path: str,
-    enable_hybrid: bool = False,
-    pages: Union[List[int], str] = None
-) -> PDFParseResult:
-    """
-    便捷函数：异步解析 PDF
-    
-    Args:
-        pdf_path: PDF 文件路径
-        enable_hybrid: 是否启用 Hybrid
-        pages: 要解析的页码
-        
-    Returns:
-        PDFParseResult
-    """
-    core = create_pdf_core(enable_hybrid=enable_hybrid)
-    return await core.parse_async(pdf_path, pages=pages)
-
-
-# ===========================================
-# 测试
-# ===========================================
-
-if __name__ == "__main__":
-    import sys
-    
-    print("🧪 测试 OpenDataLoaderCore...")
-    
-    # 测试环境变量
-    print("\n1. 测试 Hybrid URL 配置:")
-    print(f"   HYBRID_URL (环境变量): {os.environ.get('HYBRID_URL', '未设置')}")
-    print(f"   自动检测 URL: {get_hybrid_url()}")
-    print(f"   CUDA 启用: {get_cuda_enabled()}")
-    
-    # 测试核心类
-    print("\n2. 测试 OpenDataLoaderCore 初始化:")
-    try:
-        core = OpenDataLoaderCore(enable_hybrid=False)
-        print(f"   ✅ 初始化成功")
-        print(f"   Hybrid URL: {core.hybrid_url}")
-    except Exception as e:
-        print(f"   ❌ 初始化失败: {e}")
-    
-    # 测试 JSON 标准化
-    print("\n3. 测试 JSON 标准化:")
-    
-    test_json_1 = {
-        "pages": [
-            {"page_num": 1, "tables": [{"data": [["A", "B"]]}]},
-            {"page_num": 2, "images": [{"image_data": "base64..."}]}
-        ]
-    }
-    
-    test_json_2 = {
-        "tables": [{"page": 1, "data": [["A", "B"]]}],
-        "images": [{"page": 2, "image_data": "base64..."}],
-        "elements": [{"type": "heading", "content": "Title"}]
-    }
-    
-    normalized_1 = core._normalize_json(test_json_1)
-    normalized_2 = core._normalize_json(test_json_2)
-    
-    print(f"   输入 1 (pages 结构): {len(normalized_1['artifacts'])} 个 artifacts")
-    print(f"   输入 2 (分类结构): {len(normalized_2['artifacts'])} 个 artifacts")
-    
-    print("\n✅ 测试完成")
+__all__ = [
+    "PDFParser",
+    "PDFParseResult",
+    "parse_pdf",
+    "parse_pdf_async",
+    "parse_pdf_url",
+    "load_from_raw_output",
+    "get_llamaparse_api_key",
+    "get_llamaparse_tier",
+    "get_data_dir",
+    "get_raw_output_dir",
+]

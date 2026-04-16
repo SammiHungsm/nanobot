@@ -1,19 +1,19 @@
 """
-OpenDataLoader-PDF Wrapper for Nanobot
+LlamaParse Wrapper for Nanobot (v3.2)
 
 High-accuracy PDF parsing with bounding boxes for citations.
 
-🎯 v2.0: 使用統一的 pdf_core 封裝
-- 所有底层 API 调用统一在 nanobot.core.pdf_core
-- 自动处理 Docker 网络问题
-- 统一 format 参数格式
-- 统一 JSON 输出结构
+🎯 v3.2: 使用 LlamaParse Cloud API
+- 替代 OpenDataLoader Hybrid
+- 支持 130+ 格式
+- 自动保存完整 raw output
+- 图片下载到本地
 
 Supports:
 - Markdown extraction
 - JSON with coordinates
 - Table structure preservation
-- OCR for scanned documents (hybrid mode)
+- Image extraction with presigned URLs
 """
 
 from typing import List, Dict, Any, Optional
@@ -21,12 +21,12 @@ from pathlib import Path
 from dataclasses import dataclass
 from loguru import logger
 
-# 🌟 使用统一的核心模块
-from nanobot.core.pdf_core import OpenDataLoaderCore
+# 🌟 使用 LlamaParse 封装
+from nanobot.core.pdf_core import PDFParser, PDFParseResult
 
 
 # ===========================================
-# 保留原本的 Dataclass（讓 Agent 其他地方不報錯）
+# Dataclasses
 # ===========================================
 
 @dataclass
@@ -44,8 +44,8 @@ class ExtractedElement:
     """Extracted element with type and bounding box"""
     element_type: str  # 'heading', 'paragraph', 'table', 'image', 'list'
     content: str
-    bbox: BoundingBox
-    level: Optional[int] = None  # For headings (h1, h2, etc.)
+    bbox: Optional[BoundingBox] = None
+    level: Optional[int] = None
     metadata: Optional[Dict[str, Any]] = None
 
 
@@ -62,110 +62,108 @@ class ParsedPDF:
 
 
 # ===========================================
-# OpenDataLoaderPDF - 薄薄的适配层
+# LlamaParsePDF
 # ===========================================
 
-class OpenDataLoaderPDF:
+class LlamaParsePDF:
     """
-    OpenDataLoader-PDF wrapper for high-accuracy PDF parsing.
-    
-    🌟 v2.0: 现在只是薄薄的适配层，核心逻辑全在 pdf_core
+    LlamaParse wrapper for high-accuracy PDF parsing.
     
     Example:
-        parser = OpenDataLoaderPDF()
+        parser = LlamaParsePDF()
         result = parser.parse("annual_report.pdf")
-        print(result.markdown)
-        for table in result.tables:
-            print(f"Table on page {table['page']}: {table['data']}")
     """
     
-    def __init__(self, hybrid_mode: bool = False, hybrid_url: str = None):
-        """
-        Initialize OpenDataLoader-PDF.
-        
-        Args:
-            hybrid_mode: Use AI hybrid mode for complex PDFs (requires server)
-            hybrid_url: URL of hybrid mode server (默认从环境变量获取)
-        """
-        self.hybrid_mode = hybrid_mode
-        # 🌟 直接包裹新的 Core
-        self.core = OpenDataLoaderCore(enable_hybrid=hybrid_mode, hybrid_url=hybrid_url)
-        logger.info(f"OpenDataLoaderPDF initialized (hybrid_mode={hybrid_mode})")
+    def __init__(self, tier: str = "agentic", download_images: bool = True):
+        self.tier = tier
+        self.download_images = download_images
+        self.parser = PDFParser(tier=tier, download_images=download_images)
+        logger.info(f"LlamaParsePDF initialized (tier={tier})")
     
     def parse(self, pdf_path: str, output_dir: str = None, save_raw: bool = True) -> ParsedPDF:
-        """
-        Parse a PDF file.
-        
-        🌟 v2.0: 一行代码搞定
-        
-        Args:
-            pdf_path: Path to PDF file
-            output_dir: Directory to save output (default: data/parsed_outputs)
-            save_raw: If True, save raw output files for inspection
-        
-        Returns:
-            ParsedPDF object with extracted content
-        """
         pdf_path = Path(pdf_path)
         if not pdf_path.exists():
             raise FileNotFoundError(f"PDF not found: {pdf_path}")
         
         logger.info(f"Parsing PDF: {pdf_path}")
+        result: PDFParseResult = self.parser.parse(str(pdf_path))
+        parsed_pdf = self._convert_to_parsed_pdf(result, str(pdf_path))
         
-        # 🌟 設定輸出目錄
-        if output_dir is None:
-            output_dir = Path("data/parsed_outputs") / pdf_path.stem
-            output_dir.mkdir(parents=True, exist_ok=True)
-        else:
-            output_dir = Path(output_dir)
-            output_dir.mkdir(parents=True, exist_ok=True)
-        
-        # 🌟 呼叫核心解析
-        result = self.core.parse(str(pdf_path), str(output_dir))
-        
-        # 🌟 轉換為相容 Agent 的 ParsedPDF 格式
-        parsed_pdf = self.core.to_parsed_pdf(result)
-        
-        if save_raw:
-            logger.info(f"Raw output saved to: {output_dir}")
-        
-        logger.info(f"✅ Successfully parsed: {parsed_pdf.total_pages} pages, {len(parsed_pdf.tables)} tables")
+        logger.info(f"✅ Parsed: {parsed_pdf.total_pages} pages, {len(parsed_pdf.tables)} tables")
         return parsed_pdf
     
+    def parse_url(self, url: str) -> ParsedPDF:
+        result: PDFParseResult = self.parser.parse_url(url)
+        return self._convert_to_parsed_pdf(result, url)
+    
+    async def parse_async(self, pdf_path: str) -> ParsedPDF:
+        pdf_path = Path(pdf_path)
+        if not pdf_path.exists():
+            raise FileNotFoundError(f"PDF not found: {pdf_path}")
+        
+        result: PDFParseResult = await self.parser.parse_async(str(pdf_path))
+        return self._convert_to_parsed_pdf(result, str(pdf_path))
+    
     def extract_tables(self, pdf_path: str) -> List[Dict[str, Any]]:
-        """
-        Extract only tables from PDF.
-        
-        Args:
-            pdf_path: Path to PDF file
-        
-        Returns:
-            List of table dictionaries with structure preserved
-        """
         parsed = self.parse(pdf_path)
         return parsed.tables
     
-    def extract_with_citations(self, pdf_path: str) -> tuple:
-        """
-        Extract text with citation information.
-        
-        Returns:
-            Tuple of (markdown_text, citations_list)
-            Each citation: {'text': str, 'page': int, 'bbox': dict}
-        """
+    def extract_images(self, pdf_path: str) -> List[Dict[str, Any]]:
         parsed = self.parse(pdf_path)
+        return parsed.images
+    
+    def load_from_raw_output(self, pdf_filename: str, job_id: str = None) -> ParsedPDF:
+        result: PDFParseResult = self.parser.load_from_raw_output(pdf_filename, job_id)
+        return self._convert_to_parsed_pdf(result, pdf_filename)
+    
+    def _convert_to_parsed_pdf(self, result: PDFParseResult, file_path: str) -> ParsedPDF:
+        elements = []
+        for artifact in result.artifacts:
+            elem = ExtractedElement(
+                element_type=artifact.get('type', 'text'),
+                content=artifact.get('content', ''),
+                bbox=None,
+                metadata={'page': artifact.get('page', 0)}
+            )
+            elements.append(elem)
         
-        citations = [
-            {
-                'text': elem.content[:100],
-                'page': elem.bbox.page,
-                'bbox': {'x': elem.bbox.x, 'y': elem.bbox.y, 'width': elem.bbox.width, 'height': elem.bbox.height},
-                'type': elem.element_type
+        for table in result.tables:
+            elem = ExtractedElement(
+                element_type='table',
+                content=str(table.get('content', '')),
+                bbox=None,
+                metadata={'page': table.get('page', 0)}
+            )
+            elements.append(elem)
+        
+        for img in result.images:
+            elem = ExtractedElement(
+                element_type='image',
+                content=img.get('filename', ''),
+                bbox=None,
+                metadata={
+                    'page': img.get('page', 0),
+                    'local_path': img.get('local_path', ''),
+                    'url': img.get('url', ''),
+                    'category': img.get('category', '')
+                }
+            )
+            elements.append(elem)
+        
+        return ParsedPDF(
+            file_path=file_path,
+            total_pages=result.total_pages,
+            markdown=result.markdown,
+            elements=elements,
+            tables=result.tables,
+            images=result.images,
+            metadata={
+                'parser': 'llamaparse',
+                'tier': result.tier,
+                'job_id': result.job_id,
+                'raw_output_dir': result.raw_output_dir
             }
-            for elem in parsed.elements
-        ]
-        
-        return parsed.markdown, citations
+        )
 
 
 # ===========================================
@@ -173,28 +171,21 @@ class OpenDataLoaderPDF:
 # ===========================================
 
 def parse_pdf(pdf_path: str, **kwargs) -> ParsedPDF:
-    """Quick PDF parsing"""
-    parser = OpenDataLoaderPDF(**kwargs)
+    parser = LlamaParsePDF(**kwargs)
     return parser.parse(pdf_path)
 
+async def parse_pdf_async(pdf_path: str, **kwargs) -> ParsedPDF:
+    parser = LlamaParsePDF(**kwargs)
+    return await parser.parse_async(pdf_path)
 
 def extract_tables_from_pdf(pdf_path: str, **kwargs) -> List[Dict]:
-    """Quick table extraction"""
-    parser = OpenDataLoaderPDF(**kwargs)
+    parser = LlamaParsePDF(**kwargs)
     return parser.extract_tables(pdf_path)
 
+def extract_images_from_pdf(pdf_path: str, **kwargs) -> List[Dict]:
+    parser = LlamaParsePDF(**kwargs)
+    return parser.extract_images(pdf_path)
 
-if __name__ == "__main__":
-    import sys
-    
-    if len(sys.argv) > 1:
-        pdf_file = sys.argv[1]
-        parser = OpenDataLoaderPDF()
-        result = parser.parse(pdf_file)
-        
-        print(f"Pages: {result.total_pages}")
-        print(f"Tables: {len(result.tables)}")
-        print(f"Images: {len(result.images)}")
-        print(f"\nFirst 500 chars of markdown:\n{result.markdown[:500]}")
-    else:
-        print("Usage: python pdf_parser.py <pdf_file>")
+def load_from_raw_output(pdf_filename: str, job_id: str = None) -> ParsedPDF:
+    parser = LlamaParsePDF()
+    return parser.load_from_raw_output(pdf_filename, job_id)

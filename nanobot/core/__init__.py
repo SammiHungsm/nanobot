@@ -1,21 +1,26 @@
 """
-Nanobot Core - 核心模組
+Nanobot Core - 核心模組 (v3.2)
 
 提供統一的底層封裝，避免代碼重複。
 
 模組：
-- pdf_core: OpenDataLoader 統一封裝（解決 API 參數、Docker 網絡、JSON Schema 問題）
-- llm_core: LLM/Vision 統一封裝（解決 Provider 路由、API Key 配置問題）
+- pdf_core: LlamaParse 統一封裝（支持 130+ 格式）
+- llm_core: LLM/Vision 統一封裝
+
+🌟 v3.2: 移除 OpenDataLoader，只使用 LlamaParse
 """
 
 from .pdf_core import (
-    OpenDataLoaderCore,
+    PDFParser,
     PDFParseResult,
-    get_hybrid_url,
-    get_cuda_enabled,
-    create_pdf_core,
     parse_pdf,
-    parse_pdf_async
+    parse_pdf_async,
+    parse_pdf_url,
+    load_from_raw_output,
+    get_llamaparse_api_key,
+    get_llamaparse_tier,
+    get_data_dir,
+    get_raw_output_dir,
 )
 
 from .llm_core import (
@@ -28,14 +33,17 @@ from .llm_core import (
 )
 
 __all__ = [
-    # PDF Core
-    "OpenDataLoaderCore",
+    # PDF Core (LlamaParse only)
+    "PDFParser",
     "PDFParseResult",
-    "get_hybrid_url",
-    "get_cuda_enabled",
-    "create_pdf_core",
     "parse_pdf",
     "parse_pdf_async",
+    "parse_pdf_url",
+    "load_from_raw_output",
+    "get_llamaparse_api_key",
+    "get_llamaparse_tier",
+    "get_data_dir",
+    "get_raw_output_dir",
     # LLM Core
     "UnifiedLLMCore",
     "llm_core",

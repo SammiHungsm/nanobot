@@ -1,16 +1,16 @@
-<div align="center">
+﻿<div align="center">
   <img src="nanobot_logo.png" alt="nanobot" width="500">
   <h1>nanobot: Financial Report Analysis Agent</h1>
   <p>
     <img src="https://img.shields.io/badge/python-≥3.11-blue" alt="Python">
     <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
-    <img src="https://img.shields.io/badge/Docker-GPU+CUDA-5865F2" alt="Docker GPU">
+    <img src="https://img.shields.io/badge/LlamaParse-Cloud_API-orange" alt="LlamaParse">
   </p>
 </div>
 
 **nanobot** 是一个专注于金融年报/财务报告 PDF 解析与结构化数据提取的 AI Agent 系统。
 
-基于 [nanobot-ai](https://github.com/HKUDS/nanobot) 核心框架，结合 OpenDataLoader Hybrid (Docling GPU) 和 Vanna AI (Text-to-SQL)，实现从 PDF 到结构化数据库的完整自动化流程。
+基于 [nanobot-ai](https://github.com/HKUDS/nanobot) 核心框架，结合 **LlamaParse** (Cloud API) 和 **Vanna AI** (Text-to-SQL)，实现从 PDF 到结构化数据库的完整自动化流程。
 
 ---
 
@@ -24,27 +24,27 @@ nanobot/
 │   │   ├── context.py           #    Prompt 构建
 │   │   ├── memory.py            #    持久化记忆
 │   │   └── tools/               #    🛠️ Agent Tools (Python 实现)
-│   │       ├── pdf_parser.py    #       PDF 解析工具入口
+│   │       ├── pdf_parser.py    #       PDF 解析工具入口 (LlamaParse)
 │   │       ├── financial.py     #       财务数据查询工具
 │   │       ├── vanna_tool.py    #       Text-to-SQL 工具
 │   │       ├── db_ingestion_tools.py  #  数据入库工具
 │   │       └── multimodal_rag.py      #  图文关联 RAG
 │   │
 │   ├── core/                    #    📄 PDF 核心处理层
-│   │   └ pdf_core.py            #    OpenDataLoader 统一封装
+│   │   └ pdf_core.py            #    LlamaParse 统一封装
+│   │   └ llm_core.py            #    LLM 统一封装
 │   │
 │   ├── ingestion/               #    🔄 数据摄入 Pipeline (Python)
 │   │   ├── pipeline.py          #    主 Pipeline 协调器
 │   │   ├── agentic_pipeline.py  #    Agent-driven Pipeline
+│   │   ├── base_pipeline.py     #    基类 (模板方法模式)
 │   │   ├── stages/              #    ⚡ 5-Stage 处理流程
-│   │   │   ├── stage0_preprocessor.py   #  PDF 预处理 (分批/页码)
-│   │   │   ├── stage1_parser.py         #  Hybrid 解析 (Docling GPU)
+│   │   │   ├── stage0_preprocessor.py   #  PDF 预处理
+│   │   │   ├── stage1_parser.py         #  LlamaParse 解析
 │   │   │   ├── stage2_enrichment.py     #  图文关联/元数据增强
-│   │   │   ├── stage3_router.py         #  关键字路由 (定位目标页)
+│   │   │   ├── stage3_router.py         #  关键字路由
 │   │   │      └── stage4_extractor.py   #  LLM 结构化提取
 │   │   ├── extractors/          #    提取器 (Revenue, Personnel...)
-│   │   ├── parsers/             #    Parser 实现
-│   │   └ utils/                 #    工具函数 (表格合并等)
 │   │   └ repository/            #    数据库 Repository
 │   │   └ validators/            #    数据校验器
 │   │
@@ -53,7 +53,6 @@ nanobot/
 │   │   ├── ingestion/           #       摄入 Skill
 │   │   └ memory/                #       记忆管理 Skill
 │   │   └ github/                #       GitHub Skill
-│   │   └ weather/               #       天气 Skill
 │   │   └── ...                  #       其他 Skills
 │   │
 │   ├── providers/               #    🤖 LLM Providers
@@ -122,9 +121,9 @@ PDF 上传
     │
     ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  Stage 1: Parser (Python + OpenDataLoader Hybrid)           │
-│  ├─ 调用 OpenDataLoader Core                                │
-│  ├─ Hybrid 模式: Docling GPU (CUDA)                         │
+│  Stage 1: Parser (Python + LlamaParse Cloud)           │
+│  ├─ 调用 PDFParser                                │
+│  ├─ Agentic OCR: LlamaParse (CUDA)                         │
 │  ├─ 输出: Markdown + JSON Artifacts                          │
 │  ├─ 提取: Tables, Images, Text Chunks                       │
 │  └─ 跨页表格合并                                             │
@@ -177,9 +176,9 @@ PDF 上传
 
 | 处理层 | 实现方式 | 说明 |
 |--------|----------|------|
-| **PDF 解析** | Python (`OpenDataLoaderCore`) | 调用 Docling GPU 模型，不经过 LLM |
-| **表格提取** | Python (Hybrid Parser) | 端到端表格识别，不经过 LLM |
-| **图片提取** | Python (Hybrid Parser) | 端到端图片识别 + OCR，不经过 LLM |
+| **PDF 解析** | Python (`OpenDataLoaderCore`) | 调用 LlamaParse 模型，不经过 LLM |
+| **表格提取** | Python (PDFParser) | 端到端表格识别，不经过 LLM |
+| **图片提取** | Python (PDFParser) | 端到端图片识别 + OCR，不经过 LLM |
 | **跨页表格合并** | Python (`table_merger`) | 算法合并，不经过 LLM |
 | **关键字路由** | Python + LLM (`Stage3Router`) | LLM 判断页面相关性 |
 | **结构化提取** | Python + LLM (`Stage4Extractor`) | LLM 从表格/文字提取结构化数据 |
@@ -194,8 +193,8 @@ PDF 上传
 
 这些任务由 Python 代码直接执行，无需 LLM 参与，**速度快、成本低**：
 
-1. **PDF 解析 (Stage 1)**: OpenDataLoader Hybrid 模式调用 Docling 模型
-2. **表格/图片识别**: Docling GPU 模型端到端识别
+1. **PDF 解析 (Stage 1)**: LlamaParse Cloud 模式调用 Docling 模型
+2. **表格/图片识别**: LlamaParse 模型端到端识别
 3. **跨页表格合并**: 算法检测相邻表格并合并
 4. **图片 Base64 编码**: 自动转换临时目录图片为 Base64
 5. **数据入库**: Repository 层直接写入 PostgreSQL
@@ -276,7 +275,7 @@ open http://localhost:3000
 
 | 服务 | 端口 | 说明 |
 |------|------|------|
-| `nanobot-webui` | 3000 | Web UI + Hybrid Server |
+| `nanobot-webui` | 3000 | Web UI + LlamaParse |
 | `nanobot-gateway` | 8081, 18790 | Agent Gateway |
 | `postgres-financial` | 5433 | PostgreSQL + pgvector |
 | `vanna-service` | 8082 | Vanna AI (内部) |
@@ -629,7 +628,7 @@ Agent Tool
 ┌─────────────────────────────────────────────────────────────┐
 │  2. Pipeline 5-Stage 处理                                    │
 │     ├─ Stage 0: 验证 + 分批                                  │
-│     ├─ Stage 1: Docling GPU 解析                             │
+│     ├─ Stage 1: LlamaParse 解析                             │
 │     ├─ Stage 2: 图文关联 + 兜底写入                          │
 │     ├─ Stage 3: 关键字路由                                   │
 │     └─ Stage 4: LLM 结构化提取                               │
@@ -993,7 +992,7 @@ pytest tests/
 # 测试 PDF 解析
 python -m nanobot.ingestion.pipeline test.pdf
 
-# 测试 Hybrid Server
+# 测试 LlamaParse
 curl http://localhost:5002/health
 ```
 

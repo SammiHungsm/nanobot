@@ -1,5 +1,5 @@
 """
-Financial Tools for Nanobot Agent
+Financial Tools for Nanobot Agent (v3.2)
 
 Provides database query, document search, and entity resolution tools
 for the financial analysis skill.
@@ -8,8 +8,10 @@ Tools:
 1. query_financial_database - SQL queries for exact numbers
 2. search_documents - Text search for policies/commentary
 3. resolve_entity - CN/EN company name resolution
-4. parse_financial_pdf - PDF parsing with OpenDataLoader
-5. 🎯 v2.0: upsert_metric - Taxonomy-driven metric insertion (EAV + JSONB)
+4. parse_financial_pdf - PDF parsing with LlamaParse
+5. 🎯 v2.0: upsert_metric - Taxonomy-driven metric insertion
+
+🌟 v3.2: 使用 LlamaParse (移除 OpenDataLoader)
 """
 
 from typing import Dict, List, Any, Optional
@@ -29,8 +31,8 @@ from ..storage.financial_storage import (
 # Import entity resolver
 from .entity_resolver import resolve_company, search_companies, list_all_companies
 
-# Import PDF parser
-from .pdf_parser import OpenDataLoaderPDF, ParsedPDF
+# 🌟 v3.2: Import PDF parser (LlamaParse)
+from .pdf_parser import LlamaParsePDF, ParsedPDF
 
 # Import prompts (v2.0)
 from ..ingestion.extractors.prompts import get_metric_extraction_prompt
@@ -48,6 +50,9 @@ class ToolResult:
 class FinancialTools:
     """
     Financial analysis tools for Nanobot agent.
+    
+    🌟 v3.2: 使用 LlamaParse
+    """
     
     Example:
         tools = FinancialTools()
@@ -70,7 +75,7 @@ class FinancialTools:
         
         self._pg_storage: Optional[PostgresStorage] = None
         self._mongo_store: Optional[MongoDocumentStore] = None
-        self._pdf_parser: Optional[OpenDataLoaderPDF] = None
+        self._pdf_parser: Optional[LlamaParsePDF] = None  # 🌟 v3.2
         
         logger.info("FinancialTools initialized")
     
@@ -89,10 +94,10 @@ class FinancialTools:
         return self._mongo_store
     
     @property
-    def pdf_parser(self) -> OpenDataLoaderPDF:
-        """Get PDF parser"""
+    def pdf_parser(self) -> LlamaParsePDF:
+        """Get PDF parser (LlamaParse)"""
         if not self._pdf_parser:
-            self._pdf_parser = OpenDataLoaderPDF(hybrid_mode=False)
+            self._pdf_parser = LlamaParsePDF()  # 🌟 v3.2
         return self._pdf_parser
     
     # ========================================================================
@@ -307,7 +312,9 @@ class FinancialTools:
     def parse_financial_pdf(self, pdf_path: str,
                            save_raw: bool = True) -> ToolResult:
         """
-        Parse financial PDF with OpenDataLoader.
+        Parse financial PDF with LlamaParse.
+        
+        🌟 v3.2: 使用 LlamaParse
         
         Args:
             pdf_path: Path to PDF file
@@ -317,7 +324,7 @@ class FinancialTools:
             ToolResult with parsed content
         """
         try:
-            result = self.pdf_parser.parse(pdf_path, save_raw=save_raw)
+            result = self.pdf_parser.parse(pdf_path)
             
             return ToolResult(
                 success=True,
