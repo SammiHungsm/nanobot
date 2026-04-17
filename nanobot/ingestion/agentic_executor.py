@@ -52,32 +52,39 @@ class AgenticExecutor:
         """
         构建 OpenAI 格式的 Tools Schema
         
+        🌟 从 Tool 实例获取完整的 parameters 定义
+        
         Returns:
             List[Dict]: OpenAI 格式的 tools 列表
         """
         tools_schema = []
         
         for name, tool_func in self.tools_registry.items():
-            # 🌟 获取 Tool 的参数定义（如果有）
-            if hasattr(tool_func, 'parameters_schema'):
+            # 🌟 获取 Tool 实例（如果有）
+            tool_instance = getattr(tool_func, '__self__', None)
+            
+            # 🌟 获取 parameters 定义
+            if tool_instance and hasattr(tool_instance, 'parameters'):
+                parameters = tool_instance.parameters
+            elif hasattr(tool_func, 'parameters_schema'):
                 parameters = tool_func.parameters_schema
-            elif hasattr(tool_func, '__annotations__'):
-                # 从函数签名提取参数
-                params = {}
-                for key, type_hint in tool_func.__annotations__.items():
-                    if key == 'return':
-                        continue
-                    params[key] = {"type": "string"}  # 简化处理
-                parameters = {"type": "object", "properties": params}
             else:
-                parameters = {"type": "object", "properties": {}}
+                # Fallback: 空参数
+                parameters = {"type": "object", "properties": {}, "required": []}
+            
+            # 🌟 获取 description
+            description = ""
+            if tool_instance and hasattr(tool_instance, 'description'):
+                description = tool_instance.description
+            elif hasattr(tool_func, '__doc__'):
+                description = tool_func.__doc__ or f"Execute {name}"
             
             # 🌟 构建 OpenAI Tool Schema
             tools_schema.append({
                 "type": "function",
                 "function": {
                     "name": name,
-                    "description": getattr(tool_func, '__doc__', f"Execute {name}"),
+                    "description": description,
                     "parameters": parameters
                 }
             })

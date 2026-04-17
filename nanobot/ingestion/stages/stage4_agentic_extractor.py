@@ -1,5 +1,5 @@
 """
-Stage 5: Agentic 写入与行业分配 (v4.0 - 真正的 Tool Calling)
+Stage 4: Agentic 提取与动态写入 (v4.0 - 真正的 Tool Calling)
 
 职责：
 - 🌟 真正的 Agentic Workflow（Tool Calling Loop）
@@ -8,13 +8,16 @@ Stage 5: Agentic 写入与行业分配 (v4.0 - 真正的 Tool Calling)
 - Continuous Learning Loop（搜索包底库 → 注册关键词 → 回填）
 
 🌟 v4.0 架构：
-1. 从 db_ingestion_tools.py 导入 16 个 Tools
+1. 从 db_ingestion_tools.py 导入 12 个 Tools
 2. 构建 Tools Registry + Schema
 3. 调用 AgenticExecutor.run()
 4. LLM 自己决定：
    - search_document_pages 找遗漏数据
    - register_new_keyword 注册新关键词
    - backfill_from_fallback 回填数据
+
+🌟 Single Source of Truth: 
+这是系统中唯一的提取入口，不再有旧版 Stage 4 或 Toggle 机制
 """
 
 import os
@@ -29,8 +32,11 @@ from nanobot.core.llm_core import llm_core
 from nanobot.ingestion.agentic_executor import AgenticExecutor, build_tools_registry_from_classes
 
 
-class Stage5AgenticWriter:
-    """Stage 5: Agentic 写入与行业分配 (v4.0 - 真正的 Tool Calling)"""
+class Stage4AgenticExtractor:
+    """Stage 4: Agentic 提取与动态写入 (v4.0 - Tool Calling)
+    
+    🌟 唯一的提取入口 - 不再有 Toggle，不再有重复逻辑
+    """
     
     @staticmethod
     def _build_tools_registry(db_client: Any = None) -> Dict[str, Any]:
@@ -38,6 +44,8 @@ class Stage5AgenticWriter:
         构建 Tools Registry
         
         🌟 导入所有 db_ingestion_tools 并构建 Registry
+        
+        v4.0: 19 个完整 Tools（包括新增的 3 个）
         
         Returns:
             Dict[str, Callable]: Tool 名称 → execute 函数
@@ -53,6 +61,9 @@ class Stage5AgenticWriter:
             InsertKeyPersonnelTool,
             InsertFinancialMetricsTool,
             InsertShareholdingTool,
+            InsertRevenueBreakdownTool,  # 🆕 致命遗漏修复
+            InsertEntityRelationTool,    # 🆕 知识图谱修复
+            InsertMarketDataTool,        # 🆕 市场数据修复
             SearchDocumentPagesTool,
             BackfillFromFallbackTool,
         )
@@ -69,8 +80,11 @@ class Stage5AgenticWriter:
             InsertKeyPersonnelTool,
             InsertFinancialMetricsTool,
             InsertShareholdingTool,
-            SearchDocumentPagesTool,  # 🌟 Continuous Learning
-            BackfillFromFallbackTool,  # 🌟 Continuous Learning
+            InsertRevenueBreakdownTool,  # 🆕
+            InsertEntityRelationTool,    # 🆕
+            InsertMarketDataTool,        # 🆕
+            SearchDocumentPagesTool,     # 🌟 Continuous Learning
+            BackfillFromFallbackTool,    # 🌟 Continuous Learning
         ]
         
         return build_tools_registry_from_classes(tool_classes)
@@ -122,7 +136,7 @@ class Stage5AgenticWriter:
         logger.info(f"🎯 Stage 5: Agentic 写入（v4.0 Tool Calling）...")
         
         # 🌟 构建 Tools Registry
-        tools_registry = Stage5AgenticWriter._build_tools_registry(db_client)
+        tools_registry = Stage4AgenticExtractor._build_tools_registry(db_client)
         
         # 🌟 构建 System Prompt
         if is_index_report:
@@ -144,29 +158,56 @@ class Stage5AgenticWriter:
 {report_context}
 
 📌 可用的 Tools（你可以自由调用）：
-1. get_db_schema - 查看数据库结构
+1. get_db_schema - 查看数据库结构（🌟 第一步必须调用！）
 2. smart_insert_document - 智能写入文档（支持规则 A/B）
-3. insert_financial_metrics - 写入财务指标
-4. insert_key_personnel - 写入关键人员
-5. insert_shareholding - 写入股东结构
-6. register_new_keyword - 注册新关键词（发现特殊标题时使用）
-7. search_document_pages - 搜索包底库找遗漏数据（🌟 关键！）
-8. backfill_from_fallback - 回填数据到结构化表
-9. update_document_status - 更新文档状态
-10. create_review_record - 创建审核记录（不确定时使用）
+3. insert_financial_metrics - 写入财务指标（利润、资产）
+4. insert_key_personnel - 写入关键人员（董事、高管）
+5. insert_shareholding - 写入股东结构（持股比例）
+6. insert_revenue_breakdown - 写入收入分解 🌟 新增！（按地区/业务划分）
+7. insert_entity_relation - 写入实体关系 🌟 新增！（知识图谱）
+8. insert_market_data - 写入市场数据 🌟 新增！（PE、市值、股价）
+9. register_new_keyword - 注册新关键词（发现特殊标题时使用）
+10. search_document_pages - 搜索包底库找遗漏数据（🌟 关键！）
+11. backfill_from_fallback - 回填数据到结构化表
+12. update_dynamic_attributes - 更新 JSONB 动态属性（🌟 新字段用这个！）
+13. update_document_status - 更新文档状态
+14. create_review_record - 创建审核记录（不确定时使用）
 
-🌟 Continuous Learning Loop：
-如果在结构化表找不到数据，请：
-① 调用 search_document_pages 搜索包底库
-② 发现新标题 → register_new_keyword 注册
-③ 找到数据 → backfill_from_fallback 回填
+🌟 执行流程（必须严格遵守）：
 
-执行步骤：
-1. 先调用 get_db_schema 了解数据库结构
-2. 分析 PDF 内容，决定写入哪些表
-3. 调用对应的 insert_* Tools
-4. 如果找不到数据，搜索包底库并回填
-5. 完成后调用 update_document_status 标记完成
+Step 1: 摸清底细 (Schema Compare)
+- 第一步必须调用 get_db_schema 了解数据库结构
+- 查看有哪些表、有哪些 JSONB 字段
+
+Step 2: 分析 PDF 内容
+- 阅读 PDF 内容，识别数据类型
+- 对比 Schema，决定写入哪些表
+
+Step 3: 动态写入 🌟 关键！（选择正确的 Tool）
+- 见到财务数字（利润、资产、负债） → insert_financial_metrics
+- 见到高管/董事名单 → insert_key_personnel
+- 见到股东持股比例 → insert_shareholding
+- 见到按地区/业务划分的收入 → insert_revenue_breakdown 🌟 新增！
+- 见到市场数据（PE ratio、市值、股价） → insert_market_data 🌟 新增！
+- 见到人物-公司关系（张三是腾讯CEO） → insert_entity_relation 🌟 新增！
+- 见到新名词/新标题（如「按地区划分之收益」）→ 
+  ① register_new_keyword 注册
+  ② update_dynamic_attributes 写入 JSONB
+
+Step 4: Continuous Learning Loop
+- 如果结构化表找不到数据 → search_document_pages 搜索包底库
+- 找到后 → backfill_from_fallback 回填
+
+Step 5: 完成
+- update_document_status 标记完成
+
+⚠️ 重要：
+- 不要返回大 JSON，而是**逐一调用 Tools**
+- 发现新字段时，先注册关键词，再写入 JSONB
+- 不确定时，创建审核记录
+- 选择正确的 Tool！（revenue_breakdown ≠ financial_metrics）
+
+开始执行！
 """
         
         # 🌟 合并 artifacts 内容作为用户消息

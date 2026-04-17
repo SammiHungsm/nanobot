@@ -1,12 +1,12 @@
 """
-Stage 6: Vanna 训练与后续处理 (v3.2)
+Stage 5: Vanna 训练与后续处理 (v4.0)
 
 职责：
 - 触发 Vanna Text-to-SQL 训练
 - 文档标记完成
 - 清理临时文件
 
-🌟 v3.2: 独立的 Stage 6
+🌟 v4.0: 简化后的 Stage 5（原 Stage 6）
 """
 
 import os
@@ -17,8 +17,8 @@ from datetime import datetime
 from loguru import logger
 
 
-class Stage6VannaTraining:
-    """Stage 6: Vanna 训练与后续处理"""
+class Stage5VannaTraining:
+    """Stage 5: Vanna 训练与后续处理"""
     
     @staticmethod
     async def train_vanna(

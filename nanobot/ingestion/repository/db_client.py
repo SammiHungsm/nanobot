@@ -1499,83 +1499,73 @@ class DBClient:
     async def insert_raw_artifact(
         self,
         artifact_id: str,
-        doc_id: str = None,  # 🌟 可选：用于向后兼容（如果没有传入 document_id）
-        document_id: int = None,  # 🌟 新增：直接传入整数 ID（解决 N+1 问题）
-        company_id: Optional[int] = None,  # 🌟 修正：添加默认值，保留參數但不寫入此表
-        file_type: str = None,  # 🌟 修正：添加默认值
-        file_path: str = None,  # 🌟 修正：添加默认值
+        doc_id: str = None,
+        document_id: int = None,
+        artifact_type: str = None,  # 🌟 修正：使用 artifact_type
+        content: str = None,  # 🌟 新增：Markdown 原文内容（修复 Bug）
+        content_json: Dict[str, Any] = None,  # 🌟 新增：结构化内容
+        file_path: str = None,
         page_num: int = None,
-        metadata: str = None,
-        file_size: int = 0  # 參數保留但不寫入此表（Schema v2.3 已刪除）
+        raw_text: str = None  # 🌟 新增：纯文本摘要
     ) -> bool:
         """
         插入 Raw Artifact 記錄
         
-        🌟 Schema v2.3 變更：
-        - file_type → artifact_type (值: table, image_screenshot, text_chunk, chart)
-        - file_size_bytes, source_file → 已刪除
-        - doc_id (字串) → document_id (Integer)
-        
-        🌟 N+1 效能優化：
-        - 新增 document_id 參數，可直接傳入整數 ID
-        - 如果傳入 document_id，則跳過子查詢（效能提升）
-        - 如果只傳入 doc_id，則執行子查詢（向后兼容）
+        🌟 Bug 修复：添加 content 欄位，支持 Markdown 原文存储
         
         Args:
             artifact_id: Artifact ID
             doc_id: 文檔 ID（字串，用于向后兼容）
             document_id: 文檔 ID（整數，推薦使用）
-            company_id: 公司 ID（參數保留但不寫入）
-            file_type: 文件類型 (table_json, image, etc.)
+            artifact_type: Artifact 类型（table, image, vision_analysis, text_chunk）
+            content: Markdown 原文内容 🌟 新增
+            content_json: 结构化内容（JSON） 🌟 新增
             file_path: 文件路徑
             page_num: 頁碼
-            metadata: 元數據 JSON 字串
-            file_size: 文件大小（參數保留但不寫入）
+            raw_text: 纯文本摘要
             
         Returns:
             bool: 是否成功
         """
         try:
-            # 🌟 修正：轉換 file_type 為 artifact_type
-            artifact_type = "table" if "table" in file_type.lower() else \
-                            "image_screenshot" if "image" in file_type.lower() else \
-                            "text_chunk" if "text" in file_type.lower() else \
-                            "chart" if "chart" in file_type.lower() else \
-                            file_type
+            import json
             
             # 🌟 使用连接池（避免并发冲突）
             async with self.connection() as conn:
-                # 🌟 N+1 效能優化：优先使用传入的 document_id
+                # N+1 效能優化：优先使用传入的 document_id
                 actual_document_id = document_id
                 
                 if actual_document_id is None and doc_id:
-                    # 向后兼容：从 doc_id 查询 document_id
                     actual_document_id = await conn.fetchval(
                         "SELECT id FROM documents WHERE doc_id = $1", doc_id
                     )
                 
                 if actual_document_id is None:
-                    logger.error(f"❌ 无法获取 document_id (doc_id={doc_id}, document_id={document_id})")
+                    logger.error(f"❌ 无法获取 document_id")
                     return False
                 
-                # 🌟 直接使用 document_id，移除子查询
+                # 🌟 Bug 修复：添加 content 欄位
                 await conn.execute(
                     """
                     INSERT INTO raw_artifacts (
                         artifact_id, document_id, artifact_type,
-                        file_path, page_num, parsed_data
-                    ) VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+                        content, parsed_data, file_path, page_num, raw_text
+                    ) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8)
                     ON CONFLICT (artifact_id) DO UPDATE SET
-                        file_path = $4,
-                        page_num = $5,
-                        parsed_data = $6::jsonb
+                        content = $4,
+                        parsed_data = $5::jsonb,
+                        file_path = $6,
+                        page_num = $7,
+                        raw_text = $8
                     """,
                     artifact_id,
-                    actual_document_id,  # 🌟 直接传入整数，不再使用子查询
+                    actual_document_id,
                     artifact_type,
+                    content,  # 🌟 Bug 修复：添加 content
+                    json.dumps(content_json) if content_json else '{}',
                     file_path,
                     page_num,
-                    metadata or '{}'
+                    raw_text
                 )
             
             logger.debug(f"✅ Artifact {artifact_id} ({artifact_type}) 已保存")
@@ -1695,3 +1685,264 @@ class DBClient:
         except Exception as e:
             logger.error(f"❌ 获取 Entity relations 失败: {e}")
             return []
+    
+    # ===========================================
+    # 🌟 系统级方法（Agent 无法处理）
+    # ===========================================
+    
+    async def insert_processing_history(
+        self,
+        document_id: int,
+        stage: str,
+        status: str,
+        message: str = None,
+        duration_ms: int = None,
+        artifacts_count: int = None
+    ) -> bool:
+        """
+        🌟 插入 Pipeline 状态追踪记录
+        
+        用于记录各 Stage 的执行状态（由 Orchestrator 调用，不是 Agent）
+        
+        Args:
+            document_id: 文档 ID
+            stage: 阶段名称（stage0, stage1, ..., stage8）
+            status: 状态（success/failed/skipped）
+            message: 消息
+            duration_ms: 执行时间（毫秒）
+            artifacts_count: 处理的 artifacts 数量
+            
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            async with self.connection() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO document_processing_history 
+                    (document_id, stage_name, status, message, duration_ms, artifacts_count, timestamp)
+                    VALUES ($1, $2, $3, $4, $5, $6, NOW())
+                    """,
+                    document_id,
+                    stage,
+                    status,
+                    message,
+                    duration_ms,
+                    artifacts_count
+                )
+                logger.debug(f"✅ Processing history: {stage} - {status}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"❌ 插入 Processing history 失败: {e}")
+            return False
+    
+    async def insert_document_chunk(
+        self,
+        document_id: int,
+        page_num: int,
+        chunk_index: int,
+        chunk_text: str,
+        embedding: List[float] = None,
+        metadata: Dict[str, Any] = None
+    ) -> bool:
+        """
+        🌟 插入 RAG 向量切片
+        
+        由 Stage7VectorIndexer 调用，不是 Agent
+        
+        Args:
+            document_id: 文档 ID
+            page_num: 页码
+            chunk_index: 切片索引
+            chunk_text: 切片文本
+            embedding: Embedding 向量
+            metadata: 元数据
+            
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            async with self.connection() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO document_chunks 
+                    (document_id, page_num, chunk_index, chunk_text, embedding, metadata, created_at)
+                    VALUES ($1, $2, $3, $4, $5::vector, $6::jsonb, NOW())
+                    ON CONFLICT (document_id, page_num, chunk_index) DO UPDATE SET
+                        chunk_text = $4,
+                        embedding = $5::vector,
+                        metadata = $6::jsonb
+                    """,
+                    document_id,
+                    page_num,
+                    chunk_index,
+                    chunk_text,
+                    embedding or [],
+                    json.dumps(metadata) if metadata else '{}'
+                )
+                logger.debug(f"✅ Chunk {page_num}-{chunk_index} 已保存")
+                return True
+                
+        except Exception as e:
+            logger.error(f"❌ 插入 document_chunks 失败: {e}")
+            return False
+    
+    async def insert_document_table(
+        self,
+        document_id: int,
+        page_num: int,
+        table_index: int,
+        table_json: Dict[str, Any],
+        table_markdown: str = None
+    ) -> bool:
+        """
+        🌟 插入表格数据
+        
+        由 Stage1Parser 调用，不是 Agent
+        
+        Args:
+            document_id: 文档 ID
+            page_num: 页码
+            table_index: 表格索引
+            table_json: 表格 JSON 数据
+            table_markdown: Markdown 格式
+            
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            async with self.connection() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO document_tables 
+                    (document_id, page_num, table_index, table_json, table_markdown, created_at)
+                    VALUES ($1, $2, $3, $4::jsonb, $5, NOW())
+                    ON CONFLICT (document_id, page_num, table_index) DO UPDATE SET
+                        table_json = $4::jsonb,
+                        table_markdown = $5
+                    """,
+                    document_id,
+                    page_num,
+                    table_index,
+                    json.dumps(table_json),
+                    table_markdown
+                )
+                logger.debug(f"✅ Table {page_num}-{table_index} 已保存")
+                return True
+                
+        except Exception as e:
+            logger.error(f"❌ 插入 document_tables 失败: {e}")
+            return False
+    
+    async def insert_review_queue(
+        self,
+        document_id: int,
+        review_type: str,
+        priority: int = 5,
+        issue_description: str = None,
+        confidence_score: float = None,
+        suggested_action: str = None,
+        auto_extracted_data: Dict[str, Any] = None
+    ) -> bool:
+        """
+        🌟 插入人工审核队列
+        
+        由 Stage6Validator 或 Agent 调用（当 confidence_score < 0.8）
+        
+        Args:
+            document_id: 文档 ID
+            review_type: 审核类型（data_quality/entity_resolution/missing_data）
+            priority: 优先级（1-10，越高越紧急）
+            issue_description: 问题描述
+            confidence_score: 置信度
+            suggested_action: 建议操作
+            auto_extracted_data: 自动提取的数据
+            
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            async with self.connection() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO review_queue 
+                    (document_id, review_type, priority, issue_description, 
+                     confidence_score, suggested_action, auto_extracted_data, 
+                     status, created_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, 'pending', NOW())
+                    """,
+                    document_id,
+                    review_type,
+                    priority,
+                    issue_description,
+                    confidence_score,
+                    suggested_action,
+                    json.dumps(auto_extracted_data) if auto_extracted_data else '{}'
+                )
+                logger.info(f"✅ Review queue 已添加: {review_type} (priority={priority})")
+                return True
+                
+        except Exception as e:
+            logger.error(f"❌ 插入 Review queue 失败: {e}")
+            return False
+    
+    async def get_document_pages(
+        self,
+        document_id: int,
+        page_nums: List[int] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        🌟 获取文档页面
+        
+        用于 Stage7VectorIndexer 和 Stage8Archiver
+        
+        Args:
+            document_id: 文档 ID
+            page_nums: 页码列表（可选，如果为 None 则返回所有页面）
+            
+        Returns:
+            List[Dict]: 页面列表
+        """
+        try:
+            async with self.connection() as conn:
+                if page_nums:
+                    rows = await conn.fetch(
+                        """
+                        SELECT * FROM document_pages 
+                        WHERE document_id = $1 AND page_num = ANY($2::int[])
+                        ORDER BY page_num
+                        """,
+                        document_id,
+                        page_nums
+                    )
+                else:
+                    rows = await conn.fetch(
+                        """
+                        SELECT * FROM document_pages 
+                        WHERE document_id = $1
+                        ORDER BY page_num
+                        """,
+                        document_id
+                    )
+                    
+                return [dict(row) for row in rows]
+                
+        except Exception as e:
+            logger.error(f"❌ 获取 document_pages 失败: {e}")
+            return []
+    
+    async def create_review_record(
+        self,
+        document_id: int,
+        review_type: str,
+        priority: int,
+        issue_description: str
+    ) -> bool:
+        """向后兼容方法（调用 insert_review_queue）"""
+        return await self.insert_review_queue(
+            document_id=document_id,
+            review_type=review_type,
+            priority=priority,
+            issue_description=issue_description
+        )

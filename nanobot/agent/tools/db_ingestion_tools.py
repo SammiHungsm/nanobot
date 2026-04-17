@@ -1086,6 +1086,335 @@ class InsertShareholdingTool(Tool):
             await db.close()
 
 
+class InsertRevenueBreakdownTool(Tool):
+    """
+    [Tool] 写入收入分解数据 🌟 致命遗漏修复
+    
+    功能：
+    - 写入 revenue_breakdown 表
+    - 支持 business/geography/product 三种 segment_type
+    - Agent 见到「按地区划分收入」时必须用这个 Tool
+    
+    Schema v2.3:
+    - segment_name, segment_type (business/geography/product)
+    - revenue_amount, revenue_percentage
+    """
+    
+    @property
+    def name(self) -> str:
+        return "insert_revenue_breakdown"
+    
+    @property
+    def description(self) -> str:
+        return (
+            "Insert revenue breakdown data into revenue_breakdown table. "
+            "Use this when you find revenue split by business segments, geography, or products. "
+            "⚠️ This is NOT the same as financial_metrics! Use this specifically for revenue breakdown tables."
+        )
+    
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "company_id": {"type": "integer", "description": "Company ID"},
+                "year": {"type": "integer", "description": "Financial year"},
+                "document_id": {"type": ["integer", "null"], "description": "Source document ID"},
+                "segments": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "segment_name": {"type": "string", "description": "Segment name (e.g., 'Europe', 'Hong Kong', 'Consumer Products')"},
+                            "segment_type": {
+                                "type": "string",
+                                "enum": ["business", "geography", "product"],
+                                "description": "Type of segmentation"
+                            },
+                            "revenue_amount": {"type": ["number", "null"], "description": "Revenue amount in original currency"},
+                            "revenue_percentage": {"type": ["number", "null"], "description": "Percentage of total revenue"},
+                            "currency": {"type": "string", "default": "HKD", "description": "Currency code"}
+                        },
+                        "required": ["segment_name"]
+                    },
+                    "description": "List of revenue segments"
+                }
+            },
+            "required": ["company_id", "year", "segments"]
+        }
+    
+    @property
+    def read_only(self) -> bool:
+        return False
+    
+    async def execute(self, company_id: int, year: int, segments: List[Dict], document_id: Optional[int] = None) -> str:
+        """写入收入分解"""
+        from nanobot.ingestion.repository.db_client import DBClient
+        
+        db = DBClient()
+        await db.connect()
+        
+        try:
+            inserted_count = 0
+            
+            async with db.connection() as conn:
+                for seg in segments:
+                    await conn.execute(
+                        """
+                        INSERT INTO revenue_breakdown 
+                        (company_id, year, segment_name, segment_type, revenue_amount, 
+                         revenue_percentage, currency, source_document_id)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                        ON CONFLICT (company_id, year, segment_name) 
+                        DO UPDATE SET 
+                            revenue_amount = $5,
+                            revenue_percentage = $6,
+                            source_document_id = $8
+                        """,
+                        company_id,
+                        year,
+                        seg.get("segment_name"),
+                        seg.get("segment_type", "geography"),
+                        seg.get("revenue_amount"),
+                        seg.get("revenue_percentage"),
+                        seg.get("currency", "HKD"),
+                        document_id
+                    )
+                    inserted_count += 1
+            
+            logger.info(f"✅ 写入 {inserted_count} 个收入分解项")
+            
+            return json.dumps({
+                "success": True,
+                "company_id": company_id,
+                "year": year,
+                "inserted_count": inserted_count,
+                "message": f"✅ 写入 {inserted_count} 个收入分解项到 revenue_breakdown 表"
+            }, indent=2, ensure_ascii=False)
+            
+        except Exception as e:
+            logger.error(f"❌ 写入收入分解失败: {e}")
+            return json.dumps({"success": False, "error": str(e)}, indent=2)
+        finally:
+            await db.close()
+
+
+class InsertEntityRelationTool(Tool):
+    """
+    [Tool] 写入实体关系（知识图谱） 🌟 知识图谱遗漏修复
+    
+    功能：
+    - 写入 entity_relations 表
+    - 支持 person/company/event/location 四种实体类型
+    - 支持 CEO_of/partner_of/acquired/located_in 等关系
+    
+    使用场景：
+    - Agent 读到「张三是腾讯的CEO」→ 写入实体关系
+    - Agent 读到「公司A收购公司B」→ 写入收购关系
+    """
+    
+    @property
+    def name(self) -> str:
+        return "insert_entity_relation"
+    
+    @property
+    def description(self) -> str:
+        return (
+            "Insert entity relation (knowledge graph) into entity_relations table. "
+            "Use this when you find relationships like 'Person A is CEO of Company B', "
+            "'Company A acquired Company B', or 'Person X located in Region Y'. "
+            "Supports person/company/event/location entity types."
+        )
+    
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "document_id": {"type": "integer", "description": "Source document ID"},
+                "source_entity_type": {
+                    "type": "string",
+                    "enum": ["person", "company", "event", "location"],
+                    "description": "Type of the source entity"
+                },
+                "source_entity_name": {"type": "string", "description": "Name of the source entity"},
+                "relation_type": {
+                    "type": "string",
+                    "description": "Type of relation (e.g., 'CEO_of', 'partner_of', 'acquired', 'located_in', 'subsidiary_of')"
+                },
+                "target_entity_type": {
+                    "type": "string",
+                    "enum": ["person", "company", "event", "location"],
+                    "description": "Type of the target entity"
+                },
+                "target_entity_name": {"type": "string", "description": "Name of the target entity"},
+                "confidence_score": {
+                    "type": "number",
+                    "default": 0.8,
+                    "description": "Confidence of the extraction (0.0-1.0)"
+                },
+                "event_year": {"type": ["integer", "null"], "description": "Year of the event/relation"}
+            },
+            "required": ["document_id", "source_entity_type", "source_entity_name", 
+                         "relation_type", "target_entity_type", "target_entity_name"]
+        }
+    
+    @property
+    def read_only(self) -> bool:
+        return False
+    
+    async def execute(
+        self,
+        document_id: int,
+        source_entity_type: str,
+        source_entity_name: str,
+        relation_type: str,
+        target_entity_type: str,
+        target_entity_name: str,
+        confidence_score: float = 0.8,
+        event_year: Optional[int] = None
+    ) -> str:
+        """写入实体关系"""
+        from nanobot.ingestion.repository.db_client import DBClient
+        
+        db = DBClient()
+        await db.connect()
+        
+        try:
+            async with db.connection() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO entity_relations 
+                    (document_id, source_entity_type, source_entity_name, 
+                     relation_type, target_entity_type, target_entity_name,
+                     extraction_confidence, event_year)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                    """,
+                    document_id,
+                    source_entity_type,
+                    source_entity_name,
+                    relation_type,
+                    target_entity_type,
+                    target_entity_name,
+                    confidence_score,
+                    event_year
+                )
+            
+            logger.info(f"✅ 写入实体关系: {source_entity_name} → {relation_type} → {target_entity_name}")
+            
+            return json.dumps({
+                "success": True,
+                "relation": f"{source_entity_name} → {relation_type} → {target_entity_name}",
+                "confidence": confidence_score,
+                "message": f"✅ 知识图谱关系已写入"
+            }, indent=2, ensure_ascii=False)
+            
+        except Exception as e:
+            logger.error(f"❌ 写入实体关系失败: {e}")
+            return json.dumps({"success": False, "error": str(e)}, indent=2)
+        finally:
+            await db.close()
+
+
+class InsertMarketDataTool(Tool):
+    """
+    [Tool] 写入市场数据 🌟 市场数据遗漏修复
+    
+    功能：
+    - 写入 market_data 表
+    - 支持 PE Ratio, Market Cap, 股价等市场指标
+    
+    Schema v2.3:
+    - metric_name (pe_ratio, market_cap, stock_price)
+    - value, date
+    """
+    
+    @property
+    def name(self) -> str:
+        return "insert_market_data"
+    
+    @property
+    def description(self) -> str:
+        return (
+            "Insert market data (PE ratio, market cap, stock price) into market_data table. "
+            "Use this when you find market-related figures on the first page of annual reports. "
+            "⚠️ This is different from financial_metrics (which are for revenue/profit/assets)."
+        )
+    
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "company_id": {"type": "integer", "description": "Company ID"},
+                "document_id": {"type": "integer", "description": "Source document ID"},
+                "metrics": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "metric_name": {
+                                "type": "string",
+                                "description": "Metric name (e.g., 'pe_ratio', 'market_cap', 'stock_price')"
+                            },
+                            "value": {"type": "number", "description": "Value"},
+                            "unit": {"type": ["string", "null"], "description": "Unit (e.g., 'HKD', 'billion')"},
+                            "date": {"type": ["string", "null"], "description": "Date of the data"}
+                        },
+                        "required": ["metric_name", "value"]
+                    },
+                    "description": "List of market data metrics"
+                }
+            },
+            "required": ["company_id", "document_id", "metrics"]
+        }
+    
+    @property
+    def read_only(self) -> bool:
+        return False
+    
+    async def execute(self, company_id: int, document_id: int, metrics: List[Dict]) -> str:
+        """写入市场数据"""
+        from nanobot.ingestion.repository.db_client import DBClient
+        
+        db = DBClient()
+        await db.connect()
+        
+        try:
+            inserted_count = 0
+            
+            async with db.connection() as conn:
+                for metric in metrics:
+                    await conn.execute(
+                        """
+                        INSERT INTO market_data 
+                        (company_id, document_id, metric_name, value, unit, date)
+                        VALUES ($1, $2, $3, $4, $5, $6)
+                        """,
+                        company_id,
+                        document_id,
+                        metric.get("metric_name"),
+                        metric.get("value"),
+                        metric.get("unit"),
+                        metric.get("date")
+                    )
+                    inserted_count += 1
+            
+            logger.info(f"✅ 写入 {inserted_count} 个市场数据指标")
+            
+            return json.dumps({
+                "success": True,
+                "inserted_count": inserted_count,
+                "message": f"✅ 写入 {inserted_count} 个市场数据到 market_data 表"
+            }, indent=2, ensure_ascii=False)
+            
+        except Exception as e:
+            logger.error(f"❌ 写入市场数据失败: {e}")
+            return json.dumps({"success": False, "error": str(e)}, indent=2)
+        finally:
+            await db.close()
+
+
 class CleanupLowPerformanceKeywordsTool(Tool):
     """
     [Tool] 清理低效能關鍵字（反向學習）
@@ -1362,30 +1691,48 @@ class BackfillFromFallbackTool(Tool):
 
 def register_ingestion_tools(registry) -> None:
     """
-    註冊所有攝入相關 Tools
+    註冊所有攝入相關 Tools (v4.0 - 16 個完整 Tools)
+    
+    🌟 v4.0 补齐所有缺失的 Tools：
+    - InsertRevenueBreakdownTool 🆕 致命遗漏修复
+    - InsertEntityRelationTool 🆕 知识图谱修复
+    - InsertMarketDataTool 🆕 市场数据修复
     
     Usage:
         from nanobot.agent.tools.db_ingestion_tools import register_ingestion_tools
         register_ingestion_tools(agent_loop.tools)
     """
+    # 🌟 核心 Tools
     registry.register(GetDBSchemaTool())
     registry.register(SmartInsertDocumentTool())
     registry.register(UpdateDocumentStatusTool())
     registry.register(UpdateDynamicAttributesTool())
     registry.register(CreateReviewRecordTool())
+    
+    # 🌟 知识库管理 Tools
     registry.register(RegisterNewKeywordTool())
     registry.register(GetKeywordStatsTool())
     registry.register(CleanupLowPerformanceKeywordsTool())
     registry.register(GetKeywordContextTool())
+    
+    # 🌟 数据写入 Tools (完整版)
     registry.register(InsertKeyPersonnelTool())
     registry.register(InsertFinancialMetricsTool())
     registry.register(InsertShareholdingTool())
-    registry.register(SearchDocumentPagesTool())  # 🌟 Continuous Learning
-    registry.register(BackfillFromFallbackTool())  # 🌟 Continuous Learning
+    registry.register(InsertRevenueBreakdownTool())  # 🆕 致命遗漏修复
+    registry.register(InsertEntityRelationTool())    # 🆕 知识图谱修复
+    registry.register(InsertMarketDataTool())        # 🆕 市场数据修复
+    
+    # 🌟 Continuous Learning Loop Tools
+    registry.register(SearchDocumentPagesTool())
+    registry.register(BackfillFromFallbackTool())
     
     # 🌟 Multimodal RAG Tools (跨模態圖文檢索)
-    from nanobot.agent.tools.multimodal_rag import GetChartContextTool, GetChartContextByTitleTool
-    registry.register(GetChartContextTool())
-    registry.register(GetChartContextByTitleTool())
+    try:
+        from nanobot.agent.tools.multimodal_rag import GetChartContextTool, GetChartContextByTitleTool
+        registry.register(GetChartContextTool())
+        registry.register(GetChartContextByTitleTool())
+    except ImportError:
+        logger.warning("⚠️ Multimodal RAG tools not available")
     
-    logger.info("✅ Registered 16 ingestion tools including Multimodal RAG tools")
+    logger.info("✅ Registered 19 ingestion tools (including 3 new Tools: revenue_breakdown, entity_relation, market_data)")
