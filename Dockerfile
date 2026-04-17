@@ -34,15 +34,16 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     chardet openai tiktoken psycopg2-binary vanna[postgres] aiohttp \
     fastapi uvicorn asyncpg
 
-# 🚀 Install CPU-only PyTorch with cache (2-3GB, this is the slow part)
+# 🚀 Install CPU-only PyTorch with cache (用于本地 embedding)
+# 🌟 如果没有 embedding API（OpenAI/DashScope），需要本地 torch
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --index-url https://download.pytorch.org/whl/cpu \
     torch==2.5.1 \
     torchvision==0.20.1
 
-# Install opendataloader-pdf with CPU-only dependencies
+# 🌟 Install LlamaParse Cloud API (替代 OpenDataLoader)
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install opendataloader-pdf[cpu]>=2.2.0
+    pip install llama_cloud>=2.3.0
 
 # Install nanobot package itself
 RUN --mount=type=cache,target=/root/.cache/pip \

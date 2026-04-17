@@ -81,17 +81,8 @@ class VannaSQL:
     
     def _resolve_env_vars(self, url: str) -> str:
         """Resolve ${VAR} or ${VAR:default} patterns in URL"""
-        import re
-        
-        def replace_var(match):
-            var_expr = match.group(1)
-            if ':' in var_expr:
-                var_name, default = var_expr.split(':', 1)
-                return os.getenv(var_name, default)
-            else:
-                return os.getenv(var_expr, match.group(0))
-        
-        return re.sub(r'\$\{([^}]+)\}', replace_var, url)
+        from nanobot.utils.helpers import resolve_env_vars
+        return resolve_env_vars(url)
     
     def _load_training_state(self):
         """Load training state from disk (Fix #4: Persist training state)"""

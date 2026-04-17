@@ -33,7 +33,7 @@ services:
       # 🌟 GPU 配置
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-      # 🌟 Torch 配置
+      # 🌟 Torch 配置（用于本地 embedding）
       - TORCH_DEVICE=cuda
       - CUDA_VISIBLE_DEVICES=0
       # 🌟 LLM Backend（可选：local 或 ollama）

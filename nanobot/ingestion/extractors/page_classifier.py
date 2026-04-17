@@ -16,16 +16,19 @@ from typing import Dict, List, Optional
 from loguru import logger
 
 # 導入統一的 LLM 客戶端
-# 🌟 使用统一的 llm_core
+# 🌟 使用统一的 llm_core 和 LLMMixin
 from nanobot.core.llm_core import llm_core
+from nanobot.ingestion.utils.llm_mixin import LLMMixin
 
 
-class PageClassifier:
+class PageClassifier(LLMMixin):
     """
     LLM 智能頁面路由器
     
     使用 LLM 進行語義分析，自動識別包含目標數據的頁面。
     完全消除 hardcode keywords 的需求。
+    
+    🌟 使用 LLMMixin 獲取統一的 LLM 客戶端
     """
     
     def __init__(self):
@@ -34,23 +37,8 @@ class PageClassifier:
         
         使用統一的 LLM 客戶端，不再手動管理 API Key。
         """
-        self._client = None
-        self._model = None
+        super().__init__()  # 🌟 初始化 LLMMixin
         logger.info(f"✅ PageClassifier 初始化完成")
-    
-    def _get_client(self):
-        """獲取 OpenAI 客戶端（延遲載入）"""
-        # 🌟 使用統一的 llm_core
-        if self._client is None:
-            self._client = llm_core
-        return self._client
-    
-    def _get_model(self) -> str:
-        """獲取 LLM 模型名稱"""
-        # 🌟 使用統一的 llm_core
-        if self._model is None:
-            self._model = llm_core.default_model
-        return self._model
     
     async def find_candidate_pages(
         self,

@@ -24,6 +24,34 @@ def strip_think(text: str) -> str:
     return text.strip()
 
 
+def resolve_env_vars(url: str) -> str:
+    """
+    解析 ${VAR} 或 ${VAR:default} 模式
+    
+    Args:
+        url: 包含环境变量占位符的字符串
+        
+    Returns:
+        str: 替换后的字符串
+        
+    Example:
+        resolve_env_vars("${DB_HOST:localhost}")
+        # → "localhost" (如果 DB_HOST 未设置)
+    """
+    import re
+    import os
+    
+    def replace_var(match):
+        var_expr = match.group(1)
+        if ':' in var_expr:
+            var_name, default = var_expr.split(':', 1)
+            return os.getenv(var_name, default)
+        else:
+            return os.getenv(var_expr, match.group(0))
+    
+    return re.sub(r'\$\{([^}]+)\}', replace_var, url)
+
+
 def detect_image_mime(data: bytes) -> str | None:
     """Detect image MIME type from magic bytes, ignoring file extension."""
     if data[:8] == b"\x89PNG\r\n\x1a\n":

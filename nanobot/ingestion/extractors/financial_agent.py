@@ -19,8 +19,9 @@ from pydantic import BaseModel, Field
 from loguru import logger
 
 # 導入統一的 LLM 客戶端
-# 🌟 使用统一的 llm_core
+# 🌟 使用统一的 llm_core 和 LLMMixin
 from nanobot.core.llm_core import llm_core
+from nanobot.ingestion.utils.llm_mixin import LLMMixin
 
 # JSON Repair
 try:
@@ -212,7 +213,7 @@ class JSONProcessor:
 # Financial Agent
 # ===========================================
 
-class FinancialAgent:
+class FinancialAgent(LLMMixin):
     """
     Financial Agent - LLM 審計師（強制結構化版本）
     
@@ -220,6 +221,7 @@ class FinancialAgent:
     - 使用 Pydantic Schema 定義輸出結構
     - 多層 JSON 修復機制
     - 重試機制
+    - 🌟 使用 LLMMixin 獲取統一的 LLM 客戶端
     """
     
     def __init__(self, max_retries: int = 2):
@@ -229,25 +231,9 @@ class FinancialAgent:
         Args:
             max_retries: 最大重試次數
         """
-        # 使用統一的 LLM 客戶端
-        self._client = None
-        self._model = None
+        super().__init__()  # 🌟 初始化 LLMMixin
         self.max_retries = max_retries
         self.json_processor = JSONProcessor()
-    
-    def _get_client(self):
-        """獲取 OpenAI 客戶端（延遲載入）"""
-        # 🌟 使用統一的 llm_core
-        if self._client is None:
-            self._client = llm_core
-        return self._client
-    
-    def _get_model(self) -> str:
-        """獲取 LLM 模型名稱"""
-        # 🌟 使用統一的 llm_core
-        if self._model is None:
-            self._model = llm_core.default_model
-        return self._model
     
     async def _call_llm_with_retry(
         self,

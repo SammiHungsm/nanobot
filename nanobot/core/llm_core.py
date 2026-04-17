@@ -42,7 +42,7 @@ except ImportError:
 # 🌟 使用官方的 Provider 系统
 try:
     from nanobot.providers import OpenAICompatProvider, AnthropicProvider
-    from nanobot.providers.base import LLMResponse
+    from nanobot.providers.base import LLMResponse, ToolCallRequest
     from nanobot.providers.registry import PROVIDERS, find_by_name
     NANOBOT_PROVIDERS_AVAILABLE = True
 except ImportError:
@@ -213,8 +213,11 @@ class UnifiedLLMCore:
         model: str = None,
         temperature: float = None,
         max_tokens: int = None,
+        tools: List[Dict[str, Any]] = None,  # 🌟 新增：Function Calling 支持
+        tool_choice: str = None,  # 🌟 新增：Tool 选择策略
+        return_response: bool = False,  # 🌟 新增：返回完整 LLMResponse
         **kwargs
-    ) -> str:
+    ) -> str | LLMResponse:
         """
         🎯 统一的文字对话接口
         
@@ -223,9 +226,12 @@ class UnifiedLLMCore:
             model: 模型名称（默认使用 default_model）
             temperature: 温度参数
             max_tokens: 最大输出长度
+            tools: Function Calling 工具列表（OpenAI 格式）
+            tool_choice: Tool 选择策略 ("auto", "required", "none")
+            return_response: 如果 True，返回完整 LLMResponse（包含 tool_calls）
             
         Returns:
-            str: LLM 的回复文本
+            str | LLMResponse: LLM 的回复文本，或完整的 LLMResponse
         """
         target_model = model or self.default_model
         provider = self._get_provider(target_model)
@@ -241,20 +247,26 @@ class UnifiedLLMCore:
         if max_tokens is None:
             max_tokens = self.config.agents.defaults.max_tokens if self.config else 2000
         
-        logger.debug(f"🤖 Calling LLM: {target_model}")
+        logger.debug(f"🤖 Calling LLM: {target_model} (tools={len(tools) if tools else 0})")
         
         try:
-            # 🌟 调用官方的 Provider
-            response: LLMResponse = await provider.chat(
+            # 🌟 调用官方的 Provider（支持 tools）
+            response: LLMResponse = await provider.chat_with_retry(
                 model=target_model,
                 messages=messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
+                tools=tools,
+                tool_choice=tool_choice,
                 **kwargs
             )
             
+            if return_response:
+                # 🌟 返回完整 LLMResponse（包含 tool_calls）
+                return response
+            
             content = response.content or ""
-            logger.debug(f"✅ LLM response: {len(content)} chars")
+            logger.debug(f"✅ LLM response: {len(content)} chars, tool_calls={len(response.tool_calls)}")
             return content
             
         except Exception as e:

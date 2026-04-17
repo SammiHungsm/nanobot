@@ -37,11 +37,24 @@ import json
 import asyncio
 import tempfile
 import httpx
+import re  # 🌟 v3.8: 用于修正 Markdown 图片路径
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Union
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from loguru import logger
+
+
+# ===========================================
+# DateTimeEncoder - 处理 datetime 序列化
+# ===========================================
+
+class DateTimeEncoder(json.JSONEncoder):
+    """自定义 JSON Encoder，处理 datetime 对象"""
+    def default(self, obj):
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        return super().default(obj)
 
 
 # ===========================================
@@ -197,13 +210,39 @@ class PDFParser:
         # 导入 LlamaParse SDK
         try:
             from llama_cloud import LlamaCloud, AsyncLlamaCloud
-            self.client = LlamaCloud(api_key=self.api_key)
-            self.async_client = AsyncLlamaCloud(api_key=self.api_key)
-            logger.info(f"✅ PDFParser 初始化完成 (tier={self.tier}, save_raw={save_raw_output}, download_images={download_images})")
-        except ImportError:
+            from llama_cloud.types.parsing_create_params import OutputOptions
+            import httpx
+            
+            # 🌟 v3.16: 使用 httpx.Timeout 确保长超时
+            http_timeout = httpx.Timeout(
+                connect=60.0,
+                read=600.0,
+                write=600.0,
+                pool=60.0
+            )
+            
+            self.client = LlamaCloud(
+                api_key=self.api_key,
+                timeout=http_timeout,
+                max_retries=2
+            )
+            self.async_client = AsyncLlamaCloud(
+                api_key=self.api_key,
+                timeout=http_timeout,
+                max_retries=2
+            )
+            
+            # 🌟 v3.16: OutputOptions 强制保存图片
+            self.output_options = OutputOptions(
+                images_to_save=["embedded", "screenshot"]  # 强制保存嵌入图片和截图
+            )
+            
+            logger.info(f"✅ PDFParser 初始化完成 (tier={self.tier}, images_to_save=[embedded,screenshot], timeout=600s)")
+        except ImportError as e:
             raise ImportError(
-                "❌ llama_cloud SDK 未安装！\n"
-                "请运行: pip install llama_cloud>=2.3.0"
+                f"❌ llama_cloud SDK 未安装！\n"
+                "请运行: pip install llama-cloud>=2.4.0\n"
+                f"错误: {e}"
             )
     
     # ===========================================
@@ -214,7 +253,7 @@ class PDFParser:
         """
         解析本地 PDF 文件
         
-        🌟 自动保存所有 raw output 到 data/raw/llamaparse/{pdf_filename}/
+        🌟 v3.16: 使用 llama-cloud 2.4.0 API
         
         Args:
             file_path: PDF 文件路径
@@ -222,6 +261,8 @@ class PDFParser:
         Returns:
             PDFParseResult
         """
+        import httpx
+        
         logger.info(f"🚀 LlamaParse 解析: {file_path}")
         
         # 1. 上传文件
@@ -232,37 +273,48 @@ class PDFParser:
         file_id = file_obj.id
         logger.info(f"   ✅ 文件上传成功: file_id={file_id}")
         
-        # 2. 创建解析任务
+        # 2. 创建解析任务（🌟 强制保存图片）
         job = self.client.parsing.create(
             tier=self.tier,
             version="latest",
-            file_id=file_id
+            file_id=file_id,
+            output_options=self.output_options
         )
         job_id = job.id
         logger.info(f"   🔍 解析任务创建: job_id={job_id}")
         
-        # 3. 等待解析完成
-        response = self._wait_for_completion(job_id)
+        # 3. 等待完成
+        logger.info("   ⏳ 等待解析完成...")
+        self.client.parsing.wait_for_completion(
+            job_id=job_id,
+            polling_interval=2.0,
+            max_interval=10.0,
+            timeout=600.0,
+            verbose=True
+        )
+        logger.info(f"   ✅ 解析完成")
         
-        # 4. 🌟 保存完整的 raw output（按 PDF 文件名）
+        # 4. 获取结果（🌟 v3.18: 使用 expand 参数获取图片元数据）
+        response = self.client.parsing.get(
+            job_id=job_id,
+            expand=["text", "markdown", "items", "images_content_metadata"]  # 🌟 必须包含 images_content_metadata
+        )
+        logger.info(f"   ✅ 结果获取完成")
+        
+        # 5. 保存 raw output
         pdf_filename = Path(file_path).name
         raw_output_dir = self._save_full_raw_output(response, pdf_filename)
-        
-        # 5. 🌟 下载图片到本地
-        if self.download_images:
-            self._download_images(response, raw_output_dir)
         
         # 6. 提取结果
         result = self._extract_result(response, file_path)
         result.raw_output_dir = str(raw_output_dir)
         
-        # 7. 更新图片路径为本地路径
+        # 7. 更新图片路径
         result = self._update_image_paths(result, raw_output_dir)
         
         logger.info(
             f"✅ 解析完成: {result.total_pages} 页, "
-            f"{len(result.tables)} 个表格, {len(result.images)} 张图片, "
-            f"raw output 已保存: {raw_output_dir}"
+            f"{len(result.tables)} 个表格, {len(result.images)} 张图片"
         )
         
         return result
@@ -285,16 +337,36 @@ class PDFParser:
         url_filename = Path(url).name or "url_document.pdf"
         
         # 创建解析任务
+        # 🌟 v3.12: 添加 output_options.images_to_save 以获取实际图片
+        from llama_cloud.types.parsing_create_params import OutputOptions
+        
+        output_opts = OutputOptions(
+            images_to_save=["screenshot", "embedded"]  # 🌟 获取截图和嵌入图片
+        )
+        
         job = self.client.parsing.create(
             tier=self.tier,
             version="latest",
-            source_url=url
+            source_url=url,
+            output_options=output_opts  # 🌟 v3.12: 启用图片保存
         )
         job_id = job.id
-        logger.info(f"   🔍 解析任务创建: job_id={job_id}")
+        logger.info(f"   🔍 解析任务创建: job_id={job_id}, images_to_save=[screenshot,embedded]")
         
-        # 等待解析完成
-        response = self._wait_for_completion(job_id)
+        # 🌟 v3.6: 使用 SDK 内置的 wait_for_completion
+        response = self.client.parsing.wait_for_completion(
+            job_id=job_id,
+            polling_interval=2.0,
+            max_interval=10.0,
+            timeout=600.0,
+            verbose=True
+        )
+        
+        # 🌟 获取完整结果
+        response = self.client.parsing.get(
+            job_id=job_id,
+            expand=["text", "markdown", "items"]
+        )
         
         # 🌟 保存完整的 raw output
         raw_output_dir = self._save_full_raw_output(response, url_filename)
@@ -325,8 +397,16 @@ class PDFParser:
         """
         异步解析本地 PDF 文件
         
-        🌟 自动保存所有 raw output
+        🌟 v3.16: 使用 llama-cloud 2.4.0 API，自己处理 Polling 和图片下载
+        
+        Args:
+            file_path: PDF 文件路径
+            
+        Returns:
+            PDFParseResult
         """
+        import httpx
+        
         logger.info(f"🚀 LlamaParse 异步解析: {file_path}")
         
         # 1. 上传文件
@@ -337,32 +417,57 @@ class PDFParser:
         file_id = file_obj.id
         logger.info(f"   ✅ 文件上传成功: file_id={file_id}")
         
-        # 2. 创建解析任务
+        # 2. 创建解析任务（🌟 强制保存图片）
         job = await self.async_client.parsing.create(
             tier=self.tier,
             version="latest",
-            file_id=file_id
+            file_id=file_id,
+            output_options=self.output_options  # 🌟 v3.16: images_to_save=[embedded, screenshot]
         )
         job_id = job.id
         logger.info(f"   🔍 解析任务创建: job_id={job_id}")
         
-        # 3. 异步等待完成
-        response = await self._wait_for_completion_async(job_id)
+        # 3. 等待完成
+        logger.info("   ⏳ 等待解析完成...")
+        try:
+            await self.async_client.parsing.wait_for_completion(
+                job_id=job_id,
+                polling_interval=2.0,
+                max_interval=10.0,
+                timeout=600.0,
+                verbose=True
+            )
+            logger.info(f"   ✅ 解析完成")
+        except Exception as e:
+            logger.error(f"   ❌ wait_for_completion 失败: {e}")
+            raise
         
-        # 4. 🌟 保存完整的 raw output
+        # 4. 获取结果（🌟 v3.18: 使用 expand 参数获取图片元数据）
+        response = await self.async_client.parsing.get(
+            job_id=job_id,
+            expand=["text", "markdown", "items", "images_content_metadata"]  # 🌟 必须包含 images_content_metadata
+        )
+        logger.info(f"   ✅ 结果获取完成")
+        
+        # 5. 保存 raw output
         pdf_filename = Path(file_path).name
         raw_output_dir = self._save_full_raw_output(response, pdf_filename)
+        logger.info(f"   ✅ Raw output 目录: {raw_output_dir}")
         
-        # 5. 🌟 异步下载图片
-        if self.download_images:
-            await self._download_images_async(response, raw_output_dir)
+        # 6. 🌟 v3.17: 下载图片（使用纯 HTTP requests 调用 API endpoint）
+        images_dir = raw_output_dir / "images"
+        images_dir.mkdir(parents=True, exist_ok=True)
         
-        # 6. 提取结果
+        images_result = []
+        if self.download_images and self.enable_images:
+            logger.info(f"   📸 开始下载图片...")
+            images_result = await self._download_images_from_response(response, images_dir, job_id)
+            logger.info(f"   ✅ 成功下载 {len(images_result)} 张图片")
+        
+        # 7. 提取结果
         result = self._extract_result(response, file_path)
+        result.images = images_result  # 🌟 使用下载后的图片列表
         result.raw_output_dir = str(raw_output_dir)
-        
-        # 7. 更新图片路径
-        result = self._update_image_paths(result, raw_output_dir)
         
         logger.info(
             f"✅ 解析完成: {result.total_pages} 页, "
@@ -370,6 +475,76 @@ class PDFParser:
         )
         
         return result
+    
+    async def _download_images_from_response(
+        self, 
+        response: Any, 
+        images_dir: Path,
+        job_id: str
+    ) -> List[Dict]:
+        """
+        🌟 v3.18: 使用 LlamaCloud v2 的 presigned_url 下载图片
+        
+        Args:
+            response: ParsingGetResponse
+            images_dir: 图片保存目录
+            job_id: LlamaParse job_id
+            
+        Returns:
+            图片列表
+        """
+        import httpx
+        
+        images = []
+        
+        # 1. 检查 API 是否有回传图片元数据
+        if not hasattr(response, 'images_content_metadata') or not response.images_content_metadata:
+            logger.warning("   ⚠️ 找不到 images_content_metadata（请确定 expand 有包含该栏位）")
+            return images
+        
+        image_list = response.images_content_metadata.images
+        if not image_list:
+            logger.warning("   ⚠️ 图片列表为空")
+            return images
+
+        logger.info(f"   📸 找到 {len(image_list)} 个图片，开始透过 S3 presigned_url 下载...")
+        
+        # 2. 直接使用官方提供的 presigned_url 下载
+        async with httpx.AsyncClient(timeout=60) as client:
+            for img in image_list:
+                if img is None:
+                    continue
+                
+                img_name = getattr(img, 'filename', None)
+                url = getattr(img, 'presigned_url', None)
+                
+                if not img_name or not url:
+                    continue
+                
+                try:
+                    # 直接 HTTP GET 预先授权网址（不需带 API Key）
+                    resp = await client.get(url)
+                    
+                    if resp.status_code == 200:
+                        local_path = images_dir / img_name
+                        with open(local_path, 'wb') as f:
+                            f.write(resp.content)
+                        
+                        images.append({
+                            "type": "image",
+                            "page": getattr(img, 'page_number', 0),
+                            "filename": img_name,
+                            "local_path": str(local_path),
+                            "downloaded": True,
+                            "source": "presigned_url"
+                        })
+                        logger.debug(f"      ✅ {img_name}")
+                    else:
+                        logger.warning(f"      ⚠️ 下载失败 {img_name}: HTTP {resp.status_code}")
+                except Exception as e:
+                    logger.warning(f"      ⚠️ 下载发生异常 {img_name}: {e}")
+        
+        return images
     
     async def parse_url_async(self, url: str) -> PDFParseResult:
         """
@@ -382,16 +557,36 @@ class PDFParser:
         url_filename = Path(url).name or "url_document.pdf"
         
         # 创建解析任务
+        # 🌟 v3.12: 添加 output_options.images_to_save 以获取实际图片
+        from llama_cloud.types.parsing_create_params import OutputOptions
+        
+        output_opts = OutputOptions(
+            images_to_save=["screenshot", "embedded"]  # 🌟 获取截图和嵌入图片
+        )
+        
         job = await self.async_client.parsing.create(
             tier=self.tier,
             version="latest",
-            source_url=url
+            source_url=url,
+            output_options=output_opts  # 🌟 v3.12: 启用图片保存
         )
         job_id = job.id
-        logger.info(f"   🔍 解析任务创建: job_id={job_id}")
+        logger.info(f"   🔍 解析任务创建: job_id={job_id}, images_to_save=[screenshot,embedded]")
         
-        # 异步等待完成
-        response = await self._wait_for_completion_async(job_id)
+        # 🌟 v3.6: 使用 SDK 内置的 wait_for_completion
+        response = await self.async_client.parsing.wait_for_completion(
+            job_id=job_id,
+            polling_interval=2.0,
+            max_interval=10.0,
+            timeout=600.0,
+            verbose=True
+        )
+        
+        # 🌟 获取完整结果
+        response = await self.async_client.parsing.get(
+            job_id=job_id,
+            expand=["text", "markdown", "items"]
+        )
         
         # 🌟 保存完整的 raw output
         raw_output_dir = self._save_full_raw_output(response, url_filename)
@@ -462,7 +657,7 @@ class PDFParser:
         # 1. 保存完整的 API 响应 JSON
         raw_json_path = raw_output_dir / f"{job_id}.json"
         with open(raw_json_path, 'w', encoding='utf-8') as f:
-            json.dump(raw_dict, f, ensure_ascii=False, indent=2)
+            json.dump(raw_dict, f, ensure_ascii=False, indent=2, cls=DateTimeEncoder)
         logger.info(f"   💾 完整 API 响应已保存: {raw_json_path}")
         
         # 2. 保存元数据
@@ -486,14 +681,24 @@ class PDFParser:
                 f.write(markdown_full)
             logger.info(f"   💾 Markdown 已保存: {markdown_path}")
         
-        # 4. 🌟 保存每页 Markdown（方便查看）
+        # 4. 🌟 保存每页 Markdown（v3.8: 修正图片路径）
         markdown_pages = raw_dict.get("markdown", {}).get("pages", [])
         for page in markdown_pages:
             if page.get("success") and page.get("markdown"):
                 page_num = page.get("page_number", 0)
                 page_markdown_path = raw_output_dir / f"markdown_page{page_num}.md"
+                
+                # 🌟 v3.8: 修正图片路径（添加 images/ 前缀）
+                markdown_content = page.get("markdown", "")
+                # 替换 ![...](page_X_...) 为 ![...](images/page_X_...)
+                markdown_content = re.sub(
+                    r'!\[([^\]]*)\]\((page_[^)]+)\)',
+                    r'![\1](images/\2)',
+                    markdown_content
+                )
+                
                 with open(page_markdown_path, 'w', encoding='utf-8') as f:
-                    f.write(page.get("markdown", ""))
+                    f.write(markdown_content)
         
         # 5. 🌟 保存完整纯文本
         text_full = raw_dict.get("text_full", "")
@@ -652,13 +857,47 @@ class PDFParser:
                 for key, meta in response.result_content_metadata.items()
             }
         
-        # 10. job_metadata
-        result["job_metadata"] = getattr(response, 'job_metadata', None)
+        # 10. job_metadata（🌟 递归处理 datetime）
+        job_metadata = getattr(response, 'job_metadata', None)
+        if job_metadata:
+            result["job_metadata"] = self._serialize_nested_dict(job_metadata)
+        else:
+            result["job_metadata"] = None
         
-        # 11. raw_parameters
-        result["raw_parameters"] = getattr(response, 'raw_parameters', None)
+        # 11. raw_parameters（🌟 递归处理 datetime）
+        raw_parameters = getattr(response, 'raw_parameters', None)
+        if raw_parameters:
+            result["raw_parameters"] = self._serialize_nested_dict(raw_parameters)
+        else:
+            result["raw_parameters"] = None
         
         return result
+    
+    def _serialize_nested_dict(self, obj: Any) -> Any:
+        """
+        🌟 递归序列化嵌套对象，处理所有 datetime
+        
+        Args:
+            obj: 任意对象（dict, list, datetime, 等）
+            
+        Returns:
+            JSON 可序列化的对象
+        """
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        elif isinstance(obj, dict):
+            return {k: self._serialize_nested_dict(v) for k, v in obj.items()}
+        elif isinstance(obj, (list, tuple)):
+            return [self._serialize_nested_dict(item) for item in obj]
+        elif hasattr(obj, 'model_dump'):
+            # Pydantic 对象
+            return self._serialize_nested_dict(obj.model_dump())
+        elif hasattr(obj, '__dict__'):
+            # 普通 Python 对象
+            return self._serialize_nested_dict(obj.__dict__)
+        else:
+            # 基本类型（str, int, float, bool, None）
+            return obj
     
     def _serialize_items_page(self, page: Any) -> Dict:
         """
@@ -729,6 +968,9 @@ class PDFParser:
         
         downloaded = 0
         for img in images:
+            # 🌟 v3.5: 跳过 None 元素
+            if img is None:
+                continue
             url = getattr(img, 'presigned_url', None)
             filename = getattr(img, 'filename', f"image_{getattr(img, 'index', 0)}.png")
             
@@ -768,6 +1010,9 @@ class PDFParser:
         downloaded = 0
         async with httpx.AsyncClient(timeout=60) as client:
             for img in images:
+                # 🌟 v3.5: 跳过 None 元素
+                if img is None:
+                    continue
                 url = getattr(img, 'presigned_url', None)
                 filename = getattr(img, 'filename', f"image_{getattr(img, 'index', 0)}.png")
                 
@@ -801,6 +1046,9 @@ class PDFParser:
         images_dir = raw_output_dir / "images"
         
         for img in result.images:
+            # 🌟 v3.5: 跳过 None 元素
+            if img is None:
+                continue
             filename = img.get("filename", "")
             if filename:
                 local_path = images_dir / filename
@@ -879,14 +1127,18 @@ class PDFParser:
     # 等待解析完成
     # ===========================================
     
-    def _wait_for_completion(self, job_id: str, max_wait: int = 300) -> Any:
+    def _wait_for_completion(self, job_id: str, max_wait: int = 600) -> Any:
         """等待解析任务完成（同步）"""
         import time
         
         start_time = time.time()
         
         while True:
-            response = self.client.parsing.get(job_id=job_id)
+            # 🌟 v3.6: 使用 expand 参数获取完整结果
+            response = self.client.parsing.get(
+                job_id=job_id,
+                expand=["text", "markdown", "items"]  # 🌟 获取完整内容
+            )
             status = response.job.status
             
             if status == "COMPLETED":
@@ -903,7 +1155,7 @@ class PDFParser:
                     raise TimeoutError(f"解析超时: {max_wait}s")
                 
                 logger.debug(f"   ⏳ 等待中... status={status}, elapsed={elapsed:.1f}s")
-                time.sleep(2)
+                time.sleep(3)  # 🌟 v3.6: 增加间隔到 3 秒
             
             elif status == "CANCELLED":
                 raise ValueError(f"解析任务已取消: job_id={job_id}")
@@ -911,12 +1163,16 @@ class PDFParser:
             else:
                 raise ValueError(f"未知状态: {status}")
     
-    async def _wait_for_completion_async(self, job_id: str, max_wait: int = 300) -> Any:
+    async def _wait_for_completion_async(self, job_id: str, max_wait: int = 600) -> Any:
         """等待解析任务完成（异步）"""
         start_time = asyncio.get_event_loop().time()
         
         while True:
-            response = await self.async_client.parsing.get(job_id=job_id)
+            # 🌟 v3.6: 使用 expand 参数获取完整结果
+            response = await self.async_client.parsing.get(
+                job_id=job_id,
+                expand=["text", "markdown", "items"]  # 🌟 获取完整内容
+            )
             status = response.job.status
             
             if status == "COMPLETED":
@@ -932,8 +1188,8 @@ class PDFParser:
                 if elapsed > max_wait:
                     raise TimeoutError(f"解析超时: {max_wait}s")
                 
-                logger.debug(f"   ⏳ 异步等待中... status={status}")
-                await asyncio.sleep(2)
+                logger.debug(f"   ⏳ 异步等待中... status={status}, elapsed={elapsed:.1f}s")
+                await asyncio.sleep(3)  # 🌟 v3.6: 增加间隔到 3 秒，减少请求频率
             
             elif status == "CANCELLED":
                 raise ValueError(f"解析任务已取消: job_id={job_id}")
@@ -947,7 +1203,12 @@ class PDFParser:
     
     def _extract_result(self, response: Any, file_path: str) -> PDFParseResult:
         """从 ParsingGetResponse 提取结构化结果"""
+        # 🌟 v3.5: 安全检查 response
+        if response is None:
+            raise ValueError("Response is None")
         job = response.job
+        if job is None:
+            raise ValueError("Job is None in response")
         job_id = job.id
         
         # 提取完整 Markdown
@@ -1002,19 +1263,39 @@ class PDFParser:
                                 "rows": getattr(item, 'rows', 0)
                             })
         
-        # 提取图片（从 images_content_metadata）
+        # 提取图片（从 items.pages 中的 image items）
         images = []
-        if self.enable_images and response.images_content_metadata:
-            for img_meta in response.images_content_metadata.images:
-                images.append({
-                    "type": "image",
-                    "filename": img_meta.filename,
-                    "page": getattr(img_meta, 'page_number', 0),
-                    "url": img_meta.presigned_url,
-                    "category": img_meta.category,
-                    "size_bytes": img_meta.size_bytes,
-                    "bbox": img_meta.bbox.__dict__ if img_meta.bbox else None
-                })
+        if self.enable_images:
+            # 🌟 v3.11: 从 items.pages 中提取图片（而不是 images_content_metadata）
+            if response.items and response.items.pages:
+                for page in response.items.pages:
+                    if hasattr(page, 'items') and page.success:
+                        for item in page.items:
+                            # 🌟 v3.11: 检查是否是图片类型
+                            if hasattr(item, 'type') and item.type == 'image':
+                                images.append({
+                                    "type": "image",
+                                    "page": page.page_number,
+                                    "filename": getattr(item, 'url', ''),
+                                    "caption": getattr(item, 'caption', ''),
+                                    "bbox": getattr(item, 'bbox', [{}])[0] if hasattr(item, 'bbox') and item.bbox else {},
+                                    "md": getattr(item, 'md', ''),  # Markdown 引用
+                                })
+            
+            # 🌟 v3.11: 也检查 images_content_metadata（兼容旧版本）
+            if response.images_content_metadata and hasattr(response.images_content_metadata, 'images'):
+                for img_meta in response.images_content_metadata.images:
+                    if img_meta is None:
+                        continue
+                    images.append({
+                        "type": "image",
+                        "filename": img_meta.filename,
+                        "page": getattr(img_meta, 'page_number', 0),
+                        "url": img_meta.presigned_url,
+                        "category": img_meta.category,
+                        "size_bytes": img_meta.size_bytes,
+                        "bbox": img_meta.bbox.__dict__ if img_meta.bbox else None
+                    })
         
         return PDFParseResult(
             file_path=file_path,
@@ -1039,17 +1320,22 @@ class PDFParser:
     
     def _build_result_from_raw(self, raw_data: Dict, pdf_filename: str) -> PDFParseResult:
         """从 raw dict 构建 PDFParseResult"""
-        job = raw_data.get("job", {})
-        job_id = job.get("id", "")
+        # 🌟 v3.9: 添加安全检查，防止 None.get() 错误
+        job = raw_data.get("job") or {}
+        job_id = job.get("id", "") if isinstance(job, dict) else ""
         
-        markdown_full = raw_data.get("markdown_full", "")
+        markdown_full = raw_data.get("markdown_full", "") or ""
         
-        markdown_data = raw_data.get("markdown", {})
-        pages = markdown_data.get("pages", [])
+        # 🌟 v3.9: 安全处理 None
+        markdown_data = raw_data.get("markdown") or {}
+        pages = markdown_data.get("pages", []) if isinstance(markdown_data, dict) else []
         total_pages = len(pages)
         
         artifacts = []
         for page in pages:
+            # 🌟 v3.9: 跳过 None 元素
+            if page is None:
+                continue
             if page.get("success") and page.get("markdown"):
                 artifacts.append({
                     "type": "text",
@@ -1059,11 +1345,17 @@ class PDFParser:
                 })
         
         tables = []
-        items_data = raw_data.get("items", {})
-        items_pages = items_data.get("pages", [])
+        items_data = raw_data.get("items") or {}
+        items_pages = items_data.get("pages", []) if isinstance(items_data, dict) else []
         for page in items_pages:
+            # 🌟 v3.9: 跳过 None 元素
+            if page is None:
+                continue
             if page.get("success"):
                 for item in page.get("items", []):
+                    # 🌟 v3.9: 跳过 None 元素
+                    if item is None:
+                        continue
                     if item.get("type") == "table":
                         tables.append({
                             "type": "table",
@@ -1073,9 +1365,36 @@ class PDFParser:
                         })
         
         images = []
-        images_meta = raw_data.get("images_content_metadata", {})
-        images_list = images_meta.get("images", [])
+        # 🌟 v3.11: 从 items.pages 中提取图片（而不是 images_content_metadata）
+        items_data = raw_data.get("items") or {}
+        items_pages = items_data.get("pages", []) if isinstance(items_data, dict) else []
+        for page in items_pages:
+            # 🌟 v3.9: 跳过 None 元素
+            if page is None:
+                continue
+            if page.get("success"):
+                for item in page.get("items", []):
+                    # 🌟 v3.9: 跳过 None 元素
+                    if item is None:
+                        continue
+                    # 🌟 v3.11: 检查是否是图片类型
+                    if item.get("type") == "image":
+                        images.append({
+                            "type": "image",
+                            "page": page.get("page_number", 0),
+                            "filename": item.get("url", ""),
+                            "caption": item.get("caption", ""),
+                            "md": item.get("md", ""),
+                            "bbox": item.get("bbox", [{}])[0] if item.get("bbox") else {}
+                        })
+        
+        # 🌟 v3.11: 也检查 images_content_metadata（兼容旧版本）
+        images_meta = raw_data.get("images_content_metadata") or {}
+        images_list = images_meta.get("images", []) if isinstance(images_meta, dict) else []
         for img in images_list:
+            # 🌟 v3.5: 跳过 None 元素
+            if img is None:
+                continue
             images.append({
                 "type": "image",
                 "filename": img.get("filename", ""),
@@ -1096,7 +1415,7 @@ class PDFParser:
                 "parser": "llamaparse",
                 "tier": self.tier,
                 "job_id": job_id,
-                "status": job.get("status", "COMPLETED"),
+                "status": job.get("status", "COMPLETED") if isinstance(job, dict) else "COMPLETED",
                 "char_count": len(markdown_full),
                 "table_count": len(tables),
                 "image_count": len(images),
@@ -1105,6 +1424,31 @@ class PDFParser:
             job_id=job_id,
             tier=self.tier
         )
+
+
+# ===========================================
+# 便捷函数
+# ===========================================
+
+def parse_pdf(file_path: str, **kwargs) -> PDFParseResult:
+    """便捷函数：同步解析 PDF"""
+    parser = PDFParser()
+    return parser.parse(file_path, **kwargs)
+
+async def parse_pdf_async(file_path: str, **kwargs) -> PDFParseResult:
+    """便捷函数：异步解析 PDF"""
+    parser = PDFParser()
+    return await parser.parse_async(file_path, **kwargs)
+
+def parse_pdf_url(url: str, **kwargs) -> PDFParseResult:
+    """便捷函数：解析 URL PDF"""
+    parser = PDFParser()
+    return parser.parse_url(url, **kwargs)
+
+def load_from_raw_output(pdf_filename: str, job_id: str) -> PDFParseResult:
+    """便捷函数：从 raw output 加载"""
+    parser = PDFParser()
+    return parser.load_from_raw_output(pdf_filename, job_id)
 
 
 # ===========================================

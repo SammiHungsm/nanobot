@@ -9,6 +9,7 @@ Stage 4: Agentic 深度结构化提取
 """
 
 import os
+from nanobot.ingestion.utils.llm_mixin import LLMMixin
 import json
 import re
 from pathlib import Path
@@ -89,7 +90,7 @@ class Stage4Extractor:
             if merge_page_artifacts_fn:
                 page_content = merge_page_artifacts_fn(page_artifacts)
             else:
-                page_content = Stage4Extractor._merge_page_artifacts(page_artifacts)
+                page_content = LLMMixin.merge_page_artifacts(page_artifacts)
             
             if not page_content or len(page_content.strip()) < 50:
                 logger.warning(f"   ⚠️ Page {page_num} 内容过短，跳过")
@@ -295,15 +296,3 @@ Key Personnel 示例：
             
         except Exception as e:
             logger.warning(f"   ⚠️ DB 写入失败: {e}")
-    
-    @staticmethod
-    def _merge_page_artifacts(page_artifacts: List[Dict]) -> str:
-        """合并页面 artifacts 为文本"""
-        merged = ""
-        for artifact in page_artifacts:
-            content = artifact.get("content", "") or artifact.get("markdown", "") or artifact.get("text", "")
-            if artifact.get("type") == "table":
-                table_json = artifact.get("content_json", {})
-                content = json.dumps(table_json, ensure_ascii=False)
-            merged += content + "\n\n"
-        return merged.strip()

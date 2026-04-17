@@ -5,11 +5,21 @@ Repository Module - PostgreSQL 數據庫操作層
 """
 
 import os
+import json
+from datetime import datetime
 from typing import Optional, Dict, Any, List
 from pathlib import Path
 from loguru import logger
 import asyncpg
 from contextlib import asynccontextmanager
+
+
+class DateTimeEncoder(json.JSONEncoder):
+    """自定义 JSON Encoder，处理 datetime 对象"""
+    def default(self, obj):
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        return super().default(obj)
 
 
 class DBClient:
@@ -56,17 +66,8 @@ class DBClient:
     
     def _resolve_env_vars(self, url: str) -> str:
         """解析 ${VAR} 或 ${VAR:default} 模式"""
-        import re
-        
-        def replace_var(match):
-            var_expr = match.group(1)
-            if ':' in var_expr:
-                var_name, default = var_expr.split(':', 1)
-                return os.getenv(var_name, default)
-            else:
-                return os.getenv(var_expr, match.group(0))
-        
-        return re.sub(r'\$\{([^}]+)\}', replace_var, url)
+        from nanobot.utils.helpers import resolve_env_vars
+        return resolve_env_vars(url)
     
     async def connect(self):
         """
@@ -357,7 +358,7 @@ class DBClient:
         """
         import json
         
-        industries_json = json.dumps(extracted_industries) if extracted_industries else None
+        industries_json = json.dumps(extracted_industries, cls=DateTimeEncoder) if extracted_industries else None
         
         try:
             # 🌟 使用连接池（避免并发冲突）
@@ -784,6 +785,78 @@ class DBClient:
         return [dict(row) for row in rows]
     
     # ===========================================
+    # Key Personnel Operations
+    # ===========================================
+    
+    async def insert_key_personnel(
+        self,
+        company_id: int,
+        year: int,
+        name_en: str = None,
+        name_zh: str = None,
+        position_title_en: str = None,
+        role: str = None,
+        board_role: str = None,
+        committee_membership: str = None,
+        biography: str = None,
+        source_document_id: int = None
+    ) -> bool:
+        """
+        插入主要管理層/董事會成員資料
+        
+        Args:
+            company_id: 公司 ID
+            year: 年份
+            name_en: 英文名
+            name_zh: 中文名
+            position_title_en: 职位英文
+            role: 角色
+            board_role: 董事会角色
+            committee_membership: 委员会成员身份
+            biography: 简介
+            source_document_id: 源文档 ID
+            
+        Returns:
+            bool: 是否成功
+        """
+        try:
+            # 🌟 使用连接池（避免并发冲突）
+            async with self.connection() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO key_personnel 
+                    (company_id, year, name_en, name_zh, position_title_en, 
+                     role, board_role, committee_membership, biography, source_document_id)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                    ON CONFLICT (company_id, year, name_en) 
+                    DO UPDATE SET 
+                        name_zh = COALESCE(EXCLUDED.name_zh, key_personnel.name_zh),
+                        position_title_en = COALESCE(EXCLUDED.position_title_en, key_personnel.position_title_en),
+                        role = COALESCE(EXCLUDED.role, key_personnel.role),
+                        board_role = COALESCE(EXCLUDED.board_role, key_personnel.board_role),
+                        committee_membership = COALESCE(EXCLUDED.committee_membership, key_personnel.committee_membership),
+                        biography = COALESCE(EXCLUDED.biography, key_personnel.biography),
+                        source_document_id = EXCLUDED.source_document_id
+                    """,
+                    company_id,
+                    year,
+                    name_en,
+                    name_zh,
+                    position_title_en,
+                    role,
+                    board_role,
+                    committee_membership,
+                    biography,
+                    source_document_id
+                )
+                logger.debug(f"✅ 寫入 Key Personnel: {name_en}")
+                return True
+            
+        except Exception as e:
+            logger.error(f"❌ 寫入 Key Personnel 失敗: {e}")
+            return False
+    
+    # ===========================================
     # Document Pages Operations (兜底表 - Zone 2)
     # ===========================================
     
@@ -1156,8 +1229,8 @@ class DBClient:
         try:
             import json
             
-            # 將值轉換為 JSONB 格式
-            json_val = json.dumps(attribute_value, ensure_ascii=False)
+            # 將值轉換為 JSONB 格式（使用 DateTimeEncoder）
+            json_val = json.dumps(attribute_value, ensure_ascii=False, cls=DateTimeEncoder)
             
             # 🌟 使用连接池（避免并发冲突）
             async with self.connection() as conn:
@@ -1511,124 +1584,6 @@ class DBClient:
         except Exception as e:
             logger.error(f"❌ Artifact 入庫失敗: {e}")
             return False
-    
-    # ===========================================
-    # Artifact Relations Operations (跨模態關聯)
-    # ===========================================
-    
-    async def save_artifact_relation(
-        self,
-        document_id: int,
-        source_artifact_id: str,
-        target_artifact_id: str,
-        relation_type: str = "explained_by",
-        confidence: float = 1.0,
-        extraction_method: str = "regex"
-    ) -> bool:
-        """
-        [Step 2: 入庫魔法] 將圖片/圖表與解釋文字建立跨模態關聯
-        
-        解決「圖表在第 5 頁，解釋在第 50 頁」的痛點。
-        
-        Args:
-            document_id: 文檔 ID
-            source_artifact_id: 源 Artifact ID（通常是圖表/圖片）
-            target_artifact_id: 目標 Artifact ID（通常是解釋文字）
-            relation_type: 關係類型 (explained_by, referenced_in)
-            confidence: 關聯置信度 (0.0-1.0)
-            extraction_method: 提取方法 (regex, llm_inferred, manual)
-            
-        Returns:
-            bool: 是否成功
-        """
-        query = """
-        INSERT INTO artifact_relations 
-        (document_id, source_artifact_id, target_artifact_id, relation_type, confidence_score, extraction_method)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        ON CONFLICT (source_artifact_id, target_artifact_id) DO NOTHING;
-        """
-        try:
-            async with self.connection() as conn:
-                await conn.execute(
-                    query,
-                    document_id,
-                    source_artifact_id,
-                    target_artifact_id,
-                    relation_type,
-                    confidence,
-                    extraction_method
-                )
-            logger.debug(f"🔗 成功建立圖文關聯: {source_artifact_id} -> {target_artifact_id} (confidence={confidence})")
-            return True
-            
-        except Exception as e:
-            logger.error(f"❌ 建立圖文關聯失敗: {e}")
-            return False
-    
-    async def get_artifact_relations(
-        self,
-        source_artifact_id: str = None,
-        target_artifact_id: str = None,
-        document_id: int = None
-    ) -> List[Dict]:
-        """
-        [Step 3: Runtime Retrieval] 查詢 Artifact 關聯
-        
-        Args:
-            source_artifact_id: 源 Artifact ID（圖表）
-            target_artifact_id: 目標 Artifact ID（文字）
-            document_id: 文檔 ID
-            
-        Returns:
-            List[Dict]: 關聯記錄列表
-        """
-        try:
-            async with self.connection() as conn:
-                if source_artifact_id:
-                    # 查詢圖表的解釋文字
-                    rows = await conn.fetch(
-                        """
-                        SELECT 
-                            ar.*,
-                            ra.content AS target_content,
-                            ra.page_num AS target_page_num
-                        FROM artifact_relations ar
-                        JOIN raw_artifacts ra ON ar.target_artifact_id = ra.artifact_id
-                        WHERE ar.source_artifact_id = $1
-                        """,
-                        source_artifact_id
-                    )
-                elif target_artifact_id:
-                    # 查詢文字對應的圖表
-                    rows = await conn.fetch(
-                        """
-                        SELECT 
-                            ar.*,
-                            ra.content AS source_content,
-                            ra.page_num AS source_page_num,
-                            ra.file_path AS source_file_path
-                        FROM artifact_relations ar
-                        JOIN raw_artifacts ra ON ar.source_artifact_id = ra.artifact_id
-                        WHERE ar.target_artifact_id = $1
-                        """,
-                        target_artifact_id
-                    )
-                elif document_id:
-                    # 查詢文檔的所有關聯
-                    rows = await conn.fetch(
-                        """
-                        SELECT * FROM artifact_relations WHERE document_id = $1
-                        """,
-                        document_id
-                    )
-                else:
-                    return []
-            
-            return [dict(row) for row in rows]
-            
-        except Exception as e:
-            logger.error(f"❌ 查詢 Artifact 關聯失敗: {e}")
-            return []
     
     # ===========================================
     # Entity Relations (知识图谱)

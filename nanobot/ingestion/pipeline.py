@@ -1,26 +1,29 @@
 """
-Document Pipeline - 主流程協調器 (v3.2)
+Document Pipeline - 主流程协调器 (v3.3 简化版)
 
-這是整個 ingestion 系統的大腦，協調各個模組完成 PDF 處理流程。
+🌟 v3.3: 拆分大方法到 Stage handlers，遵循单一职责原则
 
-🌟 v3.2: 继承 BaseIngestionPipeline，使用 LlamaParse
+pipeline.py 只负责协调（Orchestrator），不再包含具体业务逻辑：
+- 调用 Stage handlers 处理各个阶段
+- 管理进度回调
+- 处理异常
 
-保留原有功能：
-- smart_extract: 智能提取入口
-- process_pdf_full: 完整 5-Stage 流程
-- run_agentic_ingestion: Agent 智能提取
-- _extract_and_create_company: 从封面提取公司信息
-- save_all_pages_to_fallback_table: 保存所有页面到数据库
-- _trigger_vanna_training: 触发 Vanna 训练
+具体逻辑已移到：
+- Stage0Preprocessor: 封面提取、公司创建
+- Stage3Router: 关键字搜索、页面路由
+- Stage4Extractor: 结构化提取、Revenue 提取
+- Stage5AgenticWriter: Agentic 写入
+
+行数对比：
+- v3.2 (完整版): 1647 行
+- v3.3 (简化版): ~300 行
 """
 
 import os
 import json
 import hashlib
-import asyncio
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Callable
-from datetime import datetime
 from loguru import logger
 
 # 🌟 继承 BaseIngestionPipeline
@@ -34,7 +37,7 @@ from .stages import (
     Stage3Router,
     Stage4Extractor,
     Stage5AgenticWriter,
-    Stage6VannaTraining,  # 🌟 新增 Stage 6
+    Stage6VannaTraining,
 )
 
 # 🌟 导入 Agent 层
@@ -47,14 +50,14 @@ from .repository.db_client import DBClient
 
 class DocumentPipeline(BaseIngestionPipeline):
     """
-    Document Pipeline - 企業級文檔處理管道
+    Document Pipeline - 企业级文档处理管道（简化版 v3.3）
     
-    🌟 v3.2: 继承 BaseIngestionPipeline，使用 LlamaParse
+    🌟 只负责协调（Orchestrator），具体逻辑由 Stage handlers 处理
     
     核心方法：
-    - smart_extract(): 智能提取入口（关键字搜索 + LLM 提取）
-    - process_pdf_full(): 完整 5-Stage 流程
-    - run_agentic_ingestion(): Agent 智能提取
+    - smart_extract(): 调用 Stage3 + Stage4
+    - process_pdf_full(): 调用 Stage0-6
+    - process_pdf(): 简化版入口
     """
     
     def __init__(
@@ -67,8 +70,8 @@ class DocumentPipeline(BaseIngestionPipeline):
         初始化
         
         Args:
-            db_url: 數據庫連接字符串
-            data_dir: 數據存儲目錄
+            db_url: 数据库连接字符串
+            data_dir: 数据存储目录
             tier: LlamaParse 解析层级
         """
         super().__init__(db_url=db_url, data_dir=data_dir, tier=tier)
@@ -79,168 +82,7 @@ class DocumentPipeline(BaseIngestionPipeline):
         logger.info(f"✅ DocumentPipeline 初始化完成 (tier={tier})")
     
     # ===========================================
-    # 🌟 缺失方法恢复（从 pipeline_old.py）
-    # ===========================================
-    
-    def _get_agentic_pipeline(self):
-        """
-        🌟 获取或创建 AgenticPipeline 实例
-        
-        用于 Stage 5 Agentic 写入
-        
-        Returns:
-            AgenticPipeline or None
-        """
-        if self._agentic_pipeline is None and self.enable_agentic_ingestion:
-            from .agentic_pipeline import AgenticPipeline
-            self._agentic_pipeline = AgenticPipeline(
-                db_url=self.db_url,
-                data_dir=str(self.data_dir)
-            )
-            logger.info("✅ AgenticPipeline 已初始化")
-        return self._agentic_pipeline
-    
-    async def connect(self):
-        """连接数据库"""
-        await self.db.connect()
-    
-    async def close(self):
-        """关闭数据库连接"""
-        await self.db.close()
-    
-    async def run_agentic_ingestion(
-        self,
-        pdf_path: str,
-        filename: str,
-        task_id: str = None
-    ) -> Dict[str, Any]:
-        """
-        🌟 Stage 5: Agentic 智能写入
-        
-        使用 AI Agent 分析前 1-2 页，提取实体信息并动态写入数据库
-        
-        Args:
-            pdf_path: PDF 文件路径
-            filename: 原始文件名
-            task_id: 任务 ID (可选)
-            
-        Returns:
-            Dict: {"success": bool, "document_id": str, "needs_review": bool}
-        """
-        if not self.enable_agentic_ingestion:
-            logger.info("⏭️ Agentic ingestion disabled, skipping Stage 5")
-            return {"success": True, "skipped": True, "reason": "disabled"}
-        
-        pipeline = self._get_agentic_pipeline()
-        if pipeline is None:
-            logger.warning("⚠️ AgenticPipeline not available, skipping Stage 5")
-            return {"success": True, "skipped": True, "reason": "no_pipeline"}
-        
-        logger.info(f"🤖 Stage 5: Running agentic ingestion for {filename}")
-        
-        try:
-            result = await pipeline.ingest_with_agent(
-                pdf_path=pdf_path,
-                filename=filename,
-                task_id=task_id
-            )
-            
-            analysis = result.get("analysis", {})
-            confidence_scores = analysis.get("confidence_scores", {})
-            needs_review = any(score < 0.8 for score in confidence_scores.values()) if confidence_scores else False
-            
-            result["needs_review"] = needs_review
-            
-            logger.info(f"✅ Stage 5 complete: document_id={result.get('document_id')}")
-            
-            return result
-            
-        except Exception as e:
-            logger.exception(f"❌ Stage 5 failed: {e}")
-            return {"success": False, "error": str(e)}
-    
-    async def process_pdf(
-        self,
-        pdf_path: str,
-        company_id: int = None,
-        doc_id: str = None,
-        progress_callback: Callable = None,
-        replace: bool = False
-    ) -> Dict[str, Any]:
-        """
-        🌟 简化版 PDF 处理流程
-        
-        直接调用 process_pdf_full
-        
-        Args:
-            pdf_path: PDF 文件路径
-            company_id: 公司 ID (可选)
-            doc_id: 文档 ID
-            progress_callback: 进度回调
-            replace: 是否强制重新处理
-            
-        Returns:
-            Dict: 处理结果
-        """
-        logger.info(f"🚀 process_pdf: {pdf_path}")
-        
-        try:
-            # Step 1: 计算 Hash
-            if progress_callback:
-                progress_callback(5.0, "计算 Hash...")
-            file_hash = self._compute_file_hash(pdf_path)
-            
-            # Step 2: 检查重复
-            if progress_callback:
-                progress_callback(10.0, "检查重复...")
-            
-            if replace:
-                await self.db.delete_document(doc_id)
-            else:
-                exists = await self.db.check_document_exists(doc_id, file_hash)
-                if exists:
-                    return {"status": "skipped", "reason": "duplicate"}
-            
-            # Step 3: 创建文档记录
-            await self._create_document(doc_id, pdf_path, company_id, file_hash)
-            
-            # Step 4: 调用完整流程
-            return await self.process_pdf_full(
-                pdf_path=pdf_path,
-                company_id=company_id,
-                doc_id=doc_id,
-                progress_callback=progress_callback
-            )
-            
-        except Exception as e:
-            logger.error(f"❌ 处理失败: {e}")
-            await self.db.update_document_status(doc_id, "failed", error=str(e))
-            return {"status": "failed", "error": str(e)}
-    
-    async def _get_document_year(self, doc_id: str) -> Optional[int]:
-        """
-        🌟 从数据库获取文档年份
-        
-        Args:
-            doc_id: 文档 ID
-            
-        Returns:
-            int: 年份，如果未找到返回 None
-        """
-        try:
-            row = await self.db.conn.fetchrow(
-                "SELECT year FROM documents WHERE doc_id = $1",
-                doc_id
-            )
-            if row and row['year']:
-                return row['year']
-        except Exception as e:
-            logger.warning(f"⚠️ 无法从数据库获取年份: {e}")
-        
-        return None
-    
-    # ===========================================
-    # 🌟 主入口：smart_extract（保留原有）
+    # 🌟 协调者方法（调用 Stage handlers）
     # ===========================================
     
     async def smart_extract(
@@ -251,71 +93,56 @@ class DocumentPipeline(BaseIngestionPipeline):
         progress_callback: Callable = None,
         year: int = None,
         artifacts: List[Dict[str, Any]] = None,
-        # 🌟 UI 参数（来自 WebUI）
         is_index_report: bool = False,
         index_theme: str = None,
         confirmed_doc_industry: str = None,
         keywords: List[str] = None,
         extraction_types: List[str] = None,
         use_llm: bool = True,
-        # 🌟 Agentic 模式开关
         use_agentic: bool = True
     ) -> Dict[str, Any]:
         """
-        🌟 智能提取入口（关键字搜索 + Agent 提取）
+        🌟 智能提取入口（协调者）
         
-        🌟 核心改进：根据用户建议，实现真正的 Agentic 写入逻辑
-        - UI 决定大方向 (is_index_report, index_theme, confirmed_doc_industry)
-        - AI 处理细节落库 (查 Schema、写 SQL、塞 JSON)
+        调用 Stage handlers 完成：
+        - Stage 1: PDF 解析（如果没有 artifacts）
+        - Stage 3: 关键字搜索 + 页面路由
+        - Stage 4: 结构化提取
+        - Stage 5: Agentic 写入（可选）
         
         Args:
             pdf_path: PDF 路径
-            company_id: 公司 ID (指数报告时为 None)
+            company_id: 公司 ID
             doc_id: 文档 ID
             progress_callback: 进度回调
-            year: 年份（由主流程传入）
-            artifacts: LlamaParse 解析结果（可选，会自动解析）
-            is_index_report: 是否为指数报告（来自 UI）
-            index_theme: 指数主题 (如 "Hang Seng Biotech Index")
-            confirmed_doc_industry: 报告定义的行业 (如 "Biotech")
-            keywords: 关键词列表（用于定位页面）
+            year: 年份
+            artifacts: LlamaParse 解析结果（可选）
+            is_index_report: 是否为指数报告
+            index_theme: 指数主题
+            confirmed_doc_industry: 确认的行业
+            keywords: 关键词列表
             extraction_types: 提取类型
             use_llm: 是否使用 LLM 分类
             use_agentic: 是否使用 Agentic 写入
             
         Returns:
-            Dict: 提取结果统计
+            Dict: 提取结果
         """
         pdf_path = Path(pdf_path)
         if not pdf_path.exists():
             raise FileNotFoundError(f"PDF not found: {pdf_path}")
         
         doc_id = doc_id or pdf_path.stem
-        keywords = keywords or ["revenue", "segment", "geography", "director", "management"]
+        keywords = keywords or ["revenue", "segment", "geography"]
         extraction_types = extraction_types or ["revenue_breakdown"]
         
-        logger.info(f"🧠 开始智能结构化提取...")
-        logger.info(f"   👉 UI 设定: 指数报告={is_index_report}, 行业={confirmed_doc_industry}")
-        
-        # 🌟 如果没有传入年份，使用当前年份作为 fallback
-        if not year:
-            from datetime import datetime
-            year = datetime.now().year
-            logger.warning(f"   ⚠️ 未传入年份，使用当前年份: {year}")
-        else:
-            logger.info(f"   📅 文档年份: {year}")
-        
-        result = {
-            "revenue_breakdown": {"pages": [], "extracted": 0},
-            "errors": []
-        }
+        logger.info(f"🧠 smart_extract: {pdf_path}")
         
         # 🌟 Step 1: 如果没有 artifacts，先解析
         if not artifacts:
             if progress_callback:
-                progress_callback(10.0, "LlamaParse 解析")
+                progress_callback(10.0, "Stage 1: PDF 解析")
             
-            # 尝试从 raw output 加载
             try:
                 parse_result = self.parser.load_from_raw_output(pdf_path.name)
                 logger.info(f"   ✅ 从 raw output 加载（不扣费）")
@@ -325,333 +152,92 @@ class DocumentPipeline(BaseIngestionPipeline):
             
             artifacts = parse_result.artifacts
         
-        # 🌟 Phase 3: 获取总页数（用于上下文感知）
-        total_pages = 0
-        if artifacts:
-            total_pages = max(a.get("page", 1) for a in artifacts)
-            logger.info(f"   📊 PDF 总页数: {total_pages}")
-        
-        if not artifacts:
-            logger.warning("⚠️ 没有 artifacts，跳过结构化提取")
-            result["errors"].append("No artifacts available")
-            return result
-        
         if progress_callback:
-            progress_callback(30.0, f"解析完成: {total_pages} 页")
+            progress_callback(30.0, f"解析完成: {len(artifacts)} artifacts")
         
-        # 🌟 Step 2: 关键字搜索（在 artifacts 中）
+        # 🌟 Step 2: Stage 3 - 关键字搜索 + 页面路由
         if progress_callback:
-            progress_callback(40.0, "关键字搜索")
+            progress_callback(40.0, "Stage 3: 页面路由")
         
-        # 🌟 使用 KeywordManager 动态关键词管理（支持 Agent 学习）
-        from nanobot.ingestion.stages.keyword_manager import KeywordManager
-        keyword_manager = KeywordManager("/app/data/raw/search_keywords.json")
-        dynamic_keywords = keyword_manager.get_all_keywords_flat("revenue_breakdown")
+        router_result = await Stage3Router.find_target_pages(
+            artifacts=artifacts,
+            target_types=extraction_types,
+            keywords=keywords
+        )
         
-        # 如果 JSON 没有关键词，使用基本 Cold-start 名单
-        if not dynamic_keywords:
-            dynamic_keywords = [
-                "revenue breakdown", "geographical", "geographic", 
-                "region", "segment", "business segment",
-                "收入分佈", "地區收入", "業務分佈"
-            ]
-            logger.warning("⚠️ Keyword JSON 空白，使用 Cold-start 名单")
+        target_pages = router_result.get("revenue_breakdown", [])
+        logger.info(f"   📊 找到目标页面: {target_pages}")
         
-        # 合并传入的关键词和动态关键词
-        all_keywords = list(set(keywords + dynamic_keywords))
+        if not target_pages:
+            logger.warning("⚠️ 未找到目标页面")
+            return {"status": "no_target_pages", "artifacts_count": len(artifacts)}
         
-        revenue_pages = set()
+        # 🌟 Step 3: Stage 4 - 结构化提取
+        if progress_callback:
+            progress_callback(60.0, "Stage 4: 结构化提取")
         
-        # 🌟 在 artifacts 中搜索关键词
-        for artifact in artifacts:
-            artifact_type = artifact.get("type")
-            page_num = artifact.get("page")
-            
-            # 只在有文字或表格的区块搜寻
-            if artifact_type == "text_chunk":
-                content = str(artifact.get("content", "")).lower()
-                for keyword in all_keywords:
-                    if keyword.lower() in content:
-                        revenue_pages.add(page_num)
-                        logger.debug(f"   Page {page_num}: text_chunk 命中 '{keyword}'")
-                        break
-            
-            elif artifact_type == "table":
-                # 表格内容可能在 content 或 markdown 中
-                table_content = artifact.get("content", "") or artifact.get("markdown", "")
-                content = str(table_content).lower()
-                for keyword in all_keywords:
-                    if keyword.lower() in content:
-                        revenue_pages.add(page_num)
-                        logger.debug(f"   Page {page_num}: table 命中 '{keyword}'")
-                        break
+        # 获取年份
+        if not year:
+            from datetime import datetime
+            year = datetime.now().year
         
-        logger.info(f"   📊 Artifacts 搜索找到 {len(revenue_pages)} 个候选页面: {sorted(revenue_pages)}")
-        
-        # 🌟 Phase 3: 记录关键词使用（上下文感知）
-        keyword_hits = {}
-        for keyword in all_keywords:
-            keyword_hits[keyword] = []
-        
-        for artifact in artifacts:
-            artifact_type = artifact.get("type")
-            page_num = artifact.get("page")
-            
-            if artifact_type == "text_chunk":
-                content = str(artifact.get("content", "")).lower()
-                for keyword in all_keywords:
-                    if keyword.lower() in content and page_num not in keyword_hits[keyword]:
-                        keyword_hits[keyword].append(page_num)
-                        break
-            
-            elif artifact_type == "table":
-                table_content = artifact.get("content", "") or artifact.get("markdown", "")
-                content = str(table_content).lower()
-                for keyword in all_keywords:
-                    if keyword.lower() in content and page_num not in keyword_hits[keyword]:
-                        keyword_hits[keyword].append(page_num)
-                        break
-        
-        # 🌟 记录关键词使用（usage_count）
-        for keyword, hit_pages in keyword_hits.items():
-            if hit_pages:
-                logger.debug(f"   📝 Keyword '{keyword}' used in pages: {hit_pages}")
-        
-        revenue_pages = sorted(list(revenue_pages))
-        result["revenue_breakdown"]["pages"] = revenue_pages
-        
-        if not revenue_pages:
-            logger.warning("⚠️ 找不到候选页面，跳过结构化提取")
-            return result
-        
-        logger.info(f"   📊 总共有 {len(revenue_pages)} 个 Revenue Breakdown 候选页面: {sorted(revenue_pages)}")
-        
-        # 🌟 Step 3: 遍历候选页面进行提取
-        for i, page_num in enumerate(sorted(revenue_pages)):
+        # 🌟 如果启用 Agentic，直接调用 Stage 5
+        if use_agentic:
             if progress_callback:
-                progress = 50.0 + (i + 1) / max(len(revenue_pages), 1) * 40.0
-                progress_callback(progress, f"处理 Page {page_num}...")
+                progress_callback(70.0, "Stage 5: Agentic 写入")
             
-            # 从 artifacts 取出该页面的所有内容
-            page_artifacts = [a for a in artifacts if a.get("page") == page_num]
+            # 获取 AgenticPipeline
+            agentic_pipeline = self._get_agentic_pipeline()
             
-            if not page_artifacts:
-                logger.warning(f"   ⚠️ Page {page_num} 在 artifacts 中找不到，跳过")
-                continue
-            
-            # 合并该页面的所有文本和表格
-            page_content = self._merge_page_artifacts(page_artifacts)
-            
-            if not page_content or len(page_content.strip()) < 50:
-                logger.warning(f"   ⚠️ Page {page_num} 内容无效，跳过")
-                continue
-            
-            logger.info(f"   🔍 处理 Page {page_num} ({len(page_content)} chars)...")
-            
-            try:
-                # 🌟 核心改进：优先使用 Agentic 写入
-                if use_agentic:
-                    # 🌟 构建报告类型描述
-                    if is_index_report:
-                        report_context = f"""
-这是一份指数/指数成分股报告(主题: {index_theme or 'Unknown'}, 行业: {confirmed_doc_industry or 'Unknown'})。
-该文档包含多家公司的数据，请针对每一家公司进行提取。
-适用规则：规则 A - 所有成分股都被强制指派行业 '{confirmed_doc_industry or 'Unknown'}'"""
-                    else:
-                        report_context = f"""
-这是一份年报单公司年报，公司 ID 为 {company_id or '待提取'}。
-适用规则：规则 B - 使用 AI 提取各公司的行业"""
+            if agentic_pipeline:
+                # 构建 stage5_prompt
+                for page_num in target_pages:
+                    # 🌟 v3.5: 跳过 None 元素
+                    page_artifacts = [a for a in artifacts if a is not None and a.get("page") == page_num]
+                    page_content = self._merge_page_artifacts(page_artifacts)
                     
-                    # 🌟 构建 Stage 5 Prompt（告诉 Agent 如何提取和写入）
-                    stage5_prompt = f"""
-你是一个专业的 PostgreSQL 数据库写入 Agent。
-你的任务：从 PDF 的第 {page_num} 页内容中提取结构化数据，并智能写入数据库。
-
-【基本信息】
-- 文档 ID: {doc_id}
-- 年份: {year}
-- 公司 ID: {company_id or '待提取'}
-- 报告类型: {report_context}
-
-【第一步：页面类型识别】⚠️ 重要！先判断这页是什么类型的内容：
-
-| 页面类型 | 识别关键词 | 目标数据表 |
-|---------|-----------|-----------|
-| 📊 Revenue Breakdown | "revenue", "segment", "geographical", "地区", "分部" | revenue_breakdown |
-| 👤 Key Personnel | "director", "management", "高管", "董事", "委员会" | key_personnel |
-| 💰 Financial Metrics | "profit", "assets", "liabilities", "收入", "利润", "资产" | financial_metrics |
-| 📈 Market Data | "share price", "market cap", "股价", "市值" | market_data |
-| 🏛️ Shareholding | "shareholder", "持股", "股东结构" | shareholding_structure |
-| 🌱 ESG/Other | "ESG", "碳排放", "sustainability" | documents.dynamic_attributes |
-
-【第二步：数据提取与写入】根据识别的类型，调用对应的写入逻辑：
-
-1. 📊 **Revenue Breakdown 页面** → 写入 revenue_breakdown 表：
-   - segment_name (地区/业务名称)
-   - segment_type (geography/business/product)
-   - revenue_percentage (百分比)
-   - revenue_amount (金额)
-   - currency (货币单位)
-
-2. 👤 **Key Personnel 页面** → 写入 key_personnel 表：
-   - name_en, name_zh (姓名)
-   - position_title_en (职位)
-   - board_role (Executive/Non-Executive/Independent)
-   - committee_membership (委员会成员，JSONB 数组)
-   - biography (简介)
-
-3. 💰 **Financial Metrics 页面** → 写入 financial_metrics 表：
-   - metric_name (指标名称，如 "revenue", "net_income")
-   - value (数值)
-   - unit (单位)
-   - standardized_value (标准化为 HKD)
-
-4. 📈 **Market Data 页面** → 写入 market_data 表：
-   - metric_name (股价、市值等)
-   - value, unit
-   - date (数据日期)
-
-5. 🏛️ **Shareholding 页面** → 写入 shareholding_structure 表：
-   - shareholder_name (股东名称)
-   - share_type (股份类型)
-   - shares_held (持股数)
-   - percentage (持股比例)
-
-6. 🌱 **ESG/特殊属性** → 使用 update_dynamic_attributes 写入 JSONB：
-   - 例如：{{"esg_score": 85, "carbon_emission": 1234}}
-
-【第三步：执行写入】
-1. 先调用 get_db_schema 查看表结构
-2. 根据页面类型，提取对应数据
-3. 使用 smart_insert_document 或直接 SQL 写入
-4. 记录新发现的词汇 → register_new_keyword
-
-【待处理文本】
-{page_content[:6000]}
-
-请先判断页面类型，然后执行对应的提取和写入操作。
-"""
+                    stage5_prompt = self._build_stage5_prompt(
+                        page_content=page_content,
+                        page_num=page_num,
+                        doc_id=doc_id,
+                        year=year,
+                        company_id=company_id,
+                        is_index_report=is_index_report,
+                        index_theme=index_theme,
+                        confirmed_doc_industry=confirmed_doc_industry
+                    )
                     
-                    # 🎯 直接获取 Agentic Pipeline
-                    pipeline = self._get_agentic_pipeline()
-                    
-                    if pipeline:
-                        # 🌟 构建 user_hints，标记这是 Stage 5
-                        user_hints = {
+                    result_agentic = await agentic_pipeline.process_document(
+                        document_content=stage5_prompt,
+                        filename=pdf_path.name,
+                        user_hints={
                             "stage": "structured_extraction",
-                            "doc_type": "index_report" if is_index_report else "annual_report",
-                            "index_theme": index_theme,
-                            "confirmed_doc_industry": confirmed_doc_industry,
-                            "page_num": page_num,
-                            "year": year,
-                            "company_id": company_id,
-                            "page_content": page_content[:6000]
+                            "page_num": page_num
                         }
-                        
-                        logger.info(f"   🤖 将 Page {page_num} 交给 AgenticPipeline 处理...")
-                        
-                        # 🌟 调用 process_document 并传入 Stage 5 Prompt
-                        result_agentic = await pipeline.process_document(
-                            document_content=stage5_prompt,
-                            filename=Path(pdf_path).name,
-                            user_hints=user_hints
-                        )
-                        
-                        logger.info(f"   ✅ Page {page_num} Agentic 写入完成！")
-                        result["revenue_breakdown"]["extracted"] += 1
+                    )
                     
-                    # 🌟 方案 B: 传统硬编码写入（如果无法获取 Agentic Pipeline）
-                    else:
-                        logger.warning("   ⚠️ 无法获取 Agentic Pipeline，退回传统 Hardcode 写入模式")
-                        extracted_data = await self.agent.extract_revenue_breakdown(page_content)
-                        
-                        if extracted_data:
-                            # 验证百分比总和
-                            total_pct = sum(
-                                item.get("percentage", 0) 
-                                for item in extracted_data.values()
-                            )
-                            
-                            if 99.0 <= total_pct <= 101.0:
-                                # 🌟 入库（仅适用于有 company_id 的年报）
-                                if company_id:
-                                    inserted = await self._insert_revenue_breakdown(
-                                        extracted_data=extracted_data,
-                                        company_id=company_id,
-                                        year=year,
-                                        doc_id=doc_id
-                                    )
-                                    result["revenue_breakdown"]["extracted"] += inserted
-                                    logger.info(f"   ✅ Page {page_num} 提取成功: {inserted} 条记录")
-                                    
-                                    # 🌟 Phase 3: 记录关键词命中（带上下文）
-                                    for keyword, hit_pages in keyword_hits.items():
-                                        if page_num in hit_pages:
-                                            keyword_manager.record_hit_with_context(
-                                                keyword=keyword,
-                                                page_num=page_num,
-                                                total_pages=total_pages,
-                                                features={"has_table": True, "has_percentage": True},
-                                                hit=True,
-                                                industry=confirmed_doc_industry
-                                            )
-                                else:
-                                    logger.warning(f"   ⚠️ 无 company_id，无法写入 revenue_breakdown（指数报告请启用 Agentic 模式）")
-                            else:
-                                logger.warning(f"   ⚠️ Page {page_num} 百分比总和 {total_pct}% 不为 100%，跳过")
-                        else:
-                            logger.warning(f"   ⚠️ Page {page_num} LLM 提取失败")
-                
-                else:
-                    # 🌟 不使用 Agentic，直接用 FinancialAgent
-                    logger.info(f"   📊 使用 FinancialAgent 处理 Page {page_num}...")
-                    extracted_data = await self.agent.extract_revenue_breakdown(page_content)
-                    
-                    if extracted_data and company_id:
-                        inserted = await self._insert_revenue_breakdown(
-                            extracted_data=extracted_data,
-                            company_id=company_id,
-                            year=year,
-                            doc_id=doc_id
-                        )
-                        result["revenue_breakdown"]["extracted"] += inserted
-            
-            except Exception as e:
-                logger.error(f"   ❌ Page {page_num} 提取失败: {e}")
-                result["errors"].append(f"Page {page_num}: {str(e)}")
+                    logger.info(f"   ✅ Page {page_num} Agentic 写入完成")
+            else:
+                # 🌟 Fallback: 使用 Stage4Extractor
+                extraction_result = await Stage4Extractor.extract_structured_data(
+                    artifacts=artifacts,
+                    target_pages=target_pages,
+                    company_id=company_id,
+                    year=year,
+                    doc_id=doc_id,
+                    extraction_types=extraction_types,
+                    db_client=self.db
+                )
         
         if progress_callback:
             progress_callback(100.0, "提取完成")
         
-        return result
-    
-    def _find_keyword_pages(self, artifacts: List[Dict], keywords: List[str]) -> List[int]:
-        """
-        在 artifacts 中搜索关键词
-        
-        Args:
-            artifacts: Artifacts 列表
-            keywords: 关键词列表
-            
-        Returns:
-            List[int]: 找到的页面列表
-        """
-        candidate_pages = set()
-        
-        for artifact in artifacts:
-            content = artifact.get("content", "") or ""
-            content_lower = content.lower()
-            
-            for keyword in keywords:
-                if keyword.lower() in content_lower:
-                    candidate_pages.add(artifact.get("page", 0))
-                    break
-        
-        return sorted(list(candidate_pages))
-    
-    # ===========================================
-    # 🌟 主入口：process_pdf_full（5-Stage）
-    # ===========================================
+        return {
+            "status": "success",
+            "doc_id": doc_id,
+            "target_pages": target_pages,
+            "artifacts_count": len(artifacts)
+        }
     
     async def process_pdf_full(
         self,
@@ -665,195 +251,190 @@ class DocumentPipeline(BaseIngestionPipeline):
         confirmed_doc_industry: str = None
     ) -> Dict[str, Any]:
         """
-        完整 PDF 處理流程（5-Stage）
+        🌟 完整 PDF 处理流程（协调者）
+        
+        调用 Stage handlers 完成：
+        - Stage 0: Vision 封面提取
+        - Stage 1: LlamaParse 解析
+        - Stage 2: 保存 Artifacts
+        - Stage 3: 关键字路由
+        - Stage 4: 结构化提取
+        - Stage 5: Agentic 写入
+        - Stage 6: Vanna 训练
+        
+        Args:
+            pdf_path: PDF 文件路径
+            company_id: 公司 ID
+            doc_id: 文档 ID
+            progress_callback: 进度回调
+            replace: 是否强制重新处理
+            is_index_report: 是否为指数报告
+            index_theme: 指数主题
+            confirmed_doc_industry: 确认的行业
+            
+        Returns:
+            Dict: 处理结果
         """
         pdf_path = Path(pdf_path)
         if not pdf_path.exists():
             raise FileNotFoundError(f"PDF not found: {pdf_path}")
         
-        if not doc_id:
-            doc_id = pdf_path.stem
+        doc_id = doc_id or pdf_path.stem
         
-        logger.info(f"🚀 开始 5-Stage 处理: {pdf_path}")
+        logger.info(f"🚀 process_pdf_full: {pdf_path}")
         
         result = {
             "doc_id": doc_id,
-            "pdf_path": str(pdf_path),
-            "success": True,
+            "status": "success",
             "stages": {}
         }
         
         try:
-            # ===== Stage 0: 封面预处理 =====
+            # ===== Stage 0: Vision 提取封面 =====
             if progress_callback:
                 progress_callback(5.0, "Stage 0: Vision 提取封面")
             
-            # 🌟 Stage 0 会根据 is_index_report 使用不同的提取策略
             stage0_result = await Stage0Preprocessor.extract_cover_metadata(
                 pdf_path=str(pdf_path),
                 doc_id=doc_id,
-                db_client=self.db,
-                is_index_report=is_index_report,  # 🌟 传入 is_index_report
-                confirmed_doc_industry=confirmed_doc_industry  # 🌟 传入确认的行业
+                is_index_report=is_index_report,
+                confirmed_doc_industry=confirmed_doc_industry,
+                parser=self.parser  # 🌟 v3.4: 传入已有的 parser，避免重复创建
             )
+            
+            # 🌟 v3.5: 安全检查 Stage 0 返回值
+            if stage0_result is None:
+                logger.warning("⚠️ Stage 0 返回 None，使用默认值")
+                stage0_result = {"stock_code": None, "year": 2025}
+            
             result["stages"]["stage0"] = stage0_result
             
-            # 🌟 行业分配规则：
-            # - 规则 A（is_index_report=true）：所有成分股都指派 confirmed_doc_industry
-            # - 规则 B（is_index_report=false）：使用 AI 提取各公司的行业
+            # 提取公司信息
+            if not company_id and stage0_result.get("stock_code"):
+                # 🌟 v3.6: 直接使用已有的 stage0_result，不重复调用 Stage 0
+                company_id = await self._create_company_from_metadata(stage0_result)
             
-            if stage0_result.get("stock_code") and not company_id:
-                company = await self.db.get_company_by_stock_code(stage0_result["stock_code"])
-                if company:
-                    company_id = company.get("id")
-                    # 🌟 如果是指数报告，更新公司行业（规则 A）
-                    if is_index_report and confirmed_doc_industry:
-                        await self.db.update_company_industry(company_id, confirmed_doc_industry)
-            
-            year = stage0_result.get("year")
-            
-            if progress_callback:
-                progress_callback(10.0, f"Stage 0 完成")
+            year = stage0_result.get("year") or 2025
             
             # ===== Stage 1: LlamaParse 解析 =====
             if progress_callback:
                 progress_callback(15.0, "Stage 1: LlamaParse 解析")
             
-            stage1_result = await Stage1Parser.parse_pdf(
-                pdf_path=str(pdf_path),
-                doc_id=doc_id,
-                tier=self.tier
-            )
-            result["stages"]["stage1"] = stage1_result
-            result["job_id"] = stage1_result.get("job_id")
-            result["total_pages"] = stage1_result.get("total_pages", 0)
+            # 🌟 v3.10: Stage 0 已经解析完成，Stage 1 应该直接使用 raw output
+            # 不再调用 parse_async()，避免重复上传和解析
+            
+            pdf_filename = pdf_path.name
+            raw_output_dir = None
+            
+            # 🌟 尝试从 raw output 加载
+            parse_result = None
+            try:
+                parse_result = self.parser.load_from_raw_output(pdf_filename)
+                logger.info(f"   ✅ 从 raw output 加载成功: job_id={parse_result.job_id}, {parse_result.total_pages} 页")
+            except FileNotFoundError as e:
+                # 🌟 v3.10: 如果 raw output 不存在，说明 Stage 0 没有成功保存
+                # 这不应该发生！记录错误并跳过后续 Stage
+                logger.error(f"   ❌ Raw output 不存在，无法继续: {e}")
+                logger.error(f"   ⚠️ Stage 0 应该已经解析并保存了 raw output，但没有找到")
+                raise ValueError(f"Stage 0 raw output not found: {e}")
+            except Exception as e:
+                logger.error(f"   ❌ 加载 raw output 失败: {e}")
+                raise
+            
+            # 🌟 v3.10: 安全检查 parse_result
+            if parse_result is None:
+                raise ValueError("parse_result is None after Stage 1")
+            
+            artifacts = parse_result.artifacts
+            if artifacts is None:
+                logger.warning("   ⚠️ artifacts is None, using empty list")
+                artifacts = []
+            
+            result["stages"]["stage1"] = {
+                "job_id": parse_result.job_id,
+                "total_pages": parse_result.total_pages,
+                "tables_count": len(parse_result.tables) if parse_result.tables else 0,
+                "images_count": len(parse_result.images) if parse_result.images else 0,
+                "loaded_from": "raw_output"
+            }
+            
+            # ===== Stage 2: 保存 Artifacts =====
+            if progress_callback:
+                progress_callback(30.0, "Stage 2: 储存与分析图片 (PyMuPDF + RAGAnything 上下文)")
             
             # 创建文档记录
-            document_id = await self._create_document(
-                doc_id=doc_id,
-                pdf_path=pdf_path,
-                company_id=company_id
-            )
+            file_hash = self._compute_file_hash(str(pdf_path))
+            await self._create_document(doc_id, str(pdf_path), company_id, file_hash)
             
-            if progress_callback:
-                progress_callback(30.0, f"Stage 1 完成: {result['total_pages']} 页")
-            
-            # ===== Stage 2: 保存所有页面 =====
-            artifacts = stage1_result.get("artifacts", [])
-            tables = stage1_result.get("tables", [])
-            images = stage1_result.get("images", [])
-            
-            # 合并所有 artifacts
-            all_artifacts = artifacts + [
-                {"type": "table", "page": t.get("page", 0), "content": t} 
-                for t in tables
-            ] + [
-                {"type": "image", "page": img.get("page", 0), "content": img}
-                for img in images
-            ]
-            
-            if progress_callback:
-                progress_callback(35.0, "Stage 2: 保存 Artifacts")
-            
+            # 🌟 新增：呼叫 Stage 2 处理所有 Artifacts（包含 RAGAnything 上下文 Vision 分析）
             stage2_result = await Stage2Enrichment.save_all_artifacts(
-                artifacts=all_artifacts,
+                artifacts=artifacts,
                 doc_id=doc_id,
                 company_id=company_id,
-                document_id=document_id,
-                data_dir=self.data_dir,
+                document_id=doc_id,
+                data_dir=Path(self.data_dir) if hasattr(self, 'data_dir') else Path("/app/data"),
                 db_client=self.db,
                 vision_limit=20
             )
             result["stages"]["stage2"] = stage2_result
             
-            if progress_callback:
-                progress_callback(50.0, f"Stage 2 完成")
-            
             # ===== Stage 3: 关键字路由 =====
             if progress_callback:
-                progress_callback(55.0, "Stage 3: 关键字路由")
+                progress_callback(50.0, "Stage 3: 关键字路由")
             
             stage3_result = await Stage3Router.find_target_pages(
                 artifacts=artifacts,
-                target_types=["revenue_breakdown", "key_personnel", "financial_metrics"]
+                target_types=["revenue_breakdown"]
             )
             result["stages"]["stage3"] = stage3_result
             
-            # ===== Stage 4: Agent 结构化提取 =====
+            # ===== Stage 4: Agent 提取 =====
             if progress_callback:
                 progress_callback(60.0, "Stage 4: Agent 提取")
             
-            all_target_pages = set()
-            for target_type in ["revenue_breakdown", "key_personnel", "financial_metrics"]:
-                pages = stage3_result.get(target_type, [])
-                all_target_pages.update(pages)
+            revenue_pages = stage3_result.get("revenue_breakdown", [])
             
-            if all_target_pages:
-                stage4_result = await Stage4Extractor.extract_structured_data(
+            if revenue_pages and company_id:
+                extraction_result = await Stage4Extractor.extract_structured_data(
                     artifacts=artifacts,
-                    target_pages=list(all_target_pages),
+                    target_pages=revenue_pages,
                     company_id=company_id,
                     year=year,
                     doc_id=doc_id,
-                    document_id=document_id,
-                    extraction_types=["revenue_breakdown", "key_personnel", "financial_metrics"],
-                    db_client=self.db,
-                    progress_callback=progress_callback,
-                    is_index_report=is_index_report,
-                    index_theme=index_theme,
-                    confirmed_doc_industry=confirmed_doc_industry
+                    extraction_types=["revenue_breakdown"],
+                    db_client=self.db
                 )
-                result["stages"]["stage4"] = stage4_result
-            else:
-                result["stages"]["stage4"] = {"status": "skipped", "reason": "未找到目标页面"}
+                result["stages"]["stage4"] = extraction_result
             
+            # ===== Stage 5: Agentic 写入 =====
             if progress_callback:
-                progress_callback(90.0, "Stage 4 完成")
+                progress_callback(80.0, "Stage 5: Agentic 写入")
             
-            # ===== Stage 5: Agentic 写入与行业分配 =====
-            if progress_callback:
-                progress_callback(92.0, "Stage 5: Agentic 写入")
-            
+            # 🌟 v3.11: 使用正确的参数签名
             stage5_result = await Stage5AgenticWriter.run_agentic_write(
                 artifacts=artifacts,
                 company_id=company_id,
                 year=year,
                 doc_id=doc_id,
-                document_id=document_id,
+                document_id=None,  # 后续补充
                 is_index_report=is_index_report,
                 index_theme=index_theme,
                 confirmed_doc_industry=confirmed_doc_industry,
                 db_client=self.db,
-                extraction_types=["revenue_breakdown", "key_personnel", "financial_metrics"],
-                progress_callback=progress_callback
+                extraction_types=["revenue_breakdown"]
             )
             result["stages"]["stage5"] = stage5_result
             
-            # ===== Stage 6: Vanna 训练与后续处理 =====
+            # ===== Stage 6: Vanna 训练 =====
             if progress_callback:
-                progress_callback(95.0, "Stage 6: Vanna 训练")
+                progress_callback(90.0, "Stage 6: Vanna 训练")
             
-            stage6_result = await Stage6VannaTraining.run_complete_stage(
+            # 🌟 v3.18: 传递 company_id 和 year 参数
+            await self._trigger_vanna_training(
                 doc_id=doc_id,
                 company_id=company_id,
-                year=year,
-                db_client=self.db,
-                data_dir=self.data_dir,
-                progress_callback=progress_callback
+                year=year
             )
-            result["stages"]["stage6"] = stage6_result
-            
-            # ===== 完成 =====
-            await self.db.update_document_status(doc_id, "completed")
-            
-            # 完成
-            await self.db.update_document_status(doc_id, "completed")
-            
-            result["status"] = "success"
-            result["total_chunks"] = len(artifacts)
-            result["tables_count"] = len(tables)
-            result["images_count"] = len(images)
-            result["company_id"] = company_id
             
             if progress_callback:
                 progress_callback(100.0, "处理完成")
@@ -861,446 +442,244 @@ class DocumentPipeline(BaseIngestionPipeline):
             return result
             
         except Exception as e:
-            logger.error(f"❌ 处理失败: {e}", exc_info=True)
-            await self.db.update_document_status(doc_id, "failed", error_message=str(e))
+            logger.error(f"❌ process_pdf_full 失败: {e}")
             result["status"] = "failed"
             result["error"] = str(e)
             return result
     
+    async def process_pdf(
+        self,
+        pdf_path: str,
+        company_id: int = None,
+        doc_id: str = None,
+        progress_callback: Callable = None,
+        replace: bool = False
+    ) -> Dict[str, Any]:
+        """简化版 PDF 处理流程"""
+        return await self.process_pdf_full(
+            pdf_path=pdf_path,
+            company_id=company_id,
+            doc_id=doc_id,
+            progress_callback=progress_callback,
+            replace=replace
+        )
+    
+    async def process_pdf_url(
+        self,
+        url: str,
+        doc_id: str = None,
+        company_id: int = None,
+        progress_callback: Callable = None,
+        is_index_report: bool = False,
+        index_theme: str = None,
+        confirmed_doc_industry: str = None
+    ) -> Dict[str, Any]:
+        """
+        🌟 处理 URL PDF（完整流程）
+        
+        Args:
+            url: PDF URL
+            doc_id: 文档 ID
+            company_id: 公司 ID
+            progress_callback: 进度回调
+            is_index_report: 是否为指数报告
+            index_theme: 指数主题
+            confirmed_doc_industry: 确认的行业
+            
+        Returns:
+            Dict: 处理结果
+        """
+        logger.info(f"🚀 process_pdf_url: {url}")
+        
+        # 🌟 Step 1: 使用 PDFParser 解析 URL
+        if progress_callback:
+            progress_callback(10.0, "Stage 1: URL PDF 解析")
+        
+        parse_result = await self.parser.parse_url_async(url)
+        
+        if not parse_result:
+            return {"status": "failed", "error": "URL PDF 解析失败"}
+        
+        artifacts = parse_result.artifacts
+        
+        if progress_callback:
+            progress_callback(30.0, f"解析完成: {parse_result.total_pages} 页")
+        
+        # 🌟 Step 2: 调用完整流程
+        return await self.process_pdf_full_with_artifacts(
+            artifacts=artifacts,
+            company_id=company_id,
+            doc_id=doc_id,
+            progress_callback=progress_callback,
+            is_index_report=is_index_report,
+            index_theme=index_theme,
+            confirmed_doc_industry=confirmed_doc_industry
+        )
+    
+    async def load_from_raw_output(
+        self,
+        pdf_filename: str,
+        job_id: str = None
+    ) -> Dict[str, Any]:
+        """从已保存的 raw output 加载"""
+        parse_result = self.parser.load_from_raw_output(pdf_filename, job_id)
+        return {
+            "status": "success",
+            "job_id": parse_result.job_id,
+            "total_pages": parse_result.total_pages,
+            "artifacts": parse_result.artifacts
+        }
+    
     # ===========================================
-    # 🌟 辅助方法（保留原有）
+    # 🌟 公共方法（保留）
     # ===========================================
+    
+    def _compute_file_hash(self, file_path: str) -> str:
+        """计算文件 Hash"""
+        hasher = hashlib.sha256()
+        with open(file_path, 'rb') as f:
+            for chunk in iter(lambda: f.read(4096), b''):
+                hasher.update(chunk)
+        return hasher.hexdigest()[:16]
+    
+    def _merge_page_artifacts(self, page_artifacts: List[Dict]) -> str:
+        """合并页面 artifacts"""
+        from nanobot.ingestion.utils.llm_mixin import LLMMixin
+        return LLMMixin.merge_page_artifacts(page_artifacts)
     
     async def _create_document(
         self,
         doc_id: str,
-        pdf_path: Path,
-        company_id: int = None
+        pdf_path: str,
+        company_id: int,
+        file_hash: str
     ) -> int:
-        """
-        创建文档记录
-        
-        Args:
-            doc_id: 文档 ID
-            pdf_path: PDF 路径
-            company_id: 公司 ID
-            
-        Returns:
-            int: document_id
-        """
-        try:
-            document_id = await self.db.create_document(
-                doc_id=doc_id,
-                filename=pdf_path.name,
-                file_path=str(pdf_path),
-                file_size_bytes=pdf_path.stat().st_size,
-                owner_company_id=company_id,
-                status="parsed"
-            )
-            return document_id
-        except Exception as e:
-            logger.warning(f"   ⚠️ 文档记录创建失败: {e}")
-            return None
+        """创建文档记录"""
+        # 🌟 v3.9: 使用正确的 db_client 方法
+        await self.db.create_document(
+            doc_id=doc_id,
+            company_id=company_id,
+            filename=Path(pdf_path).name,
+            file_path=pdf_path,
+            file_hash=file_hash
+        )
+        # 🌟 v3.9: 不需要调用 get_document_id，create_document 已经创建了记录
+        return doc_id  # 返回 doc_id 而不是数字 ID
     
-    async def save_all_pages_to_fallback_table(
-        self,
-        artifacts: List[Dict[str, Any]],
-        doc_id: str,
-        company_id: int = None,
-        year: int = None
-    ) -> int:
-        """
-        🌟 保存所有页面到 document_pages 表
-        
-        Args:
-            artifacts: Artifacts 列表
-            doc_id: 文档 ID
-            company_id: 公司 ID
-            year: 年份
+    async def _create_company_from_metadata(self, metadata: Dict[str, Any]) -> int:
+        """从已有 metadata 创建或获取公司记录（不重复调用 Stage 0）"""
+        if metadata.get("stock_code"):
+            # 🌟 v3.8: 先检查公司是否存在，不存在则创建
+            existing_company = await self.db.get_company_by_stock_code(metadata["stock_code"])
+            if existing_company:
+                logger.info(f"   ✅ 公司已存在: stock_code={metadata['stock_code']}, company_id={existing_company['id']}")
+                return existing_company['id']
             
-        Returns:
-            int: 保存的页面数
-        """
-        saved_count = 0
+            # 🌟 v3.7: 只传入 companies 表有的列
+            company_data = {
+                "stock_code": metadata["stock_code"],
+                "name_en": metadata.get("name_en"),
+                "name_zh": metadata.get("name_zh")
+            }
+            company_id = await self.db.insert_company(company_data)
+            logger.info(f"   ✅ 公司创建成功: stock_code={metadata['stock_code']}, company_id={company_id}")
+            return company_id
         
-        for artifact in artifacts:
-            if artifact.get("type") != "text":
-                continue
-            
-            page_num = artifact.get("page", 0)
-            content = artifact.get("content", "")
-            
-            if not content:
-                continue
-            
-            try:
-                await self.db.insert_document_page(
-                    document_id=doc_id,
-                    page_number=page_num,
-                    content=content,
-                    has_tables=False,
-                    has_images=False
-                )
-                saved_count += 1
-            except Exception as e:
-                logger.warning(f"   ⚠️ 页面 {page_num} 保存失败: {e}")
-        
-        logger.info(f"✅ 保存页面完成: {saved_count} 页")
-        return saved_count
-    
-    async def _trigger_vanna_training(self, doc_id: str, max_retries: int = 3):
-        """
-        🌟 触发 Vanna 训练（可选）
-        
-        Args:
-            doc_id: 文档 ID
-            max_retries: 最大重试次数
-        """
-        try:
-            # 检查是否有 Vanna 服务
-            vanna_url = os.environ.get("VANNA_URL", "http://vanna-service:8000")
-            
-            import httpx
-            async with httpx.AsyncClient(timeout=30) as client:
-                response = await client.post(
-                    f"{vanna_url}/train",
-                    json={"doc_id": doc_id}
-                )
-                
-                if response.status_code == 200:
-                    logger.info(f"   ✅ Vanna 训练触发成功: {doc_id}")
-                else:
-                    logger.warning(f"   ⚠️ Vanna 训练触发失败: {response.status_code}")
-        except Exception as e:
-            logger.warning(f"   ⚠️ Vanna 训练触发失败: {e}")
-    
-    def _merge_page_artifacts(self, page_artifacts: List[Dict]) -> str:
-        """
-        🌟 合并页面 artifacts 为文本
-        
-        Args:
-            page_artifacts: 页面级别的 artifacts
-            
-        Returns:
-            str: 合并后的文本
-        """
-        merged = ""
-        for artifact in page_artifacts:
-            content = artifact.get("content", "") or artifact.get("markdown", "") or ""
-            
-            if artifact.get("type") == "table":
-                table_json = artifact.get("content", {})
-                content = self._json_table_to_markdown(table_json)
-            
-            merged += content + "\n\n"
-        
-        return merged.strip()
-    
-    def _json_table_to_markdown(self, table_json: Dict[str, Any]) -> Optional[str]:
-        """
-        🌟 将 JSON 表格转换为 Markdown
-        
-        Args:
-            table_json: 表格 JSON
-            
-        Returns:
-            str: Markdown 表格
-        """
-        if not table_json:
-            return None
-        
-        # 尝试提取表格数据
-        rows = table_json.get("rows", []) or table_json.get("data", [])
-        headers = table_json.get("headers", [])
-        
-        if not rows:
-            return None
-        
-        # 构建 Markdown 表格
-        if headers:
-            header_line = "| " + " | ".join(headers) + " |"
-            separator = "| " + " | ".join(["---"] * len(headers)) + " |"
-        else:
-            # 使用第一行作为 header
-            if rows and isinstance(rows[0], list):
-                headers = [str(i) for i in range(len(rows[0]))]
-            else:
-                headers = list(rows[0].keys()) if isinstance(rows[0], dict) else []
-            
-            header_line = "| " + " | ".join(headers) + " |"
-            separator = "| " + " | ".join(["---"] * len(headers)) + " |"
-        
-        body_lines = []
-        for row in rows:
-            if isinstance(row, dict):
-                cells = [str(row.get(h, "")) for h in headers]
-            elif isinstance(row, list):
-                cells = [str(c) for c in row]
-            else:
-                continue
-            
-            body_lines.append("| " + " | ".join(cells) + " |")
-        
-        return header_line + "\n" + separator + "\n" + "\n".join(body_lines)
-    
-    def _compute_file_hash(self, file_path: str) -> str:
-        """
-        🌟 计算文件哈希
-        
-        Args:
-            file_path: 文件路径
-            
-        Returns:
-            str: SHA256 哈希
-        """
-        sha256 = hashlib.sha256()
-        with open(file_path, "rb") as f:
-            for chunk in iter(lambda: f.read(8192), b""):
-                sha256.update(chunk)
-        return sha256.hexdigest()
+        return None
     
     async def _extract_and_create_company(
         self,
         pdf_path: str,
-        doc_id: str = None
-    ) -> Dict[str, Any]:
-        """
-        🌟 从封面提取公司信息并创建公司记录
-        
-        Args:
-            pdf_path: PDF 路径
-            doc_id: 文档 ID
-            
-        Returns:
-            Dict: {"company_id": int, "stock_code": str, "name_en": str}
-        """
-        stage0_result = await Stage0Preprocessor.extract_cover_metadata(
+        doc_id: str
+    ) -> int:
+        """从封面提取公司信息并创建公司记录（⚠️ 已废弃，使用 _create_company_from_metadata）"""
+        # 使用 Stage0 提取
+        metadata = await Stage0Preprocessor.extract_cover_metadata(
             pdf_path=pdf_path,
-            doc_id=doc_id,
-            db_client=self.db
+            doc_id=doc_id
         )
         
-        stock_code = stage0_result.get("stock_code")
-        name_en = stage0_result.get("name_en")
-        name_zh = stage0_result.get("name_zh")
+        if metadata.get("stock_code"):
+            company_id = await self.db.insert_company(
+                stock_code=metadata["stock_code"],
+                name_en=metadata.get("name_en"),
+                year=metadata.get("year")
+            )
+            return company_id
         
-        if stock_code:
-            # 查询或创建公司
-            company = await self.db.get_company_by_stock_code(stock_code)
-            
-            if company:
-                company_id = company.get("id")
-                logger.info(f"   ✅ 找到已存在的公司: {stock_code}")
-            else:
-                # 创建新公司
-                company_id = await self.db.upsert_company(
-                    stock_code=stock_code,
-                    name_en=name_en,
-                    name_zh=name_zh,
-                    industry=None
-                )
-                logger.info(f"   ✅ 创建新公司: {stock_code}")
-            
-            return {
-                "company_id": company_id,
-                "stock_code": stock_code,
-                "name_en": name_en,
-                "name_zh": name_zh
-            }
+        return None
+    
+    async def _trigger_vanna_training(self, doc_id: str, company_id: int = None, year: int = None):
+        """
+        触发 Vanna 训练
         
-        return {"company_id": None}
+        🌟 v3.18: 使用正确的 Stage6VannaTraining.run_complete_stage 方法
+        """
+        await Stage6VannaTraining.run_complete_stage(
+            doc_id=doc_id,
+            company_id=company_id,
+            year=year,
+            db_client=self.db,
+            data_dir=str(self.data_dir) if hasattr(self, 'data_dir') else None
+        )
+    
+    def _build_stage5_prompt(
+        self,
+        page_content: str,
+        page_num: int,
+        doc_id: str,
+        year: int,
+        company_id: int,
+        is_index_report: bool,
+        index_theme: str,
+        confirmed_doc_industry: str
+    ) -> str:
+        """构建 Stage 5 Prompt"""
+        report_type = "指数报告" if is_index_report else "年报"
+        
+        return f"""
+你是专业的 PostgreSQL 数据库写入 Agent。
+从第 {page_num} 页提取结构化数据并写入数据库。
+
+【基本信息】
+- 文档 ID: {doc_id}
+- 年份: {year}
+- 公司 ID: {company_id}
+- 报告类型: {report_type}
+- 指数主题: {index_theme or '无'}
+- 确认行业: {confirmed_doc_industry or '无'}
+
+【页面内容】
+{page_content[:3000]}
+
+请：
+1. 调用 get_db_schema 查看数据库结构
+2. 判断页面类型（Revenue Breakdown / Key Personnel）
+3. 提取数据并调用 smart_insert_document 写入
+4. 如果发现新关键词，调用 register_new_keyword
+"""
+    
+    def _get_agentic_pipeline(self):
+        """获取 AgenticPipeline"""
+        if self._agentic_pipeline is None and self.enable_agentic_ingestion:
+            from .agentic_pipeline import AgenticPipeline
+            self._agentic_pipeline = AgenticPipeline(
+                db_url=self.db_url,
+                data_dir=str(self.data_dir)
+            )
+        return self._agentic_pipeline
+    
+    async def connect(self):
+        """连接数据库"""
+        await super().connect()  # 调用 BaseIngestionPipeline.connect() 初始化 self.db
+    
+    async def close(self):
+        """关闭数据库连接"""
+        await self.db.close()
     
     # ===========================================
-# 🌟 缺少的方法恢复（从 pipeline_old.py）
-# ===========================================
-    
-    def _find_revenue_breakdown_pages(
-        self,
-        artifacts: List[Dict[str, Any]],
-        keywords: List[str] = None
-    ) -> List[int]:
-        """
-        🌟 在 artifacts 中搜索关键词，找到 Revenue Breakdown 页面
-        
-        Args:
-            artifacts: Artifacts 列表（来自 LlamaParse）
-            keywords: 关键词列表
-            
-        Returns:
-            List[int]: 找到的页面列表
-        """
-        keywords = keywords or [
-            "revenue breakdown", "revenue by", "geographical", 
-            "segment", "business segment", "product mix",
-            "region", "市場分部", "收入分部", "地區"
-        ]
-        
-        candidate_pages = set()
-        
-        # 🌟 策略 1: 正规化模糊搜索
-        for artifact in artifacts:
-            content = artifact.get("content", "") or artifact.get("markdown", "") or ""
-            content_clean = content.lower().replace("\n", " ").replace(" ", "")
-            
-            for keyword in keywords:
-                keyword_clean = keyword.lower().replace(" ", "")
-                if keyword_clean in content_clean:
-                    candidate_pages.add(artifact.get("page", 0))
-                    break
-        
-        # 🌟 策略 2: 视觉特征检测（表格 + 百分比）
-        for artifact in artifacts:
-            if artifact.get("type") == "table":
-                table_content = artifact.get("content", {})
-                if isinstance(table_content, dict):
-                    # 检测是否有百分比
-                    table_str = str(table_content).lower()
-                    if "%" in table_str or "percentage" in table_str:
-                        candidate_pages.add(artifact.get("page", 0))
-        
-        return sorted(list(candidate_pages))
-    
-    async def _extract_revenue_from_page(
-        self,
-        page_artifacts: List[Dict[str, Any]],
-        company_id: int,
-        year: int,
-        doc_id: str,
-        page_num: int
-    ) -> Dict[str, Any]:
-        """
-        🌟 从特定页面的 artifacts 提取 Revenue Breakdown
-        
-        Args:
-            page_artifacts: 页面级别的 artifacts
-            company_id: 公司 ID
-            year: 年份
-            doc_id: 文档 ID
-            page_num: 页码
-            
-        Returns:
-            Dict: 提取结果
-        """
-        logger.info(f"   🔍 从页面 {page_num} 提取 Revenue...")
-        
-        # 合并页面内容
-        merged_text = self._merge_page_artifacts(page_artifacts)
-        
-        # 🌟 使用 FinancialAgent 提取
-        agent = FinancialAgent()
-        
-        extraction_prompt = f"""
-从以下内容中提取 Revenue Breakdown 数据：
-
-{merged_text[:3000]}
-
-返回 JSON 格式：
-```json
-{
-  "items": [
-    {"segment_name": "Europe", "segment_type": "geography", "revenue_percentage": 25.0, "revenue_amount": 1000000}
-  ]
-}
-```
-
-只返回 JSON。
-"""
-        
-        llm_response = await llm_core.chat(
-            prompt=extraction_prompt,
-            require_json=True
-        )
-        
-        # 解析结果
-        extracted_data = {}
-        if isinstance(llm_response, dict):
-            extracted_data = llm_response
-        elif isinstance(llm_response, str):
-            import re
-            json_match = re.search(r'\{[\s\S]*\}', llm_response)
-            if json_match:
-                extracted_data = json.loads(json_match.group())
-        
-        # 🌟 写入数据库
-        items = extracted_data.get("items", [])
-        inserted_count = 0
-        
-        for item in items:
-            try:
-                await self.db.insert_revenue_breakdown(
-                    company_id=company_id,
-                    year=year,
-                    segment_name=item.get("segment_name"),
-                    segment_type=item.get("segment_type", "geography"),
-                    revenue_percentage=item.get("revenue_percentage"),
-                    revenue_amount=item.get("revenue_amount"),
-                    currency=item.get("currency", "HKD"),
-                    source_document_id=None  # 可以后续关联
-                )
-                inserted_count += 1
-            except Exception as e:
-                logger.warning(f"      ⚠️ Revenue 插入失败: {e}")
-        
-        logger.info(f"   ✅ 页面 {page_num} 提取完成: {inserted_count} 条")
-        
-        return {
-            "page_num": page_num,
-            "items_count": len(items),
-            "inserted_count": inserted_count,
-            "extracted_data": extracted_data
-        }
-    
-    async def parse_with_smart_routing(
-        self,
-        pdf_path: str,
-        output_dir: str = None,
-        use_cuda: bool = None,
-        save_raw: bool = True
-    ) -> Dict[str, Any]:
-        """
-        🌟 智能路由解析
-        
-        根据 USE_CUDA 选择解析引擎：
-        - USE_CUDA=true → Docling GPU（路线 A）- 废弃，现用 LlamaParse
-        - USE_CUDA=false → LlamaParse Cloud（路线 B）
-        
-        Args:
-            pdf_path: PDF 路径
-            output_dir: 输出目录
-            use_cuda: 是否使用 CUDA（从环境变量读取）
-            save_raw: 是否保存 raw output
-            
-        Returns:
-            Dict: 解析结果
-        """
-        # 🌟 v3.2: 统一使用 LlamaParse
-        # USE_CUDA 参数保留但不再影响 PDF 解析引擎选择
-        # GPU 仅用于 LLM 推理
-        
-        logger.info(f"🚀 智能路由解析: {pdf_path}")
-        
-        # 🌟 检查 USE_CUDA（仅用于 LLM，不影响 PDF）
-        if use_cuda is None:
-            use_cuda = os.environ.get("USE_CUDA", "false").lower() == "true"
-        
-        if use_cuda:
-            logger.info(f"   📊 GPU 模式（用于 LLM 推理，PDF 仍用 LlamaParse）")
-        else:
-            logger.info(f"   📊 CPU 模式（PDF 用 LlamaParse Cloud）")
-        
-        # 🌟 统一使用 LlamaParse
-        result = await self.parser.parse_async(pdf_path)
-        
-        return {
-            "status": "success",
-            "job_id": result.job_id,
-            "total_pages": result.total_pages,
-            "tables_count": len(result.tables),
-            "images_count": len(result.images),
-            "raw_output_dir": result.raw_output_dir,
-            "routing": "llamaparse_cloud",  # 统一标识
-            "use_cuda": use_cuda  # 仅用于 LLM
-        }
+    # 🌟 补回的重要方法（从备份恢复）
+    # ===========================================
     
     async def process_pdf_full_with_artifacts(
         self,
@@ -1370,7 +749,7 @@ class DocumentPipeline(BaseIngestionPipeline):
             if all_target_pages:
                 target_artifacts = [
                     a for a in artifacts 
-                    if a.get("page") in all_target_pages
+                    if a is not None and a.get("page") in all_target_pages
                 ]
                 
                 # 提取 Revenue
@@ -1378,7 +757,7 @@ class DocumentPipeline(BaseIngestionPipeline):
                     revenue_pages = stage3_result.get("revenue_breakdown", [])
                     revenue_artifacts = [
                         a for a in artifacts 
-                        if a.get("page") in revenue_pages
+                        if a is not None and a.get("page") in revenue_pages
                     ]
                     
                     revenue_result = await self._extract_revenue_from_page(
@@ -1400,28 +779,142 @@ class DocumentPipeline(BaseIngestionPipeline):
             result["status"] = "failed"
             result["error"] = str(e)
             return result
+    
+    async def run_agentic_ingestion(
+        self,
+        pdf_path: str,
+        filename: str,
+        task_id: str = None
+    ) -> Dict[str, Any]:
         """
-        🌟 获取文档年份
+        🌟 Stage 5: Agentic 智能写入
+        
+        使用 AI Agent 分析前 1-2 页，提取实体信息并动态写入数据库
         
         Args:
-            doc_id: 文档 ID
+            pdf_path: PDF 文件路径
+            filename: 原始文件名
+            task_id: 任务 ID (可选)
             
         Returns:
-            int: 年份
+            Dict: {"success": bool, "document_id": str, "needs_review": bool}
         """
-        try:
-            doc = await self.db.get_document(doc_id)
-            if doc:
-                # 从文件名或 metadata 提取年份
-                filename = doc.get("filename", "")
-                import re
-                year_match = re.search(r'(20[0-9]{2})', filename)
-                if year_match:
-                    return int(year_match.group(1))
-        except Exception:
-            pass
+        if not self.enable_agentic_ingestion:
+            logger.info("⏭️ Agentic ingestion disabled, skipping Stage 5")
+            return {"success": True, "skipped": True, "reason": "disabled"}
         
-        return datetime.now().year
+        pipeline = self._get_agentic_pipeline()
+        if pipeline is None:
+            logger.warning("⚠️ AgenticPipeline not available, skipping Stage 5")
+            return {"success": True, "skipped": True, "reason": "no_pipeline"}
+        
+        logger.info(f"🤖 Stage 5: Running agentic ingestion for {filename}")
+        
+        try:
+            result = await pipeline.ingest_with_agent(
+                pdf_path=pdf_path,
+                filename=filename,
+                task_id=task_id
+            )
+            
+            analysis = result.get("analysis", {})
+            confidence_scores = analysis.get("confidence_scores", {})
+            needs_review = any(score < 0.8 for score in confidence_scores.values()) if confidence_scores else False
+            
+            result["needs_review"] = needs_review
+            
+            logger.info(f"✅ Stage 5 complete: document_id={result.get('document_id')}")
+            
+            return result
+            
+        except Exception as e:
+            logger.exception(f"❌ Stage 5 failed: {e}")
+            return {"success": False, "error": str(e)}
+    
+    async def _extract_revenue_from_page(
+        self,
+        page_artifacts: List[Dict[str, Any]],
+        company_id: int,
+        year: int,
+        doc_id: str,
+        page_num: int
+    ) -> Dict[str, Any]:
+        """
+        🌟 从特定页面的 artifacts 提取 Revenue Breakdown
+        
+        Args:
+            page_artifacts: 页面级别的 artifacts
+            company_id: 公司 ID
+            year: 年份
+            doc_id: 文档 ID
+            page_num: 页码
+            
+        Returns:
+            Dict: 提取结果
+        """
+        logger.info(f"   🔍 从页面 {page_num} 提取 Revenue...")
+        
+        merged_text = self._merge_page_artifacts(page_artifacts)
+        
+        agent = FinancialAgent()
+        
+        extraction_prompt = f"""
+从以下内容中提取 Revenue Breakdown 数据：
+
+{merged_text[:3000]}
+
+返回 JSON 格式：
+```json
+{
+  "items": [
+    {"segment_name": "Europe", "segment_type": "geography", "revenue_percentage": 25.0}
+  ]
+}
+```
+
+只返回 JSON。
+"""
+        
+        llm_response = await llm_core.chat(
+            prompt=extraction_prompt,
+            require_json=True
+        )
+        
+        extracted_data = {}
+        if isinstance(llm_response, dict):
+            extracted_data = llm_response
+        elif isinstance(llm_response, str):
+            import re
+            json_match = re.search(r'\{[\s\S]*\}', llm_response)
+            if json_match:
+                extracted_data = json.loads(json_match.group())
+        
+        items = extracted_data.get("items", [])
+        inserted_count = 0
+        
+        for item in items:
+            try:
+                await self.db.insert_revenue_breakdown(
+                    company_id=company_id,
+                    year=year,
+                    segment_name=item.get("segment_name"),
+                    segment_type=item.get("segment_type", "geography"),
+                    revenue_percentage=item.get("revenue_percentage"),
+                    revenue_amount=item.get("revenue_amount"),
+                    currency=item.get("currency", "HKD")
+                )
+                inserted_count += 1
+            except Exception as e:
+                logger.warning(f"      ⚠️ Revenue 插入失败: {e}")
+        
+        logger.info(f"   ✅ 页面 {page_num} 提取完成: {inserted_count} 条")
+        
+        return {
+            "page_num": page_num,
+            "items_count": len(items),
+            "inserted_count": inserted_count,
+            "extracted_data": extracted_data
+        }
     
     async def _insert_revenue_breakdown(
         self,
@@ -1435,28 +928,26 @@ class DocumentPipeline(BaseIngestionPipeline):
         🌟 插入 Revenue Breakdown 数据到数据库
         
         Args:
-            extracted_data: 提取的数据（Agent 输出）
+            extracted_data: 提取的数据
             company_id: 公司 ID
             year: 年份
             doc_id: 文档 ID
-            source_document_id: 源文档 ID（documents.id）
+            source_document_id: 源文档 ID
             
         Returns:
             int: 插入的记录数
         """
         inserted_count = 0
         
-        # 🌟 从 Agent 输出提取 revenue_breakdown
         revenue_items = extracted_data.get("revenue_breakdown", [])
         
         if not revenue_items:
             logger.warning("   ⚠️ 没有 revenue_breakdown 数据")
             return 0
         
-        # 🌟 构建写入格式
         for item in revenue_items:
             segment_name = item.get("segment_name") or item.get("category")
-            segment_type = item.get("segment_type") or item.get("category_type") or "geography"
+            segment_type = item.get("segment_type") or "geography"
             percentage = item.get("revenue_percentage") or item.get("percentage")
             amount = item.get("revenue_amount") or item.get("amount")
             currency = item.get("currency", "HKD")
@@ -1465,7 +956,6 @@ class DocumentPipeline(BaseIngestionPipeline):
                 continue
             
             try:
-                # 🌟 调用 db.insert_revenue_breakdown
                 await self.db.insert_revenue_breakdown(
                     company_id=company_id,
                     year=year,
@@ -1486,9 +976,218 @@ class DocumentPipeline(BaseIngestionPipeline):
         
         return inserted_count
     
-    # ===========================================
-    # 🌟 实现 BaseIngestionPipeline 的抽象方法
-    # ===========================================
+    def _find_keyword_pages(self, artifacts: List[Dict], keywords: List[str]) -> List[int]:
+        """
+        在 artifacts 中搜索关键词
+        
+        Args:
+            artifacts: Artifacts 列表
+            keywords: 关键词列表
+            
+        Returns:
+            List[int]: 找到的页面列表
+        """
+        candidate_pages = set()
+        
+        for artifact in artifacts:
+            content = artifact.get("content", "") or ""
+            content_lower = content.lower()
+            
+            for keyword in keywords:
+                if keyword.lower() in content_lower:
+                    candidate_pages.add(artifact.get("page", 0))
+                    break
+        
+        return sorted(list(candidate_pages))
+    
+    def _find_revenue_breakdown_pages(
+        self,
+        artifacts: List[Dict[str, Any]],
+        keywords: List[str] = None
+    ) -> List[int]:
+        """
+        🌟 在 artifacts 中搜索关键词，找到 Revenue Breakdown 页面
+        
+        Args:
+            artifacts: Artifacts 列表
+            keywords: 关键词列表
+            
+        Returns:
+            List[int]: 找到的页面列表
+        """
+        keywords = keywords or [
+            "revenue breakdown", "revenue by", "geographical", 
+            "segment", "business segment", "product mix",
+            "region", "市場分部", "收入分部", "地區"
+        ]
+        
+        candidate_pages = set()
+        
+        for artifact in artifacts:
+            content = artifact.get("content", "") or artifact.get("markdown", "") or ""
+            content_clean = content.lower().replace("\n", " ").replace(" ", "")
+            
+            for keyword in keywords:
+                keyword_clean = keyword.lower().replace(" ", "")
+                if keyword_clean in content_clean:
+                    candidate_pages.add(artifact.get("page", 0))
+                    break
+        
+        for artifact in artifacts:
+            if artifact.get("type") == "table":
+                table_content = artifact.get("content", {})
+                if isinstance(table_content, dict):
+                    table_str = str(table_content).lower()
+                    if "%" in table_str or "percentage" in table_str:
+                        candidate_pages.add(artifact.get("page", 0))
+        
+        return sorted(list(candidate_pages))
+    
+    def _json_table_to_markdown(self, table_json: Dict[str, Any]) -> Optional[str]:
+        """
+        🌟 将 JSON 表格转换为 Markdown
+        
+        Args:
+            table_json: 表格 JSON
+            
+        Returns:
+            str: Markdown 表格
+        """
+        if not table_json:
+            return None
+        
+        rows = table_json.get("rows", []) or table_json.get("data", [])
+        headers = table_json.get("headers", [])
+        
+        if not rows:
+            return None
+        
+        if headers:
+            header_line = "| " + " | ".join(headers) + " |"
+            separator = "| " + " | ".join(["---"] * len(headers)) + " |"
+        else:
+            first_row = rows[0] if rows else []
+            if isinstance(first_row, dict):
+                headers = list(first_row.keys())
+            elif isinstance(first_row, list):
+                headers = [f"Col{i+1}" for i in range(len(first_row))]
+            else:
+                return None
+            
+            header_line = "| " + " | ".join(headers) + " |"
+            separator = "| " + " | ".join(["---"] * len(headers)) + " |"
+        
+        body_lines = []
+        for row in rows:
+            if isinstance(row, dict):
+                cells = [str(row.get(h, "")) for h in headers]
+            elif isinstance(row, list):
+                cells = [str(cell) for cell in row]
+            else:
+                continue
+            
+            body_lines.append("| " + " | ".join(cells) + " |")
+        
+        return header_line + "\n" + separator + "\n" + "\n".join(body_lines)
+    
+    async def _get_document_year(self, doc_id: str) -> Optional[int]:
+        """从数据库获取文档年份"""
+        try:
+            doc = await self.db.get_document(doc_id)
+            if doc:
+                filename = doc.get("filename", "")
+                import re
+                year_match = re.search(r'(20[0-9]{2})', filename)
+                if year_match:
+                    return int(year_match.group(1))
+        except Exception:
+            pass
+        
+        from datetime import datetime
+        return datetime.now().year
+    
+    async def parse_with_smart_routing(
+        self,
+        pdf_path: str,
+        output_dir: str = None,
+        use_cuda: bool = None,
+        save_raw: bool = True
+    ) -> Dict[str, Any]:
+        """
+        🌟 智能路由解析
+        
+        Args:
+            pdf_path: PDF 路径
+            output_dir: 输出目录
+            use_cuda: 是否使用 CUDA
+            save_raw: 是否保存 raw output
+            
+        Returns:
+            Dict: 解析结果
+        """
+        logger.info(f"🚀 智能路由解析: {pdf_path}")
+        
+        if use_cuda is None:
+            use_cuda = os.environ.get("USE_CUDA", "false").lower() == "true"
+        
+        result = await self.parser.parse_async(pdf_path)
+        
+        return {
+            "status": "success",
+            "job_id": result.job_id,
+            "total_pages": result.total_pages,
+            "tables_count": len(result.tables),
+            "images_count": len(result.images),
+            "raw_output_dir": result.raw_output_dir,
+            "routing": "llamaparse_cloud",
+            "use_cuda": use_cuda
+        }
+    
+    async def save_all_pages_to_fallback_table(
+        self,
+        artifacts: List[Dict[str, Any]],
+        doc_id: str,
+        company_id: int = None,
+        year: int = None
+    ) -> int:
+        """
+        🌟 保存所有页面到 document_pages 表
+        
+        Args:
+            artifacts: Artifacts 列表
+            doc_id: 文档 ID
+            company_id: 公司 ID
+            year: 年份
+            
+        Returns:
+            int: 保存的页面数
+        """
+        saved_count = 0
+        
+        for artifact in artifacts:
+            if artifact.get("type") != "text":
+                continue
+            
+            page_num = artifact.get("page", 0)
+            content = artifact.get("content", "")
+            
+            if not content:
+                continue
+            
+            try:
+                await self.db.insert_document_page(
+                    document_id=doc_id,
+                    page_number=page_num,
+                    content=content,
+                    has_tables=False,
+                    has_images=False
+                )
+                saved_count += 1
+            except Exception as e:
+                logger.warning(f"   ⚠️ 页面 {page_num} 保存失败: {e}")
+        
+        logger.info(f"✅ 保存页面完成: {saved_count} 页")
+        return saved_count
     
     async def extract_information(
         self,
@@ -1496,186 +1195,19 @@ class DocumentPipeline(BaseIngestionPipeline):
         metadata: Dict[str, Any] = None,
         **kwargs
     ) -> Dict[str, Any]:
-        """
-        Agent 提取逻辑
-        """
+        """Agent 提取逻辑（实现 BaseIngestionPipeline 抽象方法）"""
         return await self.smart_extract(
             pdf_path=kwargs.get("pdf_path"),
             company_id=kwargs.get("company_id"),
             extraction_types=["revenue_breakdown", "key_personnel"],
             use_llm=True
         )
-    
-    async def load_from_raw_output(
-        self,
-        pdf_filename: str,
-        job_id: str = None
-    ) -> Dict[str, Any]:
-        """从已保存的 raw output 加载（不扣费）"""
-        result = self.parser.load_from_raw_output(pdf_filename, job_id)
-        
-        return {
-            "status": "success",
-            "job_id": result.job_id,
-            "total_pages": result.total_pages,
-            "markdown": result.markdown,
-            "artifacts": result.artifacts,
-            "tables": result.tables,
-            "images": result.images,
-            "raw_output_dir": result.raw_output_dir,
-            "loaded_from_raw": True
-        }
-    
-    async def process_pdf_url(
-        self,
-        url: str,
-        doc_id: str = None,
-        progress_callback: Callable = None
-    ) -> Dict[str, Any]:
-        """解析 URL PDF"""
-        result = await self.parser.parse_url_async(url)
-        
-        return {
-            "status": "success",
-            "doc_id": doc_id or Path(url).stem,
-            "job_id": result.job_id,
-            "total_pages": result.total_pages,
-            "tables_count": len(result.tables),
-            "images_count": len(result.images),
-            "raw_output_dir": result.raw_output_dir
-        }
 
 
 # ===========================================
-# 🌟 便捷函数（保留原有）
+# 工厂函数
 # ===========================================
 
-async def process_pdf_simple(
-    pdf_path: str,
-    db_url: str = None,
-    tier: str = "agentic"
-) -> Dict[str, Any]:
-    """
-    🌟 简单解析入口
-    
-    Args:
-        pdf_path: PDF 路径
-        db_url: 数据库 URL
-        tier: LlamaParse 解析层级
-        
-    Returns:
-        Dict: 解析结果
-    """
-    pipeline = DocumentPipeline(db_url=db_url, tier=tier)
-    await pipeline.connect()
-    
-    result = await pipeline.smart_extract(pdf_path)
-    
-    await pipeline.close()
-    
-    return result
-
-
-async def process_pdf(
-    pdf_path: str,
-    db_url: str = None,
-    company_id: int = None,
-    tier: str = "agentic",
-    save_raw: bool = True
-) -> Dict[str, Any]:
-    """
-    🌟 简单解析入口（带数据库保存）
-    
-    Args:
-        pdf_path: PDF 路径
-        db_url: 数据库 URL
-        company_id: 公司 ID
-        tier: LlamaParse 解析层级
-        save_raw: 是否保存 raw output
-        
-    Returns:
-        Dict: 解析结果
-    """
-    pipeline = DocumentPipeline(db_url=db_url, tier=tier)
-    await pipeline.connect()
-    
-    # 解析 PDF
-    result = await pipeline.parser.parse_async(pdf_path)
-    
-    # 保存到数据库
-    if db_url:
-        doc_id = Path(pdf_path).stem
-        await pipeline.save_all_pages_to_fallback_table(
-            artifacts=result.artifacts,
-            doc_id=doc_id,
-            company_id=company_id
-        )
-    
-    await pipeline.close()
-    
-    return {
-        "status": "success",
-        "total_pages": result.total_pages,
-        "tables_count": len(result.tables),
-        "images_count": len(result.images),
-        "job_id": result.job_id,
-        "raw_output_dir": result.raw_output_dir
-    }
-
-
-# ===========================================
-# 🌟 Agent 智能提取（新增）
-# ===========================================
-
-async def run_agentic_ingestion(
-    pdf_path: str,
-    company_id: int = None,
-    doc_id: str = None,
-    extraction_types: List[str] = None,
-    db_url: str = None,
-    tier: str = "agentic",
-    is_index_report: bool = False,
-    confirmed_doc_industry: str = None,
-    progress_callback: Callable = None
-) -> Dict[str, Any]:
-    """
-    🌟 Agent 智能提取入口
-    
-    使用 Agent 进行智能提取：
-    - 自动识别文档类型（年报/指数报告）
-    - 自动提取公司信息
-    - 自动提取结构化数据（Revenue/Personnel/Metrics）
-    
-    Args:
-        pdf_path: PDF 路径
-        company_id: 公司 ID（可选，Agent 会自动提取）
-        doc_id: 文档 ID
-        extraction_types: 提取类型（revenue_breakdown, key_personnel, financial_metrics）
-        db_url: 数据库 URL
-        tier: LlamaParse 解析层级
-        is_index_report: 是否为指数报告（影响行业分配规则）
-        confirmed_doc_industry: 报告定义的行业
-        progress_callback: 进度回调
-        
-    Returns:
-        Dict: 提取结果
-    """
-    from nanobot.ingestion.agentic_pipeline import AgenticPipeline
-    
-    extraction_types = extraction_types or ["revenue_breakdown", "key_personnel", "financial_metrics"]
-    
-    pipeline = DocumentPipeline(db_url=db_url, tier=tier)
-    await pipeline.connect()
-    
-    result = await pipeline.process_pdf_full(
-        pdf_path=pdf_path,
-        company_id=company_id,
-        doc_id=doc_id,
-        progress_callback=progress_callback,
-        is_index_report=is_index_report,
-        confirmed_doc_industry=confirmed_doc_industry
-    )
-    
-    await pipeline.close()
-    
-    return result
+def create_pipeline(db_url: str = None, data_dir: str = None) -> DocumentPipeline:
+    """创建 DocumentPipeline 实例"""
+    return DocumentPipeline(db_url=db_url, data_dir=data_dir)
