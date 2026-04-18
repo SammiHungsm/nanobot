@@ -862,30 +862,54 @@ class InsertKeyPersonnelTool(Tool):
             
             async with db.connection() as conn:
                 for person in personnel_list:
+                    name_en = person.get("name_en")
+                    
+                    if not name_en:
+                        continue  # 🌟 v1.2: 跳过没有 name_en 的记录
+                    
                     # committee_membership 需要转为 JSON
                     import json
                     committee_json = json.dumps(person.get("committee_membership", [])) if person.get("committee_membership") else None
                     
-                    await conn.execute(
-                        """
-                        INSERT INTO key_personnel 
-                        (company_id, document_id, name_en, name_zh, position_title_en, board_role, committee_membership, biography)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
-                        ON CONFLICT (company_id, name_en) 
-                        DO UPDATE SET 
-                            position_title_en = $5,
-                            board_role = $6,
-                            committee_membership = $7::jsonb
-                        """,
+                    # 🌟 v1.2: 先检查是否存在，再决定 INSERT 或 UPDATE
+                    existing = await conn.fetchval(
+                        "SELECT id FROM key_personnel WHERE company_id = $1 AND name_en = $2",
                         company_id,
-                        document_id,
-                        person.get("name_en"),
-                        person.get("name_zh"),
-                        person.get("position_title_en"),
-                        person.get("board_role"),
-                        committee_json,
-                        person.get("biography")
+                        name_en
                     )
+                    
+                    if existing:
+                        await conn.execute(
+                            """
+                            UPDATE key_personnel SET
+                                position_title_en = $1,
+                                board_role = $2,
+                                committee_membership = $3::jsonb,
+                                document_id = $4
+                            WHERE id = $5
+                            """,
+                            person.get("position_title_en"),
+                            person.get("board_role"),
+                            committee_json,
+                            document_id,
+                            existing
+                        )
+                    else:
+                        await conn.execute(
+                            """
+                            INSERT INTO key_personnel 
+                            (company_id, document_id, name_en, name_zh, position_title_en, board_role, committee_membership, biography)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
+                            """,
+                            company_id,
+                            document_id,
+                            name_en,
+                            person.get("name_zh"),
+                            person.get("position_title_en"),
+                            person.get("board_role"),
+                            committee_json,
+                            person.get("biography")
+                        )
                     inserted_count += 1
             
             return json.dumps({
@@ -972,7 +996,7 @@ class InsertFinancialMetricsTool(Tool):
                         INSERT INTO financial_metrics 
                         (company_id, year, metric_name, value, unit, standardized_value, source_page)
                         VALUES ($1, $2, $3, $4, $5, $6, $7)
-                        ON CONFLICT (company_id, year, metric_name) 
+                        ON CONFLICT (company_id, year, fiscal_period, metric_name)  -- 🌟 v1.2: 修正约束名（需要 fiscal_period）
                         DO UPDATE SET value = $4, standardized_value = $6
                         """,
                         company_id,
@@ -1151,6 +1175,13 @@ class InsertRevenueBreakdownTool(Tool):
         """写入收入分解"""
         from nanobot.ingestion.repository.db_client import DBClient
         
+        # 🌟 v1.2: 强制转换 document_id 为整数（Agent 可能传字符串）
+        if document_id is not None:
+            try:
+                document_id = int(document_id)
+            except (ValueError, TypeError):
+                document_id = None
+        
         db = DBClient()
         await db.connect()
         
@@ -1165,7 +1196,7 @@ class InsertRevenueBreakdownTool(Tool):
                         (company_id, year, segment_name, segment_type, revenue_amount, 
                          revenue_percentage, currency, source_document_id)
                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                        ON CONFLICT (company_id, year, segment_name) 
+                        ON CONFLICT (company_id, year, segment_name, segment_type)  -- 🌟 v1.2: 修正约束名
                         DO UPDATE SET 
                             revenue_amount = $5,
                             revenue_percentage = $6,
@@ -1644,7 +1675,11 @@ class BackfillFromFallbackTool(Tool):
                 "year": {"type": "integer"},
                 "document_id": {"type": "integer"},
                 "page_num": {"type": "integer"},
-                "data_type": {"type": "string", "enum": ["revenue_breakdown", "financial_metrics"]},
+                "data_type": {
+                    "type": "string",
+                    "enum": ["revenue_breakdown", "financial_metrics", "key_personnel", "shareholding", "market_data"],
+                    "description": "Type of data to backfill"
+                },
                 "extracted_data": {"type": "object"},
                 "new_keyword": {"type": ["string", "null"]}
             },
@@ -1669,16 +1704,104 @@ class BackfillFromFallbackTool(Tool):
                 if data_type == "revenue_breakdown":
                     for seg, data in extracted_data.items():
                         await conn.execute(
-                            "INSERT INTO revenue_breakdown (company_id, year, segment_name, revenue_percentage, source_document_id, source_page) VALUES ($1,$2,$3,$4,$5,$6)",
-                            company_id, year, seg, data.get("percentage"), document_id, page_num
+                            """
+                            INSERT INTO revenue_breakdown 
+                            (company_id, year, segment_name, segment_type, revenue_amount, 
+                             revenue_percentage, currency, source_document_id, source_page)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                            ON CONFLICT (company_id, year, segment_name) 
+                            DO UPDATE SET 
+                                revenue_amount = $5,
+                                revenue_percentage = $6,
+                                source_document_id = $8
+                            """,
+                            company_id, year, seg,
+                            data.get("segment_type", "geography"),
+                            data.get("amount"),
+                            data.get("percentage"),
+                            data.get("currency", "HKD"),
+                            document_id, page_num
+                        )
+                        count += 1
+                
+                # 👇 新增：处理 financial_metrics 的回填
+                elif data_type == "financial_metrics":
+                    for metric_name, data in extracted_data.items():
+                        await conn.execute(
+                            """
+                            INSERT INTO financial_metrics 
+                            (company_id, year, metric_name, value, unit, standardized_value, 
+                             source_document_id, source_page)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                            ON CONFLICT (company_id, year, metric_name) 
+                            DO UPDATE SET 
+                                value = $4,
+                                standardized_value = $6,
+                                source_document_id = $7,
+                                source_page = $8
+                            """,
+                            company_id, year, metric_name,
+                            data.get("value"),
+                            data.get("unit", "HKD"),
+                            data.get("standardized_value"),
+                            document_id, page_num
+                        )
+                        count += 1
+                
+                # 👇 新增：处理 key_personnel 的回填
+                elif data_type == "key_personnel":
+                    for person_name, data in extracted_data.items():
+                        await conn.execute(
+                            """
+                            INSERT INTO key_personnel 
+                            (company_id, year, name_en, position_title_en, board_role, 
+                             source_document_id)
+                            VALUES ($1, $2, $3, $4, $5, $6)
+                            ON CONFLICT (company_id, year, name_en) 
+                            DO UPDATE SET 
+                                position_title_en = $4,
+                                board_role = $5,
+                                source_document_id = $6
+                            """,
+                            company_id, year, person_name,
+                            data.get("position"),
+                            data.get("board_role"),
+                            document_id
+                        )
+                        count += 1
+                
+                # 👇 新增：处理 shareholding 的回填
+                elif data_type == "shareholding":
+                    for shareholder_name, data in extracted_data.items():
+                        await conn.execute(
+                            """
+                            INSERT INTO shareholding_structure 
+                            (company_id, year, shareholder_name, share_type, shares_held, 
+                             percentage, source_document_id)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7)
+                            """,
+                            company_id, year, shareholder_name,
+                            data.get("share_type"),
+                            data.get("shares_held"),
+                            data.get("percentage"),
+                            document_id
                         )
                         count += 1
             
             if new_keyword:
                 km = KeywordManager()
-                km.add_keyword("revenue_breakdown", new_keyword, "continuous_learning", "silver")
+                km.add_keyword("revenue_breakdown", new_keyword, "continuous_learning", "silver",
+                              reasoning=f"Agent discovered in page {page_num} during backfill")
             
-            return json.dumps({"success": True, "inserted": count, "keyword_registered": new_keyword is not None}, indent=2)
+            return json.dumps({
+                "success": True,
+                "data_type": data_type,
+                "inserted_count": count,
+                "keyword_registered": new_keyword is not None,
+                "new_keyword": new_keyword,
+                "source_page": page_num,
+                "message": f"✅ 从包底库回填 {count} 条 {data_type} 数据"
+            }, indent=2, ensure_ascii=False)
         except Exception as e:
             return json.dumps({"success": False, "error": str(e)}, indent=2)
         finally:

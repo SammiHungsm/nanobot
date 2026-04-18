@@ -53,7 +53,8 @@ dependencies = [
     "vanna[postgres]>=2.0.2",
     "lm-format-enforcer>=0.10.0",  # 强制结构化 JSON 输出
     "json-repair>=0.57.0,<1.0.0",  # JSON 修复
-    "llama_cloud>=2.3.0" # 🌟 LlamaParse Cloud Parser
+    "llama_cloud>=2.3.0", # 🌟 LlamaParse Cloud Parser
+    "PyMuPDF>=1.24.0"  # 🌟 Stage 0 截取封面（独立运行，不等待 LlamaParse）
 ]
 
 [project.optional-dependencies]

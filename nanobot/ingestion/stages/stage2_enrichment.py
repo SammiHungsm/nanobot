@@ -25,10 +25,11 @@ class Stage2Enrichment:
     @staticmethod
     async def save_all_artifacts(
         artifacts: List[Dict[str, Any]],
-        doc_id: str,
-        company_id: Optional[int],
-        document_id: Any,
-        data_dir: Path,
+        images: List[Dict[str, Any]] = None,  # 🌟 v4.2: 新增参数 - parse_result.images
+        doc_id: str = None,
+        company_id: Optional[int] = None,
+        document_id: Any = None,
+        data_dir: Path = None,
         pdf_path: str = None,  # 不再使用，但保留参数兼容
         vision_model: str = None,
         db_client: Any = None,
@@ -85,12 +86,13 @@ class Stage2Enrichment:
             
             if db_client:
                 try:
+                    # 🌟 v3.5: 修正参数名（与 DBClient.insert_document_page 对齐）
                     await db_client.insert_document_page(
-                        document_id=doc_id,
-                        page_number=page_num,
-                        content=content,
-                        has_tables=False,
-                        has_images=False
+                        document_id=document_id,  # 🌟 使用整数 document_id（从 pipeline 传入）
+                        page_num=page_num,  # 🌟 修正：page_number -> page_num
+                        markdown_content=content,  # 🌟 修正：content -> markdown_content
+                        has_images=False,
+                        has_charts=False  # 🌟 修正：has_tables -> has_charts
                     )
                     stats["pages_saved"] += 1
                 except Exception as e:
@@ -105,10 +107,12 @@ class Stage2Enrichment:
             
             if db_client:
                 try:
+                    # 🌟 v3.5: 修正参数名（与 DBClient.insert_raw_artifact 对齐）
                     await db_client.insert_raw_artifact(
-                        document_id=doc_id,
+                        artifact_id=f"table_{doc_id}_p{page_num}",  # 🌟 添加 artifact_id
+                        document_id=document_id,  # 🌟 使用整数 document_id
                         artifact_type="table",
-                        page_number=page_num,
+                        page_num=page_num,  # 🌟 修正：page_number -> page_num
                         content_json=table_content,
                         raw_text=str(table_content)
                     )
@@ -117,22 +121,26 @@ class Stage2Enrichment:
                     logger.warning(f"   ⚠️ 保存表格 {page_num} 失败: {e}")
         
         # ===== 下载并分析图片 =====
+        # 🌟 v4.2: 优先使用传入的 images 列表（parse_result.images）
+        # 这些图片已经在 parse_async 中下载好了，存放在 images_dir
         image_artifacts = [a for a in artifacts if a is not None and a.get("type") == "image"]
-        logger.info(f"   📷 找到 {len(image_artifacts)} 個圖片 Artifacts")
+        downloaded_images = images or []  # 🌟 parse_result.images
         
-        for artifact in image_artifacts:
-            page_num = artifact.get("page", 0)
-            content_dict = artifact.get("content", {})
+        logger.info(f"   📷 Artifacts 中找到 {len(image_artifacts)} 個圖片")
+        logger.info(f"   📷 Downloaded images: {len(downloaded_images)} 张（已下载到 images_dir）")
+        
+        # 🌟 v4.2: 合并处理 - 优先使用 downloaded_images（这些已有本地路径）
+        all_images = downloaded_images if downloaded_images else image_artifacts
+        
+        for img_data in all_images:
+            # 🌟 v4.2: 处理 downloaded_images 格式（来自 parse_result.images）
+            page_num = img_data.get("page", 0)
+            filename = img_data.get("filename") or img_data.get("name") or f"image_{page_num}.png"
+            local_path = img_data.get("local_path")  # 🌟 已下载的本地路径
+            url = img_data.get("url") or img_data.get("presigned_url")
             
-            if content_dict is None:
-                content_dict = {}
-            
-            filename = content_dict.get("name") or content_dict.get("filename") or f"image_{page_num}.png"
-            url = content_dict.get("url")
-            local_path = None
-            
-            # 🌟 从 LlamaParse Cloud URL 下载图片
-            if url:
+            # 🌟 如果没有本地路径，尝试从 URL 下载（fallback）
+            if not local_path and url:
                 try:
                     async with httpx.AsyncClient(timeout=60) as client:
                         response = await client.get(url)
@@ -141,7 +149,7 @@ class Stage2Enrichment:
                             with open(img_path, "wb") as f:
                                 f.write(response.content)
                             local_path = str(img_path)
-                            logger.debug(f"   ✅ 下载图片: {filename} (page {page_num})")
+                            logger.debug(f"   ✅ Fallback 下载图片: {filename} (page {page_num})")
                         else:
                             logger.warning(f"   ⚠️ 下载失败: HTTP {response.status_code}")
                 except Exception as e:
@@ -164,17 +172,19 @@ class Stage2Enrichment:
                     
                     if db_client:
                         # 存入原始資料表
+                        # 🌟 v1.3: 修正参数名 - raw_text -> content（表 schema 没有 raw_text 列）
                         await db_client.insert_raw_artifact(
-                            document_id=doc_id,
+                            artifact_id=f"vision_{doc_id}_p{page_num}",
+                            document_id=document_id,
                             artifact_type="vision_analysis",
-                            page_number=page_num,
+                            page_num=page_num,
                             content_json={
                                 "filename": filename,
                                 "local_path": local_path,
                                 "url": url,
                                 "analysis": vision_result
                             },
-                            raw_text=vision_result.get("description", "") if vision_result else ""
+                            content=vision_result.get("description", "") if vision_result else ""
                         )
                     
                     stats["vision_analyzed"] += 1
@@ -185,16 +195,18 @@ class Stage2Enrichment:
                     # 即使 Vision 失败，也要保存图片元数据
                     if db_client:
                         try:
+                            # 🌟 v1.3: 修正参数名 - raw_text -> content
                             await db_client.insert_raw_artifact(
-                                document_id=doc_id,
+                                artifact_id=f"img_{doc_id}_p{page_num}",
+                                document_id=document_id,
                                 artifact_type="image",
-                                page_number=page_num,
+                                page_num=page_num,
                                 content_json={
                                     "filename": filename,
                                     "local_path": local_path,
                                     "url": url
                                 },
-                                raw_text=filename
+                                content=filename
                             )
                             stats["images_saved"] += 1
                         except Exception as e2:
@@ -204,16 +216,18 @@ class Stage2Enrichment:
                 stats["images_saved"] += 1
                 if db_client:
                     try:
+                        # 🌟 v1.3: 修正参数名 - raw_text -> content
                         await db_client.insert_raw_artifact(
-                            document_id=doc_id,
+                            artifact_id=f"img_{doc_id}_p{page_num}",
+                            document_id=document_id,
                             artifact_type="image",
-                            page_number=page_num,
+                            page_num=page_num,
                             content_json={
                                 "filename": filename,
                                 "local_path": local_path,
                                 "url": url
                             },
-                            raw_text=filename
+                            content=filename
                         )
                     except Exception as e:
                         logger.warning(f" ⚠️ 保存图片元数据失败: {e}")
@@ -249,12 +263,12 @@ class Stage2Enrichment:
 
 請返回 JSON 格式的解析結果：
 ```json
-{
+{{
   "type": "chart/table/photo/other",
   "description": "簡潔描述圖片的表面內容",
   "relation_to_context": "這張圖表與上下文的關聯是什麼？它在證明或補充上下文中的哪個論點？",
   "key_metrics": ["提取圖表中最重要的數據或實體"]
-}
+}}
 ```
 只返回 JSON，不要有其他文字。
 """

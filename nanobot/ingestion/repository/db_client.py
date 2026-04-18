@@ -1077,6 +1077,9 @@ class DBClient:
                 document_type,  # 寫入 report_type
                 "pending"
             )
+        
+        # 🌟 v1.2: 返回 True 表示成功（供 stage0_5_registrar 检查）
+        return True
     
     async def update_document_status(
         self,
@@ -1544,28 +1547,26 @@ class DBClient:
                     logger.error(f"❌ 无法获取 document_id")
                     return False
                 
-                # 🌟 Bug 修复：添加 content 欄位
+                # 🌟 v1.3: Bug 修复 - 移除 raw_text 列（表 schema 没有这个列）
                 await conn.execute(
                     """
                     INSERT INTO raw_artifacts (
                         artifact_id, document_id, artifact_type,
-                        content, parsed_data, file_path, page_num, raw_text
-                    ) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8)
+                        content, parsed_data, file_path, page_num
+                    ) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
                     ON CONFLICT (artifact_id) DO UPDATE SET
                         content = $4,
                         parsed_data = $5::jsonb,
                         file_path = $6,
-                        page_num = $7,
-                        raw_text = $8
+                        page_num = $7
                     """,
                     artifact_id,
                     actual_document_id,
                     artifact_type,
-                    content,  # 🌟 Bug 修复：添加 content
+                    content,  # 🌟 使用 content 列（Markdown 原文）
                     json.dumps(content_json) if content_json else '{}',
                     file_path,
-                    page_num,
-                    raw_text
+                    page_num
                 )
             
             logger.debug(f"✅ Artifact {artifact_id} ({artifact_type}) 已保存")
@@ -1717,18 +1718,23 @@ class DBClient:
         """
         try:
             async with self.connection() as conn:
+                # 🌟 v1.2: 修正列名与表 schema 对齐
+                # 表 schema: document_id, stage, status, details, error_message
+                details_json = {
+                    "message": message,
+                    "duration_ms": duration_ms,
+                    "artifacts_count": artifacts_count
+                }
                 await conn.execute(
                     """
                     INSERT INTO document_processing_history 
-                    (document_id, stage_name, status, message, duration_ms, artifacts_count, timestamp)
-                    VALUES ($1, $2, $3, $4, $5, $6, NOW())
+                    (document_id, stage, status, details)
+                    VALUES ($1, $2, $3, $4::jsonb)
                     """,
                     document_id,
-                    stage,
+                    stage,  # 🌟 v1.2: stage_name -> stage
                     status,
-                    message,
-                    duration_ms,
-                    artifacts_count
+                    json.dumps(details_json)
                 )
                 logger.debug(f"✅ Processing history: {stage} - {status}")
                 return True
@@ -1816,17 +1822,15 @@ class DBClient:
                 await conn.execute(
                     """
                     INSERT INTO document_tables 
-                    (document_id, page_num, table_index, table_json, table_markdown, created_at)
-                    VALUES ($1, $2, $3, $4::jsonb, $5, NOW())
-                    ON CONFLICT (document_id, page_num, table_index) DO UPDATE SET
-                        table_json = $4::jsonb,
-                        table_markdown = $5
+                    (document_id, page_number, table_index, rows, created_at)
+                    VALUES ($1, $2, $3, $4::jsonb, NOW())
+                    ON CONFLICT (document_id, page_number, table_index) DO UPDATE SET
+                        rows = $4::jsonb
                     """,
                     document_id,
-                    page_num,
+                    page_num,  # 🌟 v1.1: 修正 - page_num 对应 page_number 列
                     table_index,
-                    json.dumps(table_json),
-                    table_markdown
+                    json.dumps(table_json)
                 )
                 logger.debug(f"✅ Table {page_num}-{table_index} 已保存")
                 return True

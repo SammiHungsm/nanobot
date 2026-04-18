@@ -64,6 +64,39 @@ class DocumentPipeline(BaseIngestionPipeline):
             await self.db.close()
     
     # ===========================================
+    # 🌟 实现抽象方法（委托给 Stage 4）
+    # ===========================================
+    
+    async def extract_information(
+        self,
+        artifacts: List[Dict[str, Any]],
+        metadata: Dict[str, Any] = None,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """
+        🎯 实现抽象方法：委托给 Stage4AgenticExtractor
+        
+        这是 v4.0 的核心：所有提取逻辑都在 Stage 4 中
+        """
+        logger.info("🎯 extract_information: 委托给 Stage4AgenticExtractor")
+        
+        company_id = kwargs.get("company_id")
+        year = kwargs.get("year")
+        document_id = kwargs.get("document_id")
+        
+        # 调用 Stage 4 Agentic Extractor
+        result = await Stage4AgenticExtractor.run_agentic_write(
+            artifacts=artifacts,
+            company_id=company_id,
+            year=year or 2025,
+            doc_id=kwargs.get("doc_id"),
+            document_id=document_id,
+            db_client=self.db
+        )
+        
+        return result
+    
+    # ===========================================
     # 🌟 核心流程：唯一的入口
     # ===========================================
     
@@ -72,6 +105,7 @@ class DocumentPipeline(BaseIngestionPipeline):
         pdf_path: str,
         company_id: int = None,
         doc_id: str = None,
+        original_filename: str = None,  # 🌟 v4.3: 新增参数 - 原始上传文件名
         progress_callback: Callable = None,
         replace: bool = False,
         is_index_report: bool = False,
@@ -83,13 +117,17 @@ class DocumentPipeline(BaseIngestionPipeline):
         
         Pipeline 直线化（无 Toggle，无分支）：
         Stage 0 → Stage 0.5 → Stage 1 → Stage 2 → Stage 3 → Stage 4 → Stage 5 → Stage 6 → Stage 7
+        
+        🌟 v4.3: 新增 original_filename 参数，用于保存原始上传文件名
         """
         pdf_path = Path(pdf_path)
         if not pdf_path.exists():
             raise FileNotFoundError(f"PDF not found: {pdf_path}")
         
         doc_id = doc_id or pdf_path.stem
-        logger.info(f"🚀 process_pdf_full: {pdf_path}")
+        # 🌟 v4.3: 如果没有传入 original_filename，使用 pdf_path 的文件名
+        original_filename = original_filename or pdf_path.name
+        logger.info(f"🚀 process_pdf_full: {pdf_path} (original_filename={original_filename})")
         
         result = {"doc_id": doc_id, "status": "success", "stages": {}}
         
@@ -118,6 +156,7 @@ class DocumentPipeline(BaseIngestionPipeline):
             registrar_result = await Stage0_5_Registrar.run(
                 pdf_path=str(pdf_path),
                 doc_id=doc_id,
+                original_filename=original_filename,  # 🌟 v4.3: 传递原始文件名
                 metadata=stage0_result,
                 db_client=self.db,
                 skip_duplicate=False
@@ -125,6 +164,26 @@ class DocumentPipeline(BaseIngestionPipeline):
             result["stages"]["stage0_5"] = registrar_result
             
             company_id = registrar_result.get("company_id")
+            document_id = registrar_result.get("document_id")  # 🌟 获取 document_id
+            
+            # 🌟 v4.4: 记录 processing history (Stage 0 + Stage 0.5)
+            if self.db and document_id:
+                # Stage 0
+                await self.db.insert_processing_history(  # 🌟 v4.5: 修正方法名
+                    document_id=document_id,
+                    stage="stage0",
+                    status="success",
+                    message="Vision 提取封面完成",
+                    artifacts_count=1
+                )
+                # Stage 0.5
+                await self.db.insert_processing_history(
+                    document_id=document_id,
+                    stage="stage0_5",
+                    status="success",
+                    message="文档和公司注册完成",
+                    artifacts_count=2  # document + company
+                )
             document_id = registrar_result.get("document_id")
             year = stage0_result.get("year") or 2025
             
@@ -133,7 +192,16 @@ class DocumentPipeline(BaseIngestionPipeline):
                 progress_callback(15.0, "Stage 1: LlamaParse 解析")
             
             pdf_filename = pdf_path.name
-            parse_result = self.parser.load_from_raw_output(pdf_filename)
+            
+            # 🌟 v4.1: 先尝试从 raw output 加载，失败才调用 API
+            parse_result = None
+            try:
+                parse_result = self.parser.load_from_raw_output(pdf_filename)
+                logger.info(f"   ✅ 从 raw output 加载成功（不扣费）")
+            except FileNotFoundError:
+                logger.info(f"   📂 Raw output 不存在，调用 LlamaParse API...")
+                parse_result = await self.parser.parse_async(str(pdf_path))
+                logger.info(f"   ✅ LlamaParse API 解析完成，job_id={parse_result.job_id}")
             
             if parse_result is None:
                 raise ValueError("parse_result is None")
@@ -151,8 +219,12 @@ class DocumentPipeline(BaseIngestionPipeline):
             if progress_callback:
                 progress_callback(30.0, "Stage 2: Enrichment")
             
+            # 🌟 v4.2: 修复图片传递 - parse_result.images 包含下载后的图片信息
+            images_list = parse_result.images or []
+            
             stage2_result = await Stage2Enrichment.save_all_artifacts(
                 artifacts=artifacts,
+                images=images_list,  # 🌟 新增：传递图片列表
                 doc_id=doc_id,
                 company_id=company_id,
                 document_id=document_id,
@@ -161,6 +233,25 @@ class DocumentPipeline(BaseIngestionPipeline):
                 vision_limit=20
             )
             result["stages"]["stage2"] = stage2_result
+            
+            # 🌟 v4.4: 记录 processing history (Stage 1 + Stage 2)
+            if self.db and document_id:
+                # Stage 1
+                await self.db.insert_processing_history(
+                    document_id=document_id,
+                    stage="stage1",
+                    status="success",
+                    message=f"LlamaParse 解析完成，job_id={parse_result.job_id}",
+                    artifacts_count=len(artifacts)
+                )
+                # Stage 2
+                await self.db.insert_processing_history(
+                    document_id=document_id,
+                    stage="stage2",
+                    status="success",
+                    message=f"页面和图片保存完成，pages={stage2_result.get('pages_saved', 0)}",
+                    artifacts_count=stage2_result.get("pages_saved", 0) + stage2_result.get("images_saved", 0)
+                )
             
             # ===== Stage 3: Router =====
             if progress_callback:
@@ -240,6 +331,35 @@ class DocumentPipeline(BaseIngestionPipeline):
                 data_dir=str(self.data_dir) if hasattr(self, 'data_dir') else None
             )
             result["stages"]["stage8"] = stage8_result
+            
+            # 🌟 v4.4: 记录 processing history (Stage 4 + Stage 7 + Stage 8)
+            if self.db and document_id:
+                # Stage 4
+                extracted_count = len(stage4_result.get("extracted_data", {}))
+                await self.db.insert_processing_history(
+                    document_id=document_id,
+                    stage="stage4",
+                    status="success",
+                    message=f"Agentic 提取完成",
+                    artifacts_count=extracted_count
+                )
+                # Stage 7
+                if result["stages"].get("stage7"):
+                    await self.db.insert_processing_history(
+                        document_id=document_id,
+                        stage="stage7",
+                        status="success",
+                        message=f"向量索引完成",
+                        artifacts_count=result["stages"]["stage7"].get("total_vectors", 0)
+                    )
+                # Stage 8
+                await self.db.insert_processing_history(
+                    document_id=document_id,
+                    stage="stage8",
+                    status="success",
+                    message="处理完成，已归档",
+                    artifacts_count=0
+                )
             
             if progress_callback:
                 progress_callback(100.0, "处理完成")

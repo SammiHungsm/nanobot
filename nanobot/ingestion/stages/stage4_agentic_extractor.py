@@ -184,6 +184,45 @@ Step 2: 分析 PDF 内容
 - 对比 Schema，决定写入哪些表
 
 Step 3: 动态写入 🌟 关键！（选择正确的 Tool）
+
+========================================
+🌟 【动态写入指引 (Tool Usage Guide)】
+========================================
+
+⚠️ 选择正确的 Tool 是关键！不同数据用不同 Tool：
+
+1️⃣ 财务指标（利润、资产、负债）
+   → 使用 insert_financial_metrics
+   → 例如：净利润 123亿、总资产 500亿
+
+2️⃣ 收入分解（按地区/业务/产品划分）🆕
+   → 使用 insert_revenue_breakdown
+   → 例如：「香港 25%、欧洲 30%、北美 45%」
+   → ⚠️ 千万不要用 financial_metrics！
+
+3️⃣ 关键人员（董事、高管）
+   → 使用 insert_key_personnel
+   → 例如：CEO 张三、独立董事 李四
+
+4️⃣ 股东持股比例
+   → 使用 insert_shareholding
+   → 例如：第一大股东持股 15.2%
+
+5️⃣ 市场数据（PE ratio、市值、股价）🆕
+   → 使用 insert_market_data
+   → 例如：市盈率 15倍、市值 500亿
+
+6️⃣ 实体关系（人物-公司关系）🆕
+   → 使用 insert_entity_relation
+   → 例如：「张三是腾讯CEO」、「A公司收购B公司」
+
+7️⃣ 自定义字段（Schema 没有的）🆕
+   → 使用 update_dynamic_attributes
+   → 例如：环保评分、ESG 指标、特殊披露
+   → 存入 JSONB，无需 ALTER TABLE
+
+========================================
+
 - 见到财务数字（利润、资产、负债） → insert_financial_metrics
 - 见到高管/董事名单 → insert_key_personnel
 - 见到股东持股比例 → insert_shareholding

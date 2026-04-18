@@ -32,7 +32,7 @@ class AgenticExecutor:
     
     def __init__(
         self,
-        tools_registry: Dict[str, Callable],
+        tools_registry: Dict[str, Any],  # 🌟 改为 Any，可以是 Tool 实例或 execute 方法
         max_iterations: int = 10,
         model: str = None
     ):
@@ -40,7 +40,7 @@ class AgenticExecutor:
         初始化
         
         Args:
-            tools_registry: Tool 名称 → 执行函数的映射
+            tools_registry: Tool 名称 → Tool 实例或 execute 函数的映射
             max_iterations: 最大迭代次数（防止无限循环）
             model: LLM 模型
         """
@@ -52,22 +52,31 @@ class AgenticExecutor:
         """
         构建 OpenAI 格式的 Tools Schema
         
-        🌟 从 Tool 实例获取完整的 parameters 定义
+        🌟 v3.20: 支持两种格式
+        - Tool 实例（有 .name, .parameters, .description 属性）
+        - execute 方法（bound method，需要从 __self__ 获取属性）
         
         Returns:
             List[Dict]: OpenAI 格式的 tools 列表
         """
         tools_schema = []
         
-        for name, tool_func in self.tools_registry.items():
-            # 🌟 获取 Tool 实例（如果有）
-            tool_instance = getattr(tool_func, '__self__', None)
+        for name, tool_obj in self.tools_registry.items():
+            # 🌟 检查是否是 Tool 实例
+            if hasattr(tool_obj, 'execute'):
+                # 是 Tool 实例
+                tool_instance = tool_obj
+                execute_func = tool_instance.execute
+            else:
+                # 是 execute 方法
+                execute_func = tool_obj
+                tool_instance = getattr(tool_obj, '__self__', None)
             
             # 🌟 获取 parameters 定义
             if tool_instance and hasattr(tool_instance, 'parameters'):
                 parameters = tool_instance.parameters
-            elif hasattr(tool_func, 'parameters_schema'):
-                parameters = tool_func.parameters_schema
+            elif hasattr(execute_func, 'parameters_schema'):
+                parameters = execute_func.parameters_schema
             else:
                 # Fallback: 空参数
                 parameters = {"type": "object", "properties": {}, "required": []}
@@ -76,8 +85,8 @@ class AgenticExecutor:
             description = ""
             if tool_instance and hasattr(tool_instance, 'description'):
                 description = tool_instance.description
-            elif hasattr(tool_func, '__doc__'):
-                description = tool_func.__doc__ or f"Execute {name}"
+            elif hasattr(execute_func, '__doc__'):
+                description = execute_func.__doc__ or f"Execute {name}"
             
             # 🌟 构建 OpenAI Tool Schema
             tools_schema.append({
@@ -109,14 +118,20 @@ class AgenticExecutor:
         if tool_name not in self.tools_registry:
             return json.dumps({"error": f"Tool '{tool_name}' not found"})
         
-        tool_func = self.tools_registry[tool_name]
+        tool_obj = self.tools_registry[tool_name]
         
         try:
-            # 🌟 执行 Tool（支持 async 和 sync）
-            if asyncio.iscoroutinefunction(tool_func):
-                result = await tool_func(**tool_args)
+            # 🌟 v3.20: 获取 execute 方法
+            if hasattr(tool_obj, 'execute'):
+                execute_func = tool_obj.execute
             else:
-                result = tool_func(**tool_args)
+                execute_func = tool_obj
+            
+            # 🌟 执行 Tool（支持 async 和 sync）
+            if asyncio.iscoroutinefunction(execute_func):
+                result = await execute_func(**tool_args)
+            else:
+                result = execute_func(**tool_args)
             
             # 🌟 确保结果是字符串
             if isinstance(result, dict):
@@ -231,15 +246,17 @@ class AgenticExecutor:
         }
 
 
-def build_tools_registry_from_classes(tool_classes: List[Any]) -> Dict[str, Callable]:
+def build_tools_registry_from_classes(tool_classes: List[Any]) -> Dict[str, Any]:
     """
     从 Tool Classes 构建 Tools Registry
+    
+    🌟 v3.20: 返回 Tool 实例（不是 execute 方法）
     
     Args:
         tool_classes: Tool 类列表
         
     Returns:
-        Dict[str, Callable]: Tool 名称 → execute 函数
+        Dict[str, Any]: Tool 名称 → Tool 实例
     """
     registry = {}
     
@@ -247,14 +264,10 @@ def build_tools_registry_from_classes(tool_classes: List[Any]) -> Dict[str, Call
         # 🌟 实例化 Tool
         tool_instance = tool_class()
         
-        # 🌟 获取名称和 execute 方法
+        # 🌟 获取名称
         tool_name = tool_instance.name
-        execute_method = tool_instance.execute
         
-        # 🌟 添加到 Registry
-        registry[tool_name] = execute_method
-        
-        # 🌟 添加参数 Schema（用于 OpenAI API）
-        registry[tool_name].parameters_schema = tool_instance.parameters
+        # 🌟 添加到 Registry（保存整个 Tool 实例）
+        registry[tool_name] = tool_instance
     
     return registry

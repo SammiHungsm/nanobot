@@ -1,4 +1,4 @@
-# Nanobot WebUI - Python Dependencies (v3.0 - LlamaParse only)
+# Nanobot WebUI - Python Dependencies (v3.1 - LlamaParse + PyMuPDF)
 
 # Web Framework
 fastapi>=0.115.0
@@ -19,6 +19,11 @@ aiofiles>=23.2.1
 # 🌟 LlamaParse Cloud Parser（替代 OpenDataLoader）
 # 支持 130+ 格式 + 本地文件上传 + Agentic OCR
 llama_cloud>=2.3.0
+
+# 🌟 PyMuPDF（Stage 0 截取封面）
+# pip install pymupdf，但 import fitz
+# 用于独立运行 Stage 0，不等待 LlamaParse
+PyMuPDF>=1.24.0
 
 # Logging
 loguru>=0.7.0

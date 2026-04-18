@@ -459,10 +459,17 @@ class PDFParser:
         images_dir.mkdir(parents=True, exist_ok=True)
         
         images_result = []
+        image_path_map = {}  # 🌟 新增：Markdown 路径 → 实际文件名映射
+        
         if self.download_images and self.enable_images:
             logger.info(f"   📸 开始下载图片...")
-            images_result = await self._download_images_from_response(response, images_dir, job_id)
+            images_result, image_path_map = await self._download_images_from_response(response, images_dir, job_id)
             logger.info(f"   ✅ 成功下载 {len(images_result)} 张图片")
+        
+        # 🌟 新增：修复 Markdown 中的图片路径
+        if image_path_map:
+            logger.info(f"   🔧 修复 Markdown 图片路径...")
+            self._fix_markdown_image_paths(raw_output_dir, image_path_map)
         
         # 7. 提取结果
         result = self._extract_result(response, file_path)
@@ -481,9 +488,12 @@ class PDFParser:
         response: Any, 
         images_dir: Path,
         job_id: str
-    ) -> List[Dict]:
+    ) -> tuple[List[Dict], Dict[str, str]]:
         """
-        🌟 v3.18: 使用 LlamaCloud v2 的 presigned_url 下载图片
+        🌟 v3.20: 异步并行下载图片并返回路径映射
+        
+        使用 asyncio.gather() 并行执行所有 HTTP 请求
+        将原本串行的下载时间 (n x 单张时间) 缩短到只取最慢的那张
         
         Args:
             response: ParsingGetResponse
@@ -491,60 +501,188 @@ class PDFParser:
             job_id: LlamaParse job_id
             
         Returns:
-            图片列表
+            tuple: (图片列表, Markdown路径→实际文件名映射)
         """
         import httpx
+        import re
+        import asyncio
         
         images = []
+        image_path_map = {}  # 🌟 Markdown 中引用的路径 → 实际保存的文件名
         
         # 1. 检查 API 是否有回传图片元数据
         if not hasattr(response, 'images_content_metadata') or not response.images_content_metadata:
             logger.warning("   ⚠️ 找不到 images_content_metadata（请确定 expand 有包含该栏位）")
-            return images
+            return images, image_path_map
         
         image_list = response.images_content_metadata.images
         if not image_list:
             logger.warning("   ⚠️ 图片列表为空")
-            return images
+            return images, image_path_map
 
-        logger.info(f"   📸 找到 {len(image_list)} 个图片，开始透过 S3 presigned_url 下载...")
+        logger.info(f"   📸 找到 {len(image_list)} 个图片，开始并行下载...")
         
-        # 2. 直接使用官方提供的 presigned_url 下载
-        async with httpx.AsyncClient(timeout=60) as client:
-            for img in image_list:
-                if img is None:
-                    continue
+        # 🌟 从 Markdown 中提取所有图片引用路径
+        markdown_full = getattr(response, 'markdown_full', '') or ''
+        markdown_refs = re.findall(r'!\[.*?\]\((images/[^\)]+)\)', markdown_full)
+        logger.info(f"   📝 Markdown 中引用了 {len(markdown_refs)} 个图片路径")
+
+        # 🌟 定义单一图片下载任务
+        async def download_single_image(client: httpx.AsyncClient, img: Any, idx: int) -> Optional[Dict]:
+            """下载单张图片"""
+            actual_filename = getattr(img, 'filename', f'img_{idx}.jpg')
+            url = getattr(img, 'presigned_url', None)
+            # 🌟 v4.3: 尝试多种属性名获取页码（LlamaParse API 版本差异）
+            # 优先尝试 page_number，然后 page，最后从文件名提取
+            page_number = getattr(img, 'page_number', None)
+            if page_number is None:
+                page_number = getattr(img, 'page', None)
+            if page_number is None:
+                # 🌟 从文件名提取页码（如 page_123.png, img_p45.jpg）
+                import re as re_module
+                match = re_module.search(r'(?:page|p)[_\-]?(\d+)', actual_filename, re_module.IGNORECASE)
+                if match:
+                    page_number = int(match.group(1))
+            # 🌟 如果都找不到，默认 0
+            if page_number is None:
+                page_number = 0
+            
+            if not url:
+                return None
+            
+            try:
+                # 🌟 异步 HTTP GET
+                resp = await client.get(url)
                 
-                img_name = getattr(img, 'filename', None)
-                url = getattr(img, 'presigned_url', None)
-                
-                if not img_name or not url:
-                    continue
-                
-                try:
-                    # 直接 HTTP GET 预先授权网址（不需带 API Key）
-                    resp = await client.get(url)
+                if resp.status_code == 200:
+                    local_path = images_dir / actual_filename
+                    with open(local_path, 'wb') as f:
+                        f.write(resp.content)
                     
-                    if resp.status_code == 200:
-                        local_path = images_dir / img_name
-                        with open(local_path, 'wb') as f:
-                            f.write(resp.content)
-                        
-                        images.append({
-                            "type": "image",
-                            "page": getattr(img, 'page_number', 0),
-                            "filename": img_name,
-                            "local_path": str(local_path),
-                            "downloaded": True,
-                            "source": "presigned_url"
-                        })
-                        logger.debug(f"      ✅ {img_name}")
-                    else:
-                        logger.warning(f"      ⚠️ 下载失败 {img_name}: HTTP {resp.status_code}")
-                except Exception as e:
-                    logger.warning(f"      ⚠️ 下载发生异常 {img_name}: {e}")
+                    logger.debug(f"      ✅ 下载成功: {actual_filename}")
+                    return {
+                        "type": "image",
+                        "page": page_number,
+                        "filename": actual_filename,
+                        "local_path": str(local_path),
+                        "downloaded": True,
+                        "source": "presigned_url"
+                    }
+                else:
+                    logger.warning(f"      ⚠️ HTTP {resp.status_code}: {actual_filename}")
+                    return None
+                    
+            except Exception as e:
+                logger.warning(f"      ⚠️ 下载异常 {actual_filename}: {e}")
+                return None
+
+        # 🌟 使用 asyncio.gather 并行执行所有 HTTP 请求
+        async with httpx.AsyncClient(timeout=60) as client:
+            # 创建所有下载任务
+            tasks = [
+                download_single_image(client, img, idx) 
+                for idx, img in enumerate(image_list) 
+                if img is not None
+            ]
+            
+            # 🌟 并行执行（所有请求同时发出）
+            results = await asyncio.gather(*tasks)
         
-        return images
+        # 🌟 整理结果并建立 mapping
+        for res in results:
+            if res:
+                images.append(res)
+                page_number = res["page"]
+                actual_filename = res["filename"]
+                
+                # 创建映射：Markdown 引用路径 → 实际文件名
+                for ref in markdown_refs:
+                    if f'page_{page_number}' in ref or f'p{page_number}' in ref:
+                        image_path_map[ref] = actual_filename
+        
+        # 🌟 智能映射（如果没有匹配到）
+        if not image_path_map and markdown_refs and images:
+            logger.info("   🔧 创建智能图片路径映射...")
+            for idx, ref in enumerate(markdown_refs):
+                if idx < len(images):
+                    actual_filename = images[idx]["filename"]
+                    image_path_map[ref] = actual_filename
+        
+        logger.info(f"   ✅ 成功下载 {len(images)} 张图片")
+        logger.info(f"   🗺️ 创建了 {len(image_path_map)} 个路径映射")
+        
+        return images, image_path_map
+    
+    def _fix_markdown_image_paths(
+        self,
+        raw_output_dir: Path,
+        image_path_map: Dict[str, str]
+    ) -> None:
+        """
+        🌟 v3.19: 修复 Markdown 文件中的图片路径
+        
+        确保 Markdown 文件可以正确引用 images/ 目录下的图片
+        
+        Args:
+            raw_output_dir: Raw output 目录
+            image_path_map: Markdown 路径 → 实际文件名映射
+        """
+        if not image_path_map:
+            return
+        
+        # 🌟 使用相对路径（Markdown 和 images 在同一层级）
+        # 结构：
+        # raw_output_dir/
+        # ├── markdown.md
+        # ├── images/
+        # │   └── img_p10_1.jpg
+        
+        # 修复完整 Markdown
+        markdown_full_path = raw_output_dir / "markdown.md"
+        if markdown_full_path.exists():
+            content = markdown_full_path.read_text(encoding='utf-8')
+            
+            # 🌟 替换所有旧的图片引用为实际路径
+            for old_path, actual_filename in image_path_map.items():
+                # 相对路径（Markdown 和 images 同层）
+                new_path = f"images/{actual_filename}"
+                content = content.replace(old_path, new_path)
+            
+            markdown_full_path.write_text(content, encoding='utf-8')
+            logger.info(f"   ✅ 已修复 {markdown_full_path}")
+        
+        # 修复每页 Markdown
+        for md_file in raw_output_dir.glob("markdown_page*.md"):
+            content = md_file.read_text(encoding='utf-8')
+            
+            for old_path, actual_filename in image_path_map.items():
+                # 🌟 相对路径（同一层级）
+                new_path = f"images/{actual_filename}"
+                content = content.replace(old_path, new_path)
+            
+            md_file.write_text(content, encoding='utf-8')
+            logger.debug(f"   ✅ 已修复 {md_file.name}")
+        
+        # 🌟 新增：验证图片是否真实存在
+        images_dir = raw_output_dir / "images"
+        actual_images = list(images_dir.glob("*"))
+        logger.info(f"   📸 images 目录实际有 {len(actual_images)} 个文件")
+        
+        # 🌟 检查 Markdown 中的所有图片引用是否都存在
+        if markdown_full_path.exists():
+            import re
+            refs = re.findall(r'!\[.*?\]\((images/[^\)]+)\)', markdown_full_path.read_text(encoding='utf-8'))
+            missing = []
+            for ref in refs:
+                img_name = ref.replace('images/', '')
+                img_path = images_dir / img_name
+                if not img_path.exists():
+                    missing.append(img_name)
+            
+            if missing:
+                logger.warning(f"   ⚠️ 缺少 {len(missing)} 个图片: {missing[:5]}...")
+            else:
+                logger.info(f"   ✅ 所有 {len(refs)} 个图片引用都存在")
     
     async def parse_url_async(self, url: str) -> PDFParseResult:
         """
@@ -993,8 +1131,13 @@ class PDFParser:
     
     async def _download_images_async(self, response: Any, raw_output_dir: Path) -> None:
         """
-        异步下载图片到本地
+        🌟 v3.20: 异步并行下载图片到本地
+        
+        使用 asyncio.gather() 并行执行所有 HTTP 请求
         """
+        import asyncio
+        import httpx
+        
         images_dir = raw_output_dir / "images"
         images_dir.mkdir(parents=True, exist_ok=True)
         
@@ -1005,30 +1148,40 @@ class PDFParser:
         if not images:
             return
         
-        logger.info(f"   📥 异步下载 {len(images)} 张图片...")
-        
-        downloaded = 0
+        logger.info(f"   📥 异步并行下载 {len(images)} 张图片...")
+
+        # 🌟 定义单张图片下载任务
+        async def fetch_image(client: httpx.AsyncClient, img: Any) -> int:
+            """下载单张图片，返回 1 表示成功，0 表示失败"""
+            if img is None:
+                return 0
+            
+            url = getattr(img, 'presigned_url', None)
+            filename = getattr(img, 'filename', f"image_{getattr(img, 'index', 0)}.png")
+            
+            if not url:
+                return 0
+            
+            try:
+                response_http = await client.get(url)
+                if response_http.status_code == 200:
+                    img_path = images_dir / filename
+                    with open(img_path, 'wb') as f:
+                        f.write(response_http.content)
+                    logger.debug(f"      ✅ {filename}")
+                    return 1
+                else:
+                    logger.warning(f"      ⚠️ HTTP {response_http.status_code}: {filename}")
+                    return 0
+            except Exception as e:
+                logger.warning(f"      ⚠️ 下载失败 {filename}: {e}")
+                return 0
+
+        # 🌟 使用 asyncio.gather 并行执行所有 HTTP 请求
         async with httpx.AsyncClient(timeout=60) as client:
-            for img in images:
-                # 🌟 v3.5: 跳过 None 元素
-                if img is None:
-                    continue
-                url = getattr(img, 'presigned_url', None)
-                filename = getattr(img, 'filename', f"image_{getattr(img, 'index', 0)}.png")
-                
-                if not url:
-                    continue
-                
-                try:
-                    response_http = await client.get(url)
-                    if response_http.status_code == 200:
-                        img_path = images_dir / filename
-                        with open(img_path, 'wb') as f:
-                            f.write(response_http.content)
-                        downloaded += 1
-                        logger.debug(f"      ✅ {filename}")
-                except Exception as e:
-                    logger.warning(f"      ⚠️ 下载失败 {filename}: {e}")
+            tasks = [fetch_image(client, img) for img in images if img is not None]
+            results = await asyncio.gather(*tasks)
+            downloaded = sum(results)
         
         logger.info(f"   ✅ 图片下载完成: {downloaded}/{len(images)} 张")
     

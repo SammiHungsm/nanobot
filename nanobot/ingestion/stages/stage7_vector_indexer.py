@@ -1,14 +1,13 @@
 """
-Stage 7: Vector Indexer (v4.0)
+Stage 7: Vector Indexer (v4.1)
 
 职责：
 - 文本切块 (Semantic Chunking)
-- Embedding 生成
-- 向量入库 (PgVector / Milvus)
+- Embedding 生成（本地 sentence-transformers，无需 API Key）
+- 向量入库 (PgVector)
 - 多模态 RAG 准备（图片 + 文本）
 
-🌟 v4.0: 简化后的 Stage 7（原 Stage 8）
-🌟 为未来的 RAG 查询做好准备
+🌟 v4.1: 使用本地 embedding（sentence-transformers），无需 OpenAI API Key
 """
 
 import os
@@ -19,6 +18,28 @@ from typing import Dict, Any, List, Optional
 from loguru import logger
 
 from nanobot.core.llm_core import llm_core
+
+# 🌟 v4.1: 本地 Embedding 模型（懒加载）
+_LOCAL_EMBEDDING_MODEL = None
+
+
+def _get_local_embedding_model():
+    """获取本地 embedding 模型（懒加载）"""
+    global _LOCAL_EMBEDDING_MODEL
+    
+    if _LOCAL_EMBEDDING_MODEL is None:
+        try:
+            from sentence_transformers import SentenceTransformer
+            # 使用多语言模型（支持中文）
+            model_name = os.environ.get("LOCAL_EMBEDDING_MODEL", "paraphrase-multilingual-MiniLM-L12-v2")
+            logger.info(f"   📦 加载本地 Embedding 模型: {model_name}")
+            _LOCAL_EMBEDDING_MODEL = SentenceTransformer(model_name)
+            logger.info(f"   ✅ Embedding 模型加载成功: {_LOCAL_EMBEDDING_MODEL.get_sentence_embedding_dimension()} 维")
+        except Exception as e:
+            logger.warning(f"   ⚠️ 加载本地 Embedding 模型失败: {e}")
+            _LOCAL_EMBEDDING_MODEL = None
+    
+    return _LOCAL_EMBEDDING_MODEL
 
 
 class Stage7VectorIndexer:
@@ -109,6 +130,8 @@ class Stage7VectorIndexer:
         """
         生成 Embedding
         
+        🌟 v4.1: 优先使用本地 sentence-transformers，无需 API Key
+        
         Args:
             text: 文本内容
             
@@ -116,15 +139,21 @@ class Stage7VectorIndexer:
             Optional[List[float]]: Embedding 向量
         """
         try:
-            # 🌟 使用 OpenAI Embedding API
-            # 注意：llm_core 目前不支持 embedding，这里需要调用外部 API
+            # 🌟 v4.1: 优先使用本地 embedding
+            local_model = _get_local_embedding_model()
             
-            # 从配置获取 API 信息
+            if local_model:
+                # 本地模型生成 embedding
+                embedding = local_model.encode(text[:2000], convert_to_numpy=True)  # 限制长度
+                logger.debug(f"   ✅ 本地 Embedding 生成成功: {len(embedding)} 维")
+                return embedding.tolist()
+            
+            # 🌟 Fallback: 如果本地模型不可用，尝试 API
             api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("EMBEDDING_API_KEY")
             api_base = os.environ.get("EMBEDDING_API_BASE", "https://api.openai.com/v1")
             
             if not api_key:
-                logger.warning("   ⚠️ 缺少 Embedding API Key，跳过向量生成")
+                logger.warning("   ⚠️ 本地模型和 API Key 都不可用，跳过 embedding")
                 return None
             
             import httpx
@@ -135,14 +164,14 @@ class Stage7VectorIndexer:
                     headers={"Authorization": f"Bearer {api_key}"},
                     json={
                         "model": self.embedding_model,
-                        "input": text[:8000]  # 限制长度
+                        "input": text[:8000]
                     }
                 )
                 
                 if response.status_code == 200:
                     data = response.json()
                     embedding = data["data"][0]["embedding"]
-                    logger.debug(f"   ✅ Embedding 生成成功: {len(embedding)} 维")
+                    logger.debug(f"   ✅ API Embedding 生成成功: {len(embedding)} 维")
                     return embedding
                 else:
                     logger.warning(f"   ⚠️ Embedding API 失败: {response.status_code}")

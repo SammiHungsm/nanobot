@@ -219,6 +219,7 @@ class DocumentService:
                 pdf_path=doc["path"],
                 company_id=None,
                 doc_id=doc_id,
+                original_filename=doc["filename"],  # 🌟 v3.3: 传递原始上传文件名
                 progress_callback=update_progress,
                 replace=doc.get("replace", False),
                 is_index_report=doc.get("is_index_report", False),

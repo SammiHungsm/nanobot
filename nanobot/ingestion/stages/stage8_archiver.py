@@ -79,9 +79,9 @@ class Stage8Archiver:
                 
                 await db_client.insert_document_page(
                     document_id=document_id,
-                    page_number=page_num,
-                    content=content,
-                    has_tables=has_tables,
+                    page_num=page_num,  # 🌟 v1.1: 修正参数名 - page_number -> page_num
+                    markdown_content=content,  # 🌟 v1.1: 修正参数名 - content -> markdown_content
+                    has_charts=has_tables,  # 🌟 v1.1: 修正参数名 - has_tables -> has_charts
                     has_images=has_images
                 )
                 result["pages_saved"] += 1
@@ -96,18 +96,32 @@ class Stage8Archiver:
             page_num = artifact.get("page", 0)
             table_content = artifact.get("content", {})
             
-            try:
-                await db_client.insert_raw_artifact(
-                    document_id=document_id,
-                    artifact_type="table",
-                    page_number=page_num,
-                    content_json=table_content,
-                    raw_text=str(table_content)
-                )
-                result["tables_saved"] += 1
-                
-            except Exception as e:
-                logger.warning(f"   ⚠️ 表格 {page_num} 保存失败: {e}")
+            # 🌟 v1.2: 同时写入 document_tables 表（结构化表格数据）
+            if db_client:
+                try:
+                    await db_client.insert_document_table(
+                        document_id=document_id,
+                        page_num=page_num,
+                        table_index=0,  # 简化：每页一个表格
+                        table_json=table_content  # 🌟 v1.2: 使用正确的参数名
+                    )
+                    result["tables_saved"] += 1
+                except Exception as e:
+                    logger.warning(f"   ⚠️ 表格 {page_num} 保存到 document_tables 失败: {e}")
+            
+            # 同时写入 raw_artifacts
+            if db_client:
+                try:
+                    await db_client.insert_raw_artifact(
+                        artifact_id=f"table_{doc_id}_p{page_num}",
+                        document_id=document_id,
+                        artifact_type="table",
+                        page_num=page_num,
+                        content_json=table_content,
+                        content=str(table_content)
+                    )
+                except Exception as e:
+                    logger.warning(f"   ⚠️ 表格 {page_num} 保存到 raw_artifacts 失败: {e}")
         
         logger.info(f"✅ Stage 8 完成: pages={result['pages_saved']}, tables={result['tables_saved']}")
         
@@ -116,6 +130,7 @@ class Stage8Archiver:
     @staticmethod
     async def mark_document_complete(
         document_id: int,
+        doc_id: str = None,  # 🌟 v1.1: 新增参数 - doc_id（与 DBClient 对齐）
         db_client: Any = None,
         processing_stats: Dict[str, Any] = None
     ) -> Dict[str, Any]:
@@ -123,27 +138,26 @@ class Stage8Archiver:
         标记文档处理完成
         
         Args:
-            document_id: 文档 ID
+            document_id: 文档内部 ID
+            doc_id: 文档 ID（doc_id 字段）
             db_client: DB 客户端
             processing_stats: 处理统计数据
             
         Returns:
             Dict: {"status": str}
         """
-        if not db_client:
+        if not db_client or not doc_id:
             return {"status": "skipped"}
         
         try:
+            # 🌟 v1.1: 使用 doc_id 参数（与 DBClient.update_document_status 对齐）
             await db_client.update_document_status(
-                document_id=document_id,
+                doc_id=doc_id,
                 status="completed",
-                extra_data={
-                    "completed_at": datetime.now().isoformat(),
-                    "processing_stats": processing_stats or {}
-                }
+                stats=processing_stats or {}
             )
             
-            logger.info(f"   ✅ 文档 {document_id} 已标记完成")
+            logger.info(f"   ✅ 文档 {doc_id} 已标记完成")
             return {"status": "success"}
             
         except Exception as e:
@@ -242,11 +256,12 @@ class Stage8Archiver:
         if db_client:
             try:
                 await db_client.insert_raw_artifact(
-                    document_id=doc_id,
+                    artifact_id=f"report_{doc_id}",  # 🌟 v1.1: 添加 artifact_id
+                    document_id=stages_result.get("document_id"),  # 🌟 v1.1: 使用整数 document_id
                     artifact_type="processing_report",
-                    page_number=-1,
+                    page_num=-1,  # 🌟 v1.1: 修正参数名 - page_number -> page_num
                     content_json=report,
-                    raw_text=json.dumps(report, indent=2)
+                    content=json.dumps(report, indent=2)  # 🌟 v1.1: 修正参数名 - raw_text -> content
                 )
             except Exception as e:
                 logger.warning(f"   ⚠️ 保存报告失败: {e}")
@@ -303,6 +318,7 @@ class Stage8Archiver:
         
         mark_result = await Stage8Archiver.mark_document_complete(
             document_id=document_id,
+            doc_id=doc_id,  # 🌟 v1.1: 传递 doc_id（与 DBClient 对齐）
             db_client=db_client,
             processing_stats=processing_stats
         )
