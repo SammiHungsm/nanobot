@@ -81,43 +81,40 @@ def get_data_dir() -> str:
     return os.environ.get("DATA_DIR", "/app/data/raw")
 
 
-def get_raw_output_dir(pdf_filename: str = None) -> Path:
+def get_raw_output_dir(pdf_filename: str = None, doc_id: str = None) -> Path:
     """
     获取 LlamaParse Raw Output 存储目录
     
-    🌟 v3.2: 按 PDF 文件名创建文件夹
+    🌟 v4.0: 优先使用 doc_id 命名文件夹（统一命名逻辑）
     
     结构：
     data/raw/
     └── llamaparse/
-        └── report.pdf/              ← 按 PDF 文件名
+        └── 3SBIO_8875691f/          ← 按 doc_id（统一命名）
             ├── job_xxx.json         ← 完整的 API 响应
             ├── job_xxx_meta.json    ← 元数据
             ├── markdown.md          ← 完整 Markdown（方便查看）
             ├── markdown_page1.md    ← 每页 Markdown
-            ├── markdown_page2.md
-            └── images/              ← 图片文件夹
-                ├── screenshot_page1.png
-                ├── embedded_page2.jpg
+            ├── images/              ← 图片文件夹
+                ├── page_1.jpg
+                ├── page_2.jpg
                 └── ...
-        └── another.pdf/
-            └── job_yyy/
-            └── ...
     
     Args:
-        pdf_filename: PDF 文件名（不含路径）
+        pdf_filename: PDF 文件名（不含路径）- 用于向后兼容
+        doc_id: 🌟 文档 ID（优先使用，统一命名）
         
     Returns:
-        Path: data/raw/llamaparse/{pdf_filename} 目录
+        Path: data/raw/llamaparse/{doc_id or pdf_filename} 目录
     """
     data_dir = Path(get_data_dir())
     raw_output_dir = data_dir / "llamaparse"
     
-    if pdf_filename:
-        # 🌟 按 PDF 文件名创建子文件夹
-        # 移除扩展名，避免文件夹名称重复
-        pdf_name = Path(pdf_filename).stem  # report.pdf → report
-        raw_output_dir = raw_output_dir / pdf_name
+    # 🌟 v4.0: 优先使用 doc_id 命名（统一命名逻辑）
+    folder_name = doc_id or (Path(pdf_filename).stem if pdf_filename else None)
+    
+    if folder_name:
+        raw_output_dir = raw_output_dir / folder_name
     
     raw_output_dir.mkdir(parents=True, exist_ok=True)
     return raw_output_dir
@@ -249,21 +246,22 @@ class PDFParser:
     # 同步方法
     # ===========================================
     
-    def parse(self, file_path: str) -> PDFParseResult:
+    def parse(self, file_path: str, doc_id: str = None) -> PDFParseResult:
         """
         解析本地 PDF 文件
         
-        🌟 v3.16: 使用 llama-cloud 2.4.0 API
+        🌟 v4.0: 接受 doc_id 参数，统一文件夹命名
         
         Args:
             file_path: PDF 文件路径
+            doc_id: 🌟 文档 ID（用于文件夹命名，统一命名逻辑）
             
         Returns:
             PDFParseResult
         """
         import httpx
         
-        logger.info(f"🚀 LlamaParse 解析: {file_path}")
+        logger.info(f"🚀 LlamaParse 解析: {file_path} (doc_id={doc_id})")
         
         # 1. 上传文件
         file_obj = self.client.files.create(
@@ -303,7 +301,8 @@ class PDFParser:
         
         # 5. 保存 raw output
         pdf_filename = Path(file_path).name
-        raw_output_dir = self._save_full_raw_output(response, pdf_filename)
+        # 🌟 v4.0: 传入 doc_id，统一文件夹命名
+        raw_output_dir = self._save_full_raw_output(response, pdf_filename, doc_id=doc_id)
         
         # 6. 提取结果
         result = self._extract_result(response, file_path)
@@ -393,21 +392,22 @@ class PDFParser:
     # 异步方法
     # ===========================================
     
-    async def parse_async(self, file_path: str) -> PDFParseResult:
+    async def parse_async(self, file_path: str, doc_id: str = None) -> PDFParseResult:
         """
         异步解析本地 PDF 文件
         
-        🌟 v3.16: 使用 llama-cloud 2.4.0 API，自己处理 Polling 和图片下载
+        🌟 v4.0: 接受 doc_id 参数，统一文件夹命名
         
         Args:
             file_path: PDF 文件路径
+            doc_id: 🌟 文档 ID（用于文件夹命名，统一命名逻辑）
             
         Returns:
             PDFParseResult
         """
         import httpx
         
-        logger.info(f"🚀 LlamaParse 异步解析: {file_path}")
+        logger.info(f"🚀 LlamaParse 异步解析: {file_path} (doc_id={doc_id})")
         
         # 1. 上传文件
         file_obj = await self.async_client.files.create(
@@ -451,7 +451,8 @@ class PDFParser:
         
         # 5. 保存 raw output
         pdf_filename = Path(file_path).name
-        raw_output_dir = self._save_full_raw_output(response, pdf_filename)
+        # 🌟 v4.0: 传入 doc_id，统一文件夹命名
+        raw_output_dir = self._save_full_raw_output(response, pdf_filename, doc_id=doc_id)
         logger.info(f"   ✅ Raw output 目录: {raw_output_dir}")
         
         # 6. 🌟 v3.17: 下载图片（使用纯 HTTP requests 调用 API endpoint）
@@ -751,14 +752,14 @@ class PDFParser:
     # 🌟 完整保存 Raw Output（按 PDF 文件名）
     # ===========================================
     
-    def _save_full_raw_output(self, response: Any, pdf_filename: str) -> Path:
+    def _save_full_raw_output(self, response: Any, pdf_filename: str, doc_id: str = None) -> Path:
         """
-        保存完整的 API 响应到 data/raw/llamaparse/{pdf_filename}/
+        保存完整的 API 响应到 data/raw/llamaparse/{doc_id}/
         
-        🌟 v3.2: 按 PDF 文件名创建文件夹，保存所有字段
+        🌟 v4.0: 优先使用 doc_id 命名文件夹（统一命名逻辑）
         
         保存结构：
-        data/raw/llamaparse/{pdf_filename}/
+        data/raw/llamaparse/{doc_id}/
         ├── {job_id}.json          ← 完整的 ParsingGetResponse（所有字段）
         ├── {job_id}_meta.json     ← 元数据（file_path, created_at）
         ├── markdown.md            ← 完整 Markdown（方便查看）
@@ -767,7 +768,8 @@ class PDFParser:
         
         Args:
             response: LlamaParse ParsingGetResponse
-            pdf_filename: PDF 文件名
+            pdf_filename: PDF 文件名（用于向后兼容）
+            doc_id: 🌟 文档 ID（优先使用，统一命名）
             
         Returns:
             Path: 保存的目录路径
@@ -777,8 +779,8 @@ class PDFParser:
         
         job_id = response.job.id
         
-        # 🌟 按 PDF 文件名创建目录
-        raw_output_dir = get_raw_output_dir(pdf_filename)
+        # 🌟 v4.0: 优先使用 doc_id 创建目录（统一命名逻辑）
+        raw_output_dir = get_raw_output_dir(pdf_filename, doc_id=doc_id)
         
         # 🌟 使用 model_dump() 获取完整的 API 响应
         try:
@@ -1214,15 +1216,16 @@ class PDFParser:
     # 🌟 从 Raw Output 加载（不扣费）
     # ===========================================
     
-    def load_from_raw_output(self, pdf_filename: str, job_id: str = None) -> PDFParseResult:
+    def load_from_raw_output(self, pdf_filename: str, job_id: str = None, doc_id: str = None) -> PDFParseResult:
         """
         从已保存的 raw output 加载结果（完全不扣费）
         
-        🌟 v3.2: 按 PDF 文件名查找
+        🌟 v4.0: 优先使用 doc_id 查找
         
         Args:
-            pdf_filename: PDF 文件名
+            pdf_filename: PDF 文件名（向后兼容）
             job_id: 任务 ID（可选，如果不提供则自动查找最新的）
+            doc_id: 🌟 文档 ID（优先使用，统一命名）
             
         Returns:
             PDFParseResult
@@ -1230,10 +1233,10 @@ class PDFParser:
         Raises:
             FileNotFoundError: 如果 raw output 文件不存在
         """
-        logger.info(f"📂 从 raw output 加载: {pdf_filename}")
+        logger.info(f"📂 从 raw output 加载: {doc_id or pdf_filename}")
         
-        # 1. 按 PDF 文件名获取目录
-        raw_output_dir = get_raw_output_dir(pdf_filename)
+        # 🌟 v4.0: 优先使用 doc_id 获取目录
+        raw_output_dir = get_raw_output_dir(pdf_filename, doc_id=doc_id)
         
         # 2. 如果没有提供 job_id，查找最新的
         if not job_id:

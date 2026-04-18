@@ -30,6 +30,7 @@ class Stage2Enrichment:
         company_id: Optional[int] = None,
         document_id: Any = None,
         data_dir: Path = None,
+        raw_output_dir: str = None,  # 🌟 v4.1: 新增参数 - parse_result.raw_output_dir（优先使用）
         pdf_path: str = None,  # 不再使用，但保留参数兼容
         vision_model: str = None,
         db_client: Any = None,
@@ -38,17 +39,19 @@ class Stage2Enrichment:
         """
         保存所有 LlamaParse Artifacts
         
-        🌟 v3.4 新特性：
-        - 使用 LlamaParse Cloud 提供的 URL 下载图片
-        - Vision 分析时带入同一页的文字作为 Context
-        - RAGAnything 概念：图 + 文一起分析
+        🌟 v4.1 新特性：
+        - 直接使用 parse_result.raw_output_dir（Stage 1 创建的文件夹）
+        - 不再重复创建文件夹，避免路径不一致
+        - 图片已在 Stage 1 下载，直接使用
         
         Args:
             artifacts: Artifacts 列表（来自 LlamaParse）
+            images: 图片列表（parse_result.images，已下载）
             doc_id: 文档 ID (字符串)
             company_id: 公司 ID
             document_id: 文档内部 ID
             data_dir: 数据目录
+            raw_output_dir: 🌟 Stage 1 创建的文件夹路径（优先使用）
             pdf_path: 不再使用（保留兼容）
             vision_model: Vision 模型
             db_client: DB 客户端
@@ -59,11 +62,21 @@ class Stage2Enrichment:
         """
         logger.info(f"🎨 Stage 2: 開始保存 Artifacts + RAGAnything 上下文分析...")
         
-        doc_dir = Path(data_dir) / "llamaparse" / str(doc_id)
-        doc_dir.mkdir(parents=True, exist_ok=True)
+        # 🌟 v4.1: 优先使用 raw_output_dir（Stage 1 创建的文件夹）
+        # 如果 Stage 1 传入 raw_output_dir，直接使用，不重复创建
+        if raw_output_dir:
+            doc_dir = Path(raw_output_dir)
+            logger.info(f"   📂 使用 Stage 1 的 raw_output_dir: {doc_dir}")
+        else:
+            # Fallback: 使用 doc_id 创建文件夹（兼容旧调用）
+            doc_dir = Path(data_dir) / "llamaparse" / str(doc_id)
+            doc_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"   📂 创建新文件夹 (fallback): {doc_dir}")
         
         images_dir = doc_dir / "images"
-        images_dir.mkdir(parents=True, exist_ok=True)
+        # 🌟 如果 images_dir 不存在才创建（Stage 1 可能已创建）
+        if not images_dir.exists():
+            images_dir.mkdir(parents=True, exist_ok=True)
         
         stats = {"tables_saved": 0, "images_saved": 0, "pages_saved": 0, "vision_analyzed": 0}
         

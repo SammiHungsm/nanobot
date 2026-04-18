@@ -193,14 +193,15 @@ class DocumentPipeline(BaseIngestionPipeline):
             
             pdf_filename = pdf_path.name
             
-            # 🌟 v4.1: 先尝试从 raw output 加载，失败才调用 API
+            # 🌟 v4.0: 先尝试从 raw output 加载（使用 doc_id），失败才调用 API
             parse_result = None
             try:
-                parse_result = self.parser.load_from_raw_output(pdf_filename)
-                logger.info(f"   ✅ 从 raw output 加载成功（不扣费）")
+                parse_result = self.parser.load_from_raw_output(pdf_filename, doc_id=doc_id)
+                logger.info(f"   ✅ 从 raw output 加载成功（不扣费）: {doc_id}")
             except FileNotFoundError:
                 logger.info(f"   📂 Raw output 不存在，调用 LlamaParse API...")
-                parse_result = await self.parser.parse_async(str(pdf_path))
+                # 🌟 v4.0: 传入 doc_id，统一文件夹命名
+                parse_result = await self.parser.parse_async(str(pdf_path), doc_id=doc_id)
                 logger.info(f"   ✅ LlamaParse API 解析完成，job_id={parse_result.job_id}")
             
             if parse_result is None:
@@ -222,6 +223,9 @@ class DocumentPipeline(BaseIngestionPipeline):
             # 🌟 v4.2: 修复图片传递 - parse_result.images 包含下载后的图片信息
             images_list = parse_result.images or []
             
+            # 🌟 v4.1: 传入 raw_output_dir，Stage 2 直接使用 Stage 1 创建的文件夹
+            raw_output_dir = parse_result.raw_output_dir
+            
             stage2_result = await Stage2Enrichment.save_all_artifacts(
                 artifacts=artifacts,
                 images=images_list,  # 🌟 新增：传递图片列表
@@ -229,6 +233,7 @@ class DocumentPipeline(BaseIngestionPipeline):
                 company_id=company_id,
                 document_id=document_id,
                 data_dir=Path(self.data_dir) if hasattr(self, 'data_dir') else Path("/app/data"),
+                raw_output_dir=raw_output_dir,  # 🌟 v4.1: 传入 Stage 1 创建的文件夹路径
                 db_client=self.db,
                 vision_limit=20
             )
