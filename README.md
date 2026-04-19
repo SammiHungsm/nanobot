@@ -1000,6 +1000,15 @@ curl http://localhost:5002/health
 
 ## 📚 相关文档
 
+### 项目文档
+
+- [Pipeline Architecture](docs/pipeline_architecture.md) - Stage 职责详解
+- [Code Review 2026-04-18](docs/CODE_REVIEW_2026-04-18.md) - 代码审查报告
+- [Schema ERD](docs/schema_erd.md) - 数据库关系图 (Coming Soon)
+- [Changelog](CHANGELOG.md) - 版本变更日志 (Coming Soon)
+
+### 外部资源
+
 - [OpenDataLoader-PDF](https://github.com/opendataloader/opendataloader-pdf) - Hybrid PDF Parser
 - [Vanna AI](https://vanna.ai/) - Text-to-SQL
 - [Docling](https://github.com/DS4SD/docling) - Document AI Model

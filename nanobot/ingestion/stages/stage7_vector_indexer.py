@@ -196,7 +196,7 @@ class Stage7VectorIndexer:
         Returns:
             Dict: {"chunks_created", "embeddings_generated", "vectors_stored"}
         """
-        logger.info(f"📊 Stage 8: 索引文档页面 (document_id={document_id})...")
+        logger.info(f"📊 Stage 7: 索引文档页面 (document_id={document_id})...")
         
         result = {
             "chunks_created": 0,
@@ -208,11 +208,19 @@ class Stage7VectorIndexer:
             logger.warning("   ⚠️ DB 客户端未初始化，跳过向量入库")
             return result
         
+        # 🌟 添加调试日志：检查 pages_data 是否为空
+        logger.info(f"   📄 收到 {len(pages_data)} 页数据")
+        
         for page in pages_data:
             page_num = page.get("page_num", 0)
             content = page.get("content", "") or page.get("markdown_content", "")
             
+            # 🌟 添加调试日志：检查每页内容长度
+            if content:
+                logger.debug(f"   Page {page_num}: 内容长度={len(content)}")
+            
             if not content or len(content) < 50:
+                logger.debug(f"   ⚠️ Page {page_num}: 内容太短或为空，跳过")
                 continue
             
             # 1. 切块
@@ -221,11 +229,16 @@ class Stage7VectorIndexer:
             
             for i, chunk in enumerate(chunks):
                 chunk_text = chunk["text"]
+                result["chunks_created"] += 1
                 
                 # 2. 生成 Embedding
                 embedding = await self._generate_embedding(chunk_text)
                 
+                # 🌟 添加调试日志：检查 embedding 是否成功
+                logger.info(f"   📍 Chunk {i}: Embedding={len(embedding) if embedding else 'None'}维")
+                
                 if not embedding:
+                    logger.warning(f"   ⚠️ Chunk {i}: Embedding 生成失败，跳过写入")
                     continue
                 
                 result["embeddings_generated"] += 1
@@ -244,11 +257,12 @@ class Stage7VectorIndexer:
                         }
                     )
                     result["vectors_stored"] += 1
+                    logger.debug(f"   ✅ Chunk {i} 写入成功")
                     
                 except Exception as e:
                     logger.warning(f"   ⚠️ 向量入库失败 (page {page_num}, chunk {i}): {e}")
         
-        logger.info(f"✅ Stage 8 页面索引完成: chunks={result['chunks_created']}, embeddings={result['embeddings_generated']}")
+        logger.info(f"✅ Stage 7 页面索引完成: chunks={result['chunks_created']}, embeddings={result['embeddings_generated']}, vectors={result['vectors_stored']}")
         
         return result
     
@@ -260,16 +274,16 @@ class Stage7VectorIndexer:
         """
         索引 Vision 分析结果
         
-        🌟 多模态 RAG：图片 + 文本一起索引
+        🌟 多模態 RAG：使用 Stage 2 提煉的 RAG-Anything 精準上下文進行 Embedding
         
         Args:
-            document_id: 文档 ID
-            vision_artifacts: Vision 分析结果列表
+            document_id: 文檔 ID
+            vision_artifacts: Vision 分析結果列表
             
         Returns:
             Dict: {"vision_embeddings": int}
         """
-        logger.info(f"🖼️ Stage 8: 索引 Vision Artifacts...")
+        logger.info(f"🖼️ Stage 7: 索引 Vision Artifacts (RAG-Anything 上下文)...")
         
         result = {"vision_embeddings": 0}
         
@@ -277,15 +291,23 @@ class Stage7VectorIndexer:
             return result
         
         for artifact in vision_artifacts:
+            # 取得 Stage 2 處理的 JSON 結果
             analysis = artifact.get("analysis", {})
+            context = artifact.get("structural_context", {})  # 🌟 取得結構化上下文
             
-            # 🌟 组合图片描述 + 上下文关系
+            # 🌟 組合 RAG-Anything 的高質量文字塊
             vision_text = f"""
-图片类型: {analysis.get('type', 'unknown')}
-描述: {analysis.get('description', '')}
-与上下文的关系: {analysis.get('relation_to_context', '')}
-关键指标: {', '.join(analysis.get('key_metrics', []))}
+[圖表標題]: {analysis.get('title', '未命名圖表')}
+[數據類型]: {analysis.get('type', 'unknown')}
+[所屬章節]: {context.get('closest_heading', '無明確標題')}
+[圖表標籤]: {context.get('caption', '無')}
+[關聯前文]: {context.get('previous_text', '')[:100]}...
+[核心數據與描述]:
+{analysis.get('markdown_representation', analysis.get('description', ''))}
+[關鍵實體]: {', '.join(analysis.get('key_entities', analysis.get('key_metrics', [])))}
 """
+            # 清理過多的空行
+            vision_text = "\n".join([line for line in vision_text.split('\n') if line.strip()])
             
             # 生成 Embedding
             embedding = await self._generate_embedding(vision_text)
@@ -295,21 +317,22 @@ class Stage7VectorIndexer:
                     await self.db.insert_document_chunk(
                         document_id=document_id,
                         page_num=artifact.get("page_num", 0),
-                        chunk_index=-1,  # -1 表示图片类型
+                        chunk_index=-1,  # -1 表示這是一個由 Vision 處理的多模態區塊
                         chunk_text=vision_text,
                         embedding=embedding,
                         metadata={
                             "type": "vision_analysis",
                             "filename": artifact.get("filename"),
-                            "local_path": artifact.get("local_path")
+                            "local_path": artifact.get("local_path"),
+                            "is_table_fix": artifact.get("is_table_fix", False)
                         }
                     )
                     result["vision_embeddings"] += 1
                     
                 except Exception as e:
-                    logger.warning(f"   ⚠️ Vision 向量入库失败: {e}")
+                    logger.warning(f"   ⚠️ Vision 向量入庫失敗: {e}")
         
-        logger.info(f"✅ Stage 8 Vision 索引完成: {result['vision_embeddings']} embeddings")
+        logger.info(f"✅ Stage 7 Vision 索引完成: {result['vision_embeddings']} embeddings")
         
         return result
     
@@ -381,10 +404,13 @@ class Stage7VectorIndexer:
                         except:
                             content_json = {}
                     
+                    # 🌟 確保傳遞 structural_context 和 is_table_fix（RAG-Anything 上下文）
                     vision_artifacts.append({
                         "artifact_id": artifact.get("artifact_id"),
                         "page_num": artifact.get("page_num"),
                         "analysis": content_json.get("analysis", {}),
+                        "structural_context": content_json.get("structural_context", {}),  # 🌟 補上這行
+                        "is_table_fix": content_json.get("is_table_fix", False),  # 🌟 補上這行
                         "filename": content_json.get("filename"),
                         "local_path": content_json.get("local_path")
                     })

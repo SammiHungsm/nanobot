@@ -133,7 +133,7 @@ class Stage4AgenticExtractor:
         """
         extraction_types = extraction_types or ["revenue_breakdown", "key_personnel", "financial_metrics"]
         
-        logger.info(f"🎯 Stage 5: Agentic 写入（v4.0 Tool Calling）...")
+        logger.info(f"🎯 Stage 4: Agentic 写入（v4.0 Tool Calling）...")
         
         # 🌟 构建 Tools Registry
         tools_registry = Stage4AgenticExtractor._build_tools_registry(db_client)

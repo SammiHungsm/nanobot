@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1
-# Nanobot Web UI - FastAPI Frontend (Refactored v2.0)
+# Nanobot Web UI - FastAPI Frontend (Refactored v3.0)
 # 🚀 Optimized for fast rebuilds with BuildKit cache
+# 🌟 CPU-only PyTorch for local embedding (no NVIDIA dependencies)
 
 FROM python:3.11-slim
 
@@ -17,27 +18,29 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # 🚀 Step 1: Copy requirements FIRST for better caching
-COPY webui/requirements.txt .
+COPY webui/requirements.txt ./requirements.txt
 
-# Install Python dependencies with BuildKit cache
+# 🌟 Step 2: Install CPU-only PyTorch FIRST (避免 GPU 巨大下載)
+# sentence-transformers 依賴 torch，必須先安裝 CPU 版本
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --extra-index-url https://download.pytorch.org/whl/cpu \
+    torch==2.5.1+cpu
+
+# 🚀 Step 3: Install Python dependencies (sentence-transformers 會用已安裝的 CPU torch)
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -r requirements.txt
 
-# 🚀 Step 2: Copy nanobot package (changes less frequently than webui code)
+# 🚀 Step 4: Copy nanobot package (changes less frequently than webui code)
 COPY nanobot/ /tmp/nanobot/
 COPY pyproject.toml /tmp/nanobot/
 COPY README.md /tmp/nanobot/
 COPY bridge/ /tmp/nanobot/bridge/
 
-# Install CPU-only PyTorch with cache (avoids 2GB NVIDIA download)
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --extra-index-url https://download.pytorch.org/whl/cpu torch torchvision
-
 # Install nanobot package with cache
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install /tmp/nanobot/
 
-# 🚀 Step 3: Copy application code LAST (changes frequently)
+# 🚀 Step 5: Copy application code LAST (changes frequently)
 COPY webui/app/ ./app/
 COPY webui/static/ ./static/
 

@@ -125,3 +125,50 @@ async def get_documents(pool: asyncpg.Pool = Depends(get_db_pool)):
     
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Database error: {str(e)}")
+
+
+@router.get("/tables/all")
+async def get_all_tables_stats(pool: asyncpg.Pool = Depends(get_db_pool)):
+    """Get all tables statistics - 完整的表統計"""
+    try:
+        async with pool.acquire() as conn:
+            stats = {}
+            
+            # documents
+            stats["documents"] = await conn.fetchval("SELECT COUNT(*) FROM documents")
+            
+            # document_pages
+            stats["document_pages"] = await conn.fetchval("SELECT COUNT(*) FROM document_pages")
+            
+            # document_chunks
+            stats["document_chunks"] = await conn.fetchval("SELECT COUNT(*) FROM document_chunks")
+            
+            # document_tables
+            stats["document_tables"] = await conn.fetchval("SELECT COUNT(*) FROM document_tables")
+            
+            # raw_artifacts - 按類型分組
+            artifact_rows = await conn.fetch(
+                "SELECT artifact_type, COUNT(*) as count FROM raw_artifacts GROUP BY artifact_type"
+            )
+            stats["raw_artifacts"] = {row["artifact_type"]: row["count"] for row in artifact_rows}
+            stats["raw_artifacts_total"] = await conn.fetchval("SELECT COUNT(*) FROM raw_artifacts")
+            
+            # revenue_breakdown
+            stats["revenue_breakdown"] = await conn.fetchval("SELECT COUNT(*) FROM revenue_breakdown")
+            
+            # key_personnel
+            stats["key_personnel"] = await conn.fetchval("SELECT COUNT(*) FROM key_personnel")
+            
+            # financial_metrics
+            stats["financial_metrics"] = await conn.fetchval("SELECT COUNT(*) FROM financial_metrics")
+            
+            # entity_relations
+            stats["entity_relations"] = await conn.fetchval("SELECT COUNT(*) FROM entity_relations")
+            
+            # companies
+            stats["companies"] = await conn.fetchval("SELECT COUNT(*) FROM companies")
+            
+            return stats
+    
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Database error: {str(e)}")

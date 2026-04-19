@@ -47,11 +47,10 @@ class VannaTrainingData:
             'committee': 'committee_membership'
         },
         'document_pages': {
-            'doc_id': 'document_id',  # 需 JOIN documents
-            'company_id': None  # 已刪除，需 JOIN documents
+            'company_id': None  # 已刪除，必須 JOIN documents 才能按公司篩選
         },
         'raw_artifacts': {
-            'company_id': None  # 已刪除，需 JOIN documents
+            'company_id': None  # 已刪除，必須 JOIN documents
         }
     }
     

@@ -102,6 +102,11 @@ CREATE TABLE IF NOT EXISTS companies (
     auditor_opinion VARCHAR(50),
     ultimate_controlling_shareholder TEXT,
     principal_banker TEXT,
+    
+    -- 【Stage 0 Vision 提取欄位 v2.5 新增】
+    address TEXT,                          -- 公司註冊地址
+    chairman VARCHAR(200),                 -- 主席/董事姓名
+    
     extra_data JSONB DEFAULT '{}'::jsonb,
     listing_status VARCHAR(50) DEFAULT 'listed',
     listing_date DATE,

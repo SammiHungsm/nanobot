@@ -1,23 +1,21 @@
 """
-Document Pipeline - 主流程协调器 (v4.0 极简版 - Single Source of Truth)
+Document Pipeline - Main Workflow Coordinator (v4.0)
 
-🌟 纯粹的 Orchestrator：只负责流程编排，不包含任何业务逻辑
+🌟 Pure Orchestrator: Only handles workflow orchestration, no business logic
 
-Pipeline 直线化：
-- Stage 0: Preprocessor (封面 Vision 提取)
-- Stage 0.5: Registrar (Hash + 注册文档 + 创建公司)
-- Stage 1: Parser (LlamaParse 解析)
-- Stage 2: Enrichment (保存 Artifacts + RAGAnything Vision)
-- Stage 3: Router (关键字路由)
-- Stage 4: Agentic Extractor (Tool Calling 提取) 🌟 唯一的提取入口
-- Stage 5: Vanna Training (Text-to-SQL 训练)
-- Stage 6: Validator (数据验证 + 单位换算)
-- Stage 7: Vector Indexer (切块 + Embedding)
-- Stage 8: Archiver (归档 + 清理 + 报告) 🆕
+Pipeline Flow (Linear):
+- Stage 0: Preprocessor (Cover Vision Extraction)
+- Stage 0.5: Registrar (Hash + Document Registration + Company Creation)
+- Stage 1: Parser (LlamaParse)
+- Stage 2: Enrichment (Save Artifacts + RAGAnything Vision)
+- Stage 3: Router (Keyword Routing)
+- Stage 4: Agentic Extractor (Tool Calling Extraction) 🌟 Single extraction entry point
+- Stage 5: Vanna Training (Text-to-SQL Training)
+- Stage 6: Validator (Data Validation + Unit Conversion)
+- Stage 7: Vector Indexer (Chunking + Embedding)
+- Stage 8: Archiver (Archive + Cleanup + Report) 🆕
 
-行数对比：
-- v3.2 (臃肿版): 1647 行
-- v4.0 (极简版): ~130 行 🎉
+Architecture: Minimalist orchestrator pattern (~250 lines)
 """
 
 import os
@@ -132,16 +130,49 @@ class DocumentPipeline(BaseIngestionPipeline):
         result = {"doc_id": doc_id, "status": "success", "stages": {}}
         
         try:
-            # ===== Stage 0: Vision 提取封面 =====
-            if progress_callback:
-                progress_callback(5.0, "Stage 0: Vision 提取封面")
+            # 🌟 v4.6 重構: Stage 1 先行，Vision 分析 Page 1 (而不是封面)
+            # 原因: LlamaParse 解析後有 Page 1 Markdown + 所有圖片，Vision 提取更準確
             
-            stage0_result = await Stage0Preprocessor.extract_cover_metadata(
-                pdf_path=str(pdf_path),
+            # ===== Stage 1: LlamaParse 解析 =====
+            if progress_callback:
+                progress_callback(5.0, "Stage 1: LlamaParse 解析")
+            
+            pdf_filename = pdf_path.name
+            
+            # 🌟 v4.0: 先尝试从 raw output 加载（使用 doc_id），失败才调用 API
+            parse_result = None
+            try:
+                parse_result = self.parser.load_from_raw_output(pdf_filename, doc_id=doc_id)
+                logger.info(f"   ✅ 从 raw output 加载成功（不扣费）: {doc_id}")
+            except FileNotFoundError:
+                logger.info(f"   📂 Raw output 不存在，调用 LlamaParse API...")
+                # 🌟 v4.0: 传入 doc_id，统一文件夹命名
+                parse_result = await self.parser.parse_async(str(pdf_path), doc_id=doc_id)
+                logger.info(f"   ✅ LlamaParse API 解析完成，job_id={parse_result.job_id}")
+            
+            if parse_result is None:
+                raise ValueError("parse_result is None")
+            
+            artifacts = parse_result.artifacts or []
+            
+            result["stages"]["stage1"] = {
+                "job_id": parse_result.job_id,
+                "total_pages": parse_result.total_pages,
+                "tables_count": len(parse_result.tables) if parse_result.tables else 0,
+                "images_count": len(parse_result.images) if parse_result.images else 0
+            }
+            
+            # ===== Stage 0: Vision 提取 Page 1 (重構後移到 Stage 1 之後) =====
+            if progress_callback:
+                progress_callback(15.0, "Stage 0: Vision 分析 Page 1")
+            
+            # 🌟 v4.6: 使用 LlamaParse 的 Page 1 artifacts 進行 Vision 分析
+            stage0_result = await Stage0Preprocessor.extract_company_from_page1(
+                artifacts=artifacts,
+                page_num=1,
                 doc_id=doc_id,
                 is_index_report=is_index_report,
-                confirmed_doc_industry=confirmed_doc_industry,
-                parser=self.parser
+                confirmed_doc_industry=confirmed_doc_industry
             )
             
             if stage0_result is None:
@@ -151,7 +182,7 @@ class DocumentPipeline(BaseIngestionPipeline):
             
             # ===== Stage 0.5: Registrar =====
             if progress_callback:
-                progress_callback(10.0, "Stage 0.5: Registrar")
+                progress_callback(20.0, "Stage 0.5: Registrar")
             
             registrar_result = await Stage0_5_Registrar.run(
                 pdf_path=str(pdf_path),
@@ -186,35 +217,6 @@ class DocumentPipeline(BaseIngestionPipeline):
                 )
             document_id = registrar_result.get("document_id")
             year = stage0_result.get("year") or 2025
-            
-            # ===== Stage 1: LlamaParse 解析 =====
-            if progress_callback:
-                progress_callback(15.0, "Stage 1: LlamaParse 解析")
-            
-            pdf_filename = pdf_path.name
-            
-            # 🌟 v4.0: 先尝试从 raw output 加载（使用 doc_id），失败才调用 API
-            parse_result = None
-            try:
-                parse_result = self.parser.load_from_raw_output(pdf_filename, doc_id=doc_id)
-                logger.info(f"   ✅ 从 raw output 加载成功（不扣费）: {doc_id}")
-            except FileNotFoundError:
-                logger.info(f"   📂 Raw output 不存在，调用 LlamaParse API...")
-                # 🌟 v4.0: 传入 doc_id，统一文件夹命名
-                parse_result = await self.parser.parse_async(str(pdf_path), doc_id=doc_id)
-                logger.info(f"   ✅ LlamaParse API 解析完成，job_id={parse_result.job_id}")
-            
-            if parse_result is None:
-                raise ValueError("parse_result is None")
-            
-            artifacts = parse_result.artifacts or []
-            
-            result["stages"]["stage1"] = {
-                "job_id": parse_result.job_id,
-                "total_pages": parse_result.total_pages,
-                "tables_count": len(parse_result.tables) if parse_result.tables else 0,
-                "images_count": len(parse_result.images) if parse_result.images else 0
-            }
             
             # ===== Stage 2: Enrichment =====
             if progress_callback:

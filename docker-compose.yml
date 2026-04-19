@@ -79,6 +79,8 @@ services:
       context: .
       dockerfile: webui/Dockerfile
     container_name: nanobot-webui
+    env_file:
+      - .env
     volumes:
       - ./data/uploads:/app/data/uploads
       - ./data/output:/app/data/output

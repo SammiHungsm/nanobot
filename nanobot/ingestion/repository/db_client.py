@@ -218,22 +218,23 @@ class DBClient:
         auditor_opinion: str = None,
         ultimate_controlling_shareholder: str = None,
         principal_banker: str = None,
+        # 🌟 v2.5 新增：Stage 0 Vision 提取的額外信息
+        address: str = None,
+        chairman: str = None,
         # 🌟 新增：指數報告專用參數（Schema v2.3）
         confirmed_industry: str = None,
         is_industry_confirmed: bool = False
     ) -> Optional[int]:
         """
-        🎯 漸進式 Upsert 公司信息（Schema v2.3 完全對齊）
+        🎯 漸進式 Upsert 公司信息（Schema v2.5 完全對齊）
         
         核心邏輯：
         1. 如果公司已存在，只更新「空值」欄位（不覆蓋已有數據）
         2. 如果公司不存在，創建新記錄
         3. 名字來源分為 index（恆指報表）和 extracted（PDF 擷取）
         
-        🌟 Schema v2.3 變更：
-        - name_en_index, name_en_extracted → 統一為 name_en
-        - name_zh_extracted → 統一為 name_zh
-        - industry → 已刪除，映射到 sector 或 confirmed_industry
+        🌟 Schema v2.5 變更：
+        - 新增 address, chairman 欄位（Stage 0 Vision 提取）
         
         Args:
             stock_code: 股票代碼（必須）
@@ -246,6 +247,8 @@ class DBClient:
             auditor_opinion: 核數師意見
             ultimate_controlling_shareholder: 最終控股股東
             principal_banker: 主要銀行
+            address: 🌟 v2.5 新增 - 公司地址
+            chairman: 🌟 v2.5 新增 - 主席/董事
             confirmed_industry: 確認行業（規則 A）
             is_industry_confirmed: 是否已確認行業
             
@@ -293,6 +296,12 @@ class DBClient:
                 if principal_banker and not existing.get('principal_banker'):
                     update_fields['principal_banker'] = principal_banker
                 
+                # 🌟 v2.5 新增：地址和主席
+                if address and not existing.get('address'):
+                    update_fields['address'] = address
+                if chairman and not existing.get('chairman'):
+                    update_fields['chairman'] = chairman
+                
                 if update_fields:
                     await self.update_company(company_id, update_fields)
                     logger.info(f"✅ 公司 {normalized_code} 已更新欄位: {list(update_fields.keys())}")
@@ -323,6 +332,12 @@ class DBClient:
                     insert_data['ultimate_controlling_shareholder'] = ultimate_controlling_shareholder
                 if principal_banker:
                     insert_data['principal_banker'] = principal_banker
+                
+                # 🌟 v2.5 新增：地址和主席
+                if address:
+                    insert_data['address'] = address
+                if chairman:
+                    insert_data['chairman'] = chairman
                 
                 # 過濾掉 None 的值
                 insert_data = {k: v for k, v in insert_data.items() if v is not None}
@@ -1770,21 +1785,31 @@ class DBClient:
         """
         try:
             async with self.connection() as conn:
+                # 🌟 v2.4 修复: 正确的列名是 page_number 和 embedding_vector
+                # 注意: 表没有 (document_id, page_number, chunk_index) 的唯一约束
+                # 所以先删除可能存在的重复记录，再插入
+                await conn.execute(
+                    """
+                    DELETE FROM document_chunks 
+                    WHERE document_id = $1 AND page_number = $2 AND chunk_index = $3
+                    """,
+                    document_id,
+                    page_num,
+                    chunk_index
+                )
+                # 🌟 v2.4 修复: asyncpg 需要 vector 类型参数为字符串格式
+                embedding_str = '[' + ','.join(map(str, embedding or [])) + ']' if embedding else '[]'
                 await conn.execute(
                     """
                     INSERT INTO document_chunks 
-                    (document_id, page_num, chunk_index, chunk_text, embedding, metadata, created_at)
+                    (document_id, page_number, chunk_index, content, embedding_vector, metadata, created_at)
                     VALUES ($1, $2, $3, $4, $5::vector, $6::jsonb, NOW())
-                    ON CONFLICT (document_id, page_num, chunk_index) DO UPDATE SET
-                        chunk_text = $4,
-                        embedding = $5::vector,
-                        metadata = $6::jsonb
                     """,
                     document_id,
                     page_num,
                     chunk_index,
                     chunk_text,
-                    embedding or [],
+                    embedding_str,  # 字符串格式
                     json.dumps(metadata) if metadata else '{}'
                 )
                 logger.debug(f"✅ Chunk {page_num}-{chunk_index} 已保存")

@@ -172,6 +172,8 @@ class Stage0_5_Registrar:
         name_en = metadata.get("name_en") or metadata.get("company_name")  # 🌟 优先 name_en
         name_zh = metadata.get("name_zh") or metadata.get("company_name_zh")  # 🌟 优先 name_zh
         
+        # 🌟 v2.6: Stage 0 只提取基本信息，auditor/address/chairman 由 Stage 4 Agent 提取
+        
         if not stock_code and not name_en:
             logger.warning("   ⚠️ 缺少 stock_code 和 name_en，无法创建公司")
             return None
@@ -189,17 +191,18 @@ class Stage0_5_Registrar:
                 name_en=name_en,
                 name_zh=name_zh,
                 industry=metadata.get("industry")
+                # 🌟 v2.6: auditor/address/chairman 由 Stage 4 Agent 提取
             )
             
             # 🌟 v1.1: 修正：upsert_company 返回的是 int（公司 ID），不是 dict
             company_id = company_result if company_result else None
             
-            logger.info(f"   ✅ 公司注册成功: stock_code={stock_code}, name_en={name_en}, name_zh={name_zh}, id={company_id}")
+            logger.info(f"   ✅ 公司注冊成功: stock_code={stock_code}, name_en={name_en}, name_zh={name_zh}, id={company_id}")
             
             return company_id
             
         except Exception as e:
-            logger.error(f"   ❌ 公司注册失败: {e}")
+            logger.error(f"   ❌ 公司注冊失敗: {e}")
             return None
     
     @staticmethod

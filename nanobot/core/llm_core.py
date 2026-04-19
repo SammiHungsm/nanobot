@@ -116,16 +116,71 @@ class UnifiedLLMCore:
             self.default_model = self.config.agents.defaults.model
             # 🌟 Vision 模型跟随 config.json（优先级：env var > config.json > 默认值）
             self.vision_model = os.getenv("VISION_MODEL") or getattr(self.config.agents.defaults, 'vision_model', 'gpt-4o')
+            # 🌟 v2.5 新增：Vision Provider（可单独配置）
+            self.vision_provider = os.getenv("VISION_PROVIDER") or getattr(self.config.agents.defaults, 'vision_provider', None)
             
-            logger.info(f"✅ UnifiedLLMCore initialized using official config (model={self.default_model}, vision={self.vision_model})")
+            logger.info(f"✅ UnifiedLLMCore initialized using official config (model={self.default_model}, vision={self.vision_model}, vision_provider={self.vision_provider})")
         else:
             self.config = None
             self.default_model = os.getenv("DEFAULT_LLM_MODEL", "gpt-4o-mini")
             self.vision_model = os.getenv("VISION_MODEL", "gpt-4o")
+            self.vision_provider = os.getenv("VISION_PROVIDER")
             logger.warning("⚠️ Using fallback config (official config unavailable)")
         
         # Provider 实例（延迟初始化）
         self._provider_cache: Dict[str, Any] = {}
+    
+    def _get_provider_by_name(self, provider_name: str) -> Optional[Any]:
+        """
+        🌟 v2.5 新增：按名称获取 Provider（用于 Vision 等特殊场景）
+        
+        Args:
+            provider_name: Provider 名称（如 "openrouter", "openai"）
+            
+        Returns:
+            Provider 实例
+        """
+        if not NANOBOT_PROVIDERS_AVAILABLE:
+            logger.error("❌ nanobot providers not available")
+            return None
+        
+        # 检查缓存
+        if provider_name in self._provider_cache:
+            return self._provider_cache[provider_name]
+        
+        # 🌟 使用官方的 Provider Registry
+        spec = find_by_name(provider_name)
+        if not spec:
+            logger.error(f"❌ Provider '{provider_name}' not found in registry")
+            return None
+        
+        # 获取配置
+        provider_config = getattr(self.config.providers, provider_name, None) if self.config else None
+        
+        if not provider_config and not spec.is_local:
+            logger.error(f"❌ No config found for provider '{provider_name}'")
+            return None
+        
+        # 🌟 创建 Provider 实例
+        if spec.backend == "anthropic":
+            provider = AnthropicProvider(
+                api_key=provider_config.api_key if provider_config else None,
+                api_base=provider_config.api_base if provider_config else None,
+                spec=spec,
+                extra_headers=provider_config.extra_headers if provider_config else None
+            )
+        else:
+            # OpenAI-compatible
+            provider = OpenAICompatProvider(
+                api_key=provider_config.api_key if provider_config else None,
+                api_base=provider_config.api_base if provider_config else None,
+                spec=spec,
+                extra_headers=provider_config.extra_headers if provider_config else None
+            )
+        
+        self._provider_cache[provider_name] = provider
+        logger.debug(f"🤖 Created provider by name: {provider_name}")
+        return provider
     
     def _get_provider(self, model: str = None) -> Optional[Any]:
         """
@@ -295,7 +350,13 @@ class UnifiedLLMCore:
             str: Vision 模型的分析结果
         """
         target_model = model or self.vision_model
-        provider = self._get_provider(target_model)
+        
+        # 🌟 v2.5 修改：支持独立的 vision_provider
+        if self.vision_provider:
+            provider = self._get_provider_by_name(self.vision_provider)
+            logger.debug(f"👁️ Using vision_provider: {self.vision_provider}")
+        else:
+            provider = self._get_provider(target_model)
         
         if not provider:
             logger.error("❌ Provider not available")

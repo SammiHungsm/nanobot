@@ -1,19 +1,18 @@
 """
-Stage 0: 预处理与公司元数据提取 (v4.3 - Vision 必须成功)
+Stage 0: Preprocessing and Company Metadata Extraction (v4.6 - Vision After LlamaParse)
 
-职责：
-- 🌟 独立运行，不等待 LlamaParse
-- 用 PyMuPDF 截取 page 1 封面图片
-- Vision Model 提取公司信息
-- 立即插入数据库（注册公司）
+Responsibilities:
+- 🌟 v4.6 重構: 在 Stage 1 (LlamaParse) 之後運行
+- 分析 Page 1 的 Markdown + 圖片，提取公司信息
+- 比單獨看封面圖片更準確
 
-流程：
-1. PyMuPDF 截取 page_1.jpg（封面）
-2. Vision Model 提取 → stock_code, year, name_en, name_zh
-3. 插入数据库（companies 表）
-4. 返回 company_id
+Flow:
+1. Stage 1 (LlamaParse) 解析 PDF → artifacts (包含 Markdown + 圖片)
+2. Stage 0: Vision 分析 Page 1 artifacts
+3. 提取: stock_code, year, name_en, name_zh
+4. Stage 0.5: 插入資料庫
 
-🌟 v4.3: Vision 必须成功，不使用 Filename Fallback
+🌟 v4.6: Vision 有 Markdown + 圖片上下文，提取更準確
 """
 
 import os
@@ -38,7 +37,227 @@ from nanobot.core.llm_core import llm_core
 
 
 class Stage0Preprocessor:
-    """Stage 0: 封面预处理与公司元数据提取（独立运行，Vision 必须成功）"""
+    """Stage 0: 封面預處理與公司元數據提取（v4.6 - Vision After LlamaParse）"""
+    
+    @staticmethod
+    async def extract_company_from_page1(
+        artifacts: list,
+        page_num: int = 1,
+        doc_id: str = None,
+        vision_model: str = None,
+        is_index_report: bool = False,
+        confirmed_doc_industry: str = None
+    ) -> Dict[str, Any]:
+        """
+        🌟 v4.6 新增: 從 LlamaParse artifacts 提取 Page 1 公司信息
+        
+        優勢：
+        - 有 Page 1 的 Markdown 文字（OCR 結果）
+        - 有 Page 1 的所有圖片
+        - Vision 提取更準確
+        
+        Args:
+            artifacts: LlamaParse 解析的 artifacts 列表
+            page_num: 頁碼（默認第 1 頁）
+            doc_id: 文檔 ID
+            vision_model: Vision 模型名稱
+            is_index_report: 是否為指數報告
+            confirmed_doc_industry: 確認的文檔行業
+            
+        Returns:
+            Dict: {"stock_code", "year", "name_en", "name_zh"}
+        """
+        logger.info(f"📋 Stage 0: Vision 分析 Page {page_num} (基於 LlamaParse artifacts)...")
+        
+        if not artifacts:
+            logger.warning("   ⚠️ 沒有 artifacts，無法分析")
+            return {"stock_code": None, "year": 2025}
+        
+        # Step 1: 找到 Page 1 的 artifacts
+        page1_artifacts = [a for a in artifacts if getattr(a, 'page_number', 0) == page_num]
+        
+        if not page1_artifacts:
+            # 嘗試使用 page_num 屬性（不同格式）
+            page1_artifacts = [a for a in artifacts if getattr(a, 'page_num', 0) == page_num]
+        
+        if not page1_artifacts:
+            logger.warning(f"   ⚠️ 沒有找到 Page {page_num} 的 artifacts")
+            # Fallback: 使用第一個 artifact
+            if artifacts:
+                page1_artifacts = [artifacts[0]]
+                logger.info(f"   📄 使用第一個 artifact 作為 Page 1")
+        
+        # Step 2: 收集 Page 1 的 Markdown 文字
+        page1_text = ""
+        page1_images = []
+        
+        for artifact in page1_artifacts:
+            # 獲取 Markdown 文字
+            if hasattr(artifact, 'markdown') and artifact.markdown:
+                page1_text += artifact.markdown + "\n"
+            elif hasattr(artifact, 'text') and artifact.text:
+                page1_text += artifact.text + "\n"
+            
+            # 獲取圖片
+            if hasattr(artifact, 'images') and artifact.images:
+                for img in artifact.images:
+                    if hasattr(img, 'image_base64') and img.image_base64:
+                        page1_images.append(img.image_base64)
+                    elif hasattr(img, 'path') and img.path:
+                        # 讀取圖片文件
+                        try:
+                            with open(img.path, 'rb') as f:
+                                img_base64 = base64.b64encode(f.read()).decode('utf-8')
+                                page1_images.append(img_base64)
+                        except Exception as e:
+                            logger.warning(f"   ⚠️ 無法讀取圖片: {e}")
+        
+        # Step 3: 構建 Vision prompt（包含 Markdown 上下文）
+        if is_index_report:
+            prompt = f"""
+分析這份指數/行業報告的第一頁內容，提取以下信息：
+
+## Page 1 Markdown 內容:
+```
+{page1_text[:2000]}
+```
+
+## 請提取:
+1. **年份** (year): 報告年份
+2. **主題** (theme): 報告主題
+
+⚠️ 請使用繁體中文回答。
+
+返回 JSON 格式：
+```json
+{{
+  "year": 2023,
+  "theme": "恆生指數成份股"
+}}
+```
+"""
+        else:
+            prompt = f"""
+分析這份財務報告的第一頁內容，提取公司基本信息。
+
+## Page 1 Markdown 內容:
+```
+{page1_text[:2000]}
+```
+
+## 請提取:
+1. **股票代碼** (stock_code): 香港股票代碼，5位數字
+2. **年份** (year): 報告年份
+3. **公司名稱英文** (name_en): 完整公司英文名稱
+4. **公司名稱中文** (name_zh): 完整公司中文名稱，使用繁體中文
+
+⚠️ 重要：
+- 從上面的 Markdown 內容中提取信息
+- 如果找不到某個字段，設為 null
+- 所有中文名稱必須使用繁體中文
+
+返回 JSON 格式：
+```json
+{{
+  "stock_code": "00001",
+  "year": 2023,
+  "name_en": "CK Hutchison Holdings Limited",
+  "name_zh": "長江和記實業有限公司"
+}}
+```
+"""
+        
+        # Step 4: 調用 Vision API（如果有圖片）
+        try:
+            if page1_images:
+                # 使用第一張圖片 + Markdown 上下文
+                logger.info(f"   🖼️ 找到 {len(page1_images)} 張圖片，使用 Vision + Markdown 分析")
+                
+                response = await llm_core.vision(
+                    image_base64=page1_images[0],
+                    prompt=prompt,
+                    model=vision_model
+                )
+            else:
+                # 沒有圖片，只用 Markdown（使用 chat 而不是 vision）
+                logger.info(f"   📝 沒有圖片，使用純 Markdown 分析")
+                # 🌟 v2.6.2 修復：chat() 需要 messages 格式
+                response = await llm_core.chat([{"role": "user", "content": prompt}])
+            
+            # 解析響應 - 🌟 v2.6.1 修復：更健壯的響應解析
+            if isinstance(response, str):
+                content = response
+            elif isinstance(response, dict):
+                content = response.get("content", "")
+            elif hasattr(response, 'content'):
+                content = response.content
+            else:
+                content = str(response)
+            
+            logger.debug(f"   🔍 Vision/Chat 響應: {content[:300]}...")
+            
+            # 解析 JSON
+            result = Stage0Preprocessor._parse_vision_response(content)
+            
+            if result:
+                logger.info(f"   ✅ Vision 解析成功: {result}")
+                return result
+            
+            logger.warning(f"   ⚠️ Vision 返回無效內容")
+            return {"stock_code": None, "year": 2025}
+            
+        except Exception as e:
+            logger.error(f"   ❌ Vision API 失敗: {e}")
+            return {"stock_code": None, "year": 2025}
+    
+    @staticmethod
+    def _parse_vision_response(content: str) -> Dict[str, Any]:
+        """解析 Vision/Chat 響應，支持 JSON 和 Markdown 格式"""
+        import json
+        import re
+        
+        # 方法 1: 提取 ```json ... ``` 中的內容
+        json_block_match = re.search(r'```(?:json)?\s*\n?([\s\S]*?)\n?```', content)
+        if json_block_match:
+            try:
+                return json.loads(json_block_match.group(1).strip())
+            except json.JSONDecodeError:
+                pass
+        
+        # 方法 2: 直接提取 JSON 對象
+        json_match = re.search(r'\{[\s\S]*\}', content)
+        if json_match:
+            try:
+                return json.loads(json_match.group().strip())
+            except json.JSONDecodeError:
+                pass
+        
+        # 方法 3: 解析 Markdown 格式
+        markdown_pattern = r'\*\*([^*]+):\*\*\s*(.+?)(?=\n|\*\*|$)'
+        markdown_matches = re.findall(markdown_pattern, content)
+        
+        if markdown_matches:
+            field_mapping = {
+                'stock code': 'stock_code',
+                '股票代碼': 'stock_code',
+                'year': 'year',
+                '年份': 'year',
+                'company name (english)': 'name_en',
+                '公司名稱英文': 'name_en',
+                'company name (chinese)': 'name_zh',
+                '公司名稱中文': 'name_zh',
+            }
+            
+            result = {}
+            for key, value in markdown_matches:
+                key_lower = key.lower().strip()
+                if key_lower in field_mapping:
+                    result[field_mapping[key_lower]] = value.strip()
+            
+            if result:
+                return result
+        
+        return {}
     
     @staticmethod
     async def extract_cover_metadata(
@@ -217,36 +436,41 @@ class Stage0Preprocessor:
 1. **年份** (year): 报告年份，例如 2023, 2024
 2. **主题** (theme): 报告主题，例如 "恒生指数", "科技行业"
 
+⚠️ 請使用繁體中文回答。
+
 返回 JSON 格式：
 ```json
 {
   "year": 2023,
-  "theme": "恒生指数成份股"
+  "theme": "恒生指數成份股"
 }
 ```
 """
         else:
             prompt = """
-分析这份财务报告封面，提取以下信息：
+分析這份財務報告封面，提取以下信息：
 
-1. **股票代码** (stock_code): 例如 "02359", "00001", "00700"（香港股票代码格式）
-2. **年份** (year): 报告年份，例如 2023, 2024
-3. **公司名称英文** (name_en): 例如 "Pharmaron", "CK Hutchison"
-4. **公司名称中文** (name_zh): 例如 "康龙化成", "长和"
+## 封面常見字段（必填）
+1. **股票代碼** (stock_code): 香港股票代碼，5位數字，例如 "00001", "00700", "02359"
+2. **年份** (year): 報告年份，例如 2023, 2024
+3. **公司名稱英文** (name_en): 完整公司英文名稱
+4. **公司名稱中文** (name_zh): 完整公司中文名稱，使用繁體中文
 
-⚠️ 股票代码通常是 5 位数字，例如 00001, 00700, 02359
+⚠️ 重要：
+- 只提取封面上明確顯示的信息
+- 如果封面上沒有某個字段，設為 null
+- 不要推測或填寫封面上沒有的信息
+- 所有中文名稱必須使用繁體中文
 
 返回 JSON 格式：
 ```json
 {
-  "stock_code": "02359",
+  "stock_code": "00001",
   "year": 2023,
-  "name_en": "Pharmaron",
-  "name_zh": "康龙化成"
+  "name_en": "CK Hutchison Holdings Limited",
+  "name_zh": "長江和記實業有限公司"
 }
 ```
-
-如果没有找到某个字段，设为 null。
 """
         
         try:
@@ -259,14 +483,64 @@ class Stage0Preprocessor:
             # 解析 JSON
             content = response if isinstance(response, str) else response.get("content", "")
             
-            # 提取 JSON
+            # 🌟 v2.4 改进：打印原始响应以便调试
+            logger.debug(f"   🔍 Vision 原始响应: {content}")
+            
+            # 🌟 v2.5 改进：支持多种格式解析
+            result = {}
+            
+            # 方法 1: 尝试提取 ```json ... ``` 中的内容
+            json_block_match = re.search(r'```(?:json)?\s*\n?([\s\S]*?)\n?```', content)
+            if json_block_match:
+                json_str = json_block_match.group(1).strip()
+                logger.debug(f"   🔍 提取的 JSON 块: {json_str}")
+                try:
+                    result = json.loads(json_str)
+                    logger.info(f"   ✅ Vision 解析成功 (JSON 块): {result}")
+                    return result
+                except json.JSONDecodeError:
+                    pass
+            
+            # 方法 2: 尝试直接提取 JSON 对象
             json_match = re.search(r'\{[\s\S]*\}', content)
             if json_match:
-                result = json.loads(json_match.group())
-                logger.info(f"   ✅ Vision 解析成功: {result}")
-                return result
+                json_str = json_match.group().strip()
+                try:
+                    result = json.loads(json_str)
+                    logger.info(f"   ✅ Vision 解析成功 (JSON 对象): {result}")
+                    return result
+                except json.JSONDecodeError:
+                    pass
             
-            logger.warning(f"   ⚠️ Vision 返回非 JSON: {content[:100]}")
+            # 🌟 v2.5 新增：方法 3: 解析 Markdown 格式 (**Key:** Value)
+            # 例如: **Stock Code:** 00001
+            markdown_pattern = r'\*\*([^*]+):\*\*\s*(.+?)(?=\n|\*\*|$)'
+            markdown_matches = re.findall(markdown_pattern, content)
+            
+            if markdown_matches:
+                field_mapping = {
+                    'stock code': 'stock_code',
+                    '股票代碼': 'stock_code',
+                    'year': 'year',
+                    '年份': 'year',
+                    'company name (english)': 'name_en',
+                    '公司名稱英文': 'name_en',
+                    'company name (chinese)': 'name_zh',
+                    '公司名稱中文': 'name_zh',
+                    # 🌟 v2.6: 移除 auditor, address, chairman - 這些應由 Stage 4 Agent 提取
+                }
+                
+                for key, value in markdown_matches:
+                    key_lower = key.lower().strip()
+                    if key_lower in field_mapping:
+                        mapped_key = field_mapping[key_lower]
+                        result[mapped_key] = value.strip()
+                
+                if result:
+                    logger.info(f"   ✅ Vision 解析成功 (Markdown): {result}")
+                    return result
+            
+            logger.warning(f"   ⚠️ Vision 返回非 JSON/Markdown: {content[:200]}")
             return {}
             
         except Exception as e:

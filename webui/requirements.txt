@@ -1,4 +1,4 @@
-# Nanobot WebUI - Python Dependencies (v3.1 - LlamaParse + PyMuPDF)
+# Nanobot WebUI - Python Dependencies (v3.2 - LlamaParse + PyMuPDF + Local Embedding)
 
 # Web Framework
 fastapi>=0.115.0
@@ -24,6 +24,10 @@ llama_cloud>=2.3.0
 # pip install pymupdf，但 import fitz
 # 用于独立运行 Stage 0，不等待 LlamaParse
 PyMuPDF>=1.24.0
+
+# 🌟 本地 Embedding 模型（替代 OpenAI API）
+# Stage 7 向量生成使用本地模型，不依賴外部 API
+sentence-transformers>=2.2.0
 
 # Logging
 loguru>=0.7.0
