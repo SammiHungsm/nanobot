@@ -326,7 +326,7 @@ CREATE TABLE IF NOT EXISTS document_pages (
     has_images BOOLEAN DEFAULT FALSE,
     
     -- 【向量嵌入欄位 Vector Embedding Field】
-    embedding_vector VECTOR(1536),  -- OpenAI embedding 維度
+    embedding_vector VECTOR(384),  -- 🌟 本地 Embedding 模型維度（sentence-transformers）
     
     -- 【元數據欄位 Metadata Field】
     metadata JSONB DEFAULT '{}'::jsonb,
@@ -386,7 +386,7 @@ CREATE TABLE IF NOT EXISTS document_chunks (
     bounding_box JSONB,           -- {x, y, width, height}
     
     -- 【向量嵌入欄位 Vector Embedding Field】
-    embedding_vector VECTOR(1536),  -- OpenAI embedding 維度
+    embedding_vector VECTOR(384),  -- 🌟 本地 Embedding 模型維度（sentence-transformers）
     
     -- 【元數據欄位 Metadata Field】
     metadata JSONB DEFAULT '{}'::jsonb,

@@ -27,9 +27,15 @@ class Stage2Enrichment:
     def _is_messy_table(md_content: str) -> bool:
         """
         防禦性檢查：判斷 Markdown 表格是否解析失敗、排版混亂或誤判為圖表
+        🌟 v3.6: 新增 HTML 表格檢測（LlamaParse 返回 <table> 標籤）
         """
         if not md_content or not isinstance(md_content, str):
             return True
+
+        # 🌟 0. 如果是 HTML 表格，直接返回 False（不算是混亂）
+        if "<table" in md_content.lower() or "</table>" in md_content.lower():
+            logger.debug("檢測到 HTML 表格格式，視為有效表格")
+            return False
 
         # 1. 檢查是否有過多空儲存格 (通常是把 Chart 誤判為 Table 的特徵)
         empty_cells = md_content.count("| |") + md_content.count("||") + md_content.count("| |")
@@ -45,6 +51,58 @@ class Stage2Enrichment:
             return True
 
         return False
+
+    @staticmethod
+    def _html_table_to_markdown(html_content: str) -> str:
+        """
+        🌟 新增：將 HTML 表格轉換為 Markdown 格式
+        支持複雜表格結構，保留數據完整性
+        """
+        try:
+            from bs4 import BeautifulSoup
+        except ImportError:
+            logger.warning("⚠️ BeautifulSoup 未安裝，無法轉換 HTML 表格，返回原始 HTML")
+            return html_content
+
+        try:
+            soup = BeautifulSoup(html_content, 'html.parser')
+            tables = soup.find_all('table')
+            
+            if not tables:
+                return html_content
+            
+            markdown_tables = []
+            
+            for table in tables:
+                rows = table.find_all('tr')
+                if not rows:
+                    continue
+                
+                md_rows = []
+                header_row = None
+                
+                # 處理表頭
+                first_row = rows[0]
+                headers = first_row.find_all(['th', 'td'])
+                if headers:
+                    header_row = [cell.get_text(strip=True) for cell in headers]
+                    md_rows.append("| " + " | ".join(header_row) + " |")
+                    md_rows.append("| " + " | ".join(["---"] * len(header_row)) + " |")
+                
+                # 處理數據行
+                for row in rows[1:]:
+                    cells = row.find_all(['td', 'th'])
+                    if cells:
+                        cell_data = [cell.get_text(strip=True) for cell in cells]
+                        md_rows.append("| " + " | ".join(cell_data) + " |")
+                
+                markdown_tables.append("\n".join(md_rows))
+            
+            return "\n\n".join(markdown_tables)
+            
+        except Exception as e:
+            logger.warning(f"⚠️ HTML 表格轉換失敗: {e}，返回原始 HTML")
+            return html_content
 
     @staticmethod
     def _get_precise_context(artifacts: List[Dict[str, Any]], target_idx: int) -> Dict[str, str]:
@@ -147,6 +205,11 @@ class Stage2Enrichment:
                     pages_with_images.add(p_num)
                 elif a_type == "table":
                     pages_with_tables.add(p_num)
+                # 🌟 Bug 修復：檢測 text artifact 中的 HTML 表格
+                elif a_type == "text":
+                    content = str(a.get("content", ""))
+                    if "<table" in content.lower() or "</table>" in content.lower():
+                        pages_with_tables.add(p_num)
 
         logger.info(f"   📊 頁面分布: {len(pages_with_images)} 頁有圖片, {len(pages_with_tables)} 頁有表格")
 
@@ -162,7 +225,7 @@ class Stage2Enrichment:
                         page_num=page_num,
                         markdown_content=content,
                         has_images=(page_num in pages_with_images),  # ✅ 動態判斷
-                        has_charts=(page_num in pages_with_tables)   # ✅ 動態判斷
+                        has_tables=(page_num in pages_with_tables)   # ✅ Bug 修復：使用 has_tables
                     )
                     stats["pages_saved"] += 1
                 except Exception as e:
@@ -180,12 +243,18 @@ class Stage2Enrichment:
             page_num = artifact.get("page", 0)
 
             # ---------------------------
-            # 處理 Table (加入防禦性截圖修復)
+            # 處理 Table (加入防禦性截圖修復 + HTML 表格轉換)
             # ---------------------------
             if art_type == "table":
                 raw_table_content = artifact.get("content", "")
                 table_content_str = str(raw_table_content)
                 final_content = raw_table_content
+
+                # 🌟 新增：檢測並轉換 HTML 表格為 Markdown
+                if "<table" in table_content_str.lower():
+                    logger.info(f" 🔍 檢測到 HTML 表格 (Page {page_num})，轉換為 Markdown...")
+                    final_content = Stage2Enrichment._html_table_to_markdown(table_content_str)
+                    logger.info(f" ✅ HTML 表格轉換完成 (Page {page_num})")
 
                 # 🌟 啟動防禦性檢查
                 if fitz and Stage2Enrichment._is_messy_table(table_content_str) and pdf_path and os.path.exists(pdf_path):

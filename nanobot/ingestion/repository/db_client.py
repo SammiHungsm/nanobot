@@ -886,7 +886,7 @@ class DBClient:
         doc_id: str = None,  # 🌟 可选：用于向后兼容（如果没有传入 document_id）
         content_type: str = "markdown",  # 🌟 可选：保留参数但不写入 db
         has_images: bool = False,
-        has_charts: bool = False
+        has_tables: bool = False  # 🌟 Bug 修复：改为 has_tables 匹配数据库列名
     ) -> bool:
         """
         插入單個 PDF 頁面的原始 Markdown 到兜底表
@@ -948,7 +948,7 @@ class DBClient:
                     page_num,
                     markdown_content,
                     has_images,
-                    has_charts  # 映射到 has_tables
+                    has_tables  # 🌟 Bug 修复：使用 has_tables
                 )
             
             logger.debug(f"✅ Page {page_num} 已寫入 document_pages 兜底表")
@@ -983,7 +983,7 @@ class DBClient:
                 source_file=page.get("source_file"),
                 content_type=page.get("content_type", "markdown"),
                 has_images=page.get("has_images", False),
-                has_charts=page.get("has_charts", False)
+                has_tables=page.get("has_tables", False)  # 🌟 Bug 修复：使用 has_tables
             )
             if success:
                 inserted_count += 1
@@ -1065,7 +1065,8 @@ class DBClient:
         file_path: str = None,
         file_hash: str = None,
         file_size: int = 0,
-        document_type: str = "annual_report"  # 保持參數名不變以防其他地方報錯
+        document_type: str = "annual_report",  # 保持參數名不變以防其他地方報錯
+        year: int = None  # 🌟 v4.8 新增：報告年份
     ):
         """創建文檔記錄 (適配新 Schema v2.3)"""
         # 🌟 優先使用 filename 參數，如果沒有則從 file_path 提取
@@ -1077,10 +1078,11 @@ class DBClient:
                 """
                 INSERT INTO documents (
                     doc_id, owner_company_id, filename, file_path, file_hash, 
-                    file_size_bytes, report_type, processing_status, uploaded_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+                    file_size_bytes, report_type, year, processing_status, uploaded_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
                 ON CONFLICT (doc_id) DO UPDATE SET
                     processing_status = 'pending',
+                    year = COALESCE(documents.year, $8),
                     updated_at = NOW()
                 """,
                 doc_id,
@@ -1090,6 +1092,7 @@ class DBClient:
                 file_hash,
                 file_size,  # 寫入 file_size_bytes
                 document_type,  # 寫入 report_type
+                year,  # 🌟 v4.8: 寫入年份
                 "pending"
             )
         

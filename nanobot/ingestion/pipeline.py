@@ -166,13 +166,15 @@ class DocumentPipeline(BaseIngestionPipeline):
             if progress_callback:
                 progress_callback(15.0, "Stage 0: Vision 分析 Page 1")
             
-            # 🌟 v4.6: 使用 LlamaParse 的 Page 1 artifacts 進行 Vision 分析
+            # 🌟 v4.7: 傳遞 parse_result.images 和 raw_output_dir 給 Stage 0
             stage0_result = await Stage0Preprocessor.extract_company_from_page1(
                 artifacts=artifacts,
                 page_num=1,
                 doc_id=doc_id,
                 is_index_report=is_index_report,
-                confirmed_doc_industry=confirmed_doc_industry
+                confirmed_doc_industry=confirmed_doc_industry,
+                images=parse_result.images,  # 🌟 v4.7 新增：傳遞圖片列表
+                raw_output_dir=parse_result.raw_output_dir  # 🌟 v4.7 新增：圖片目錄
             )
             
             if stage0_result is None:

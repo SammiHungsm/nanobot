@@ -1,45 +1,30 @@
 """
-Stage 7: Vector Indexer (v4.1)
+Stage 7: Vector Indexer (v4.2)
 
 职责：
 - 文本切块 (Semantic Chunking)
-- Embedding 生成（本地 sentence-transformers，无需 API Key）
+- Embedding 生成（通过 Vanna Service API，无需本地模型）
 - 向量入库 (PgVector)
 - 多模态 RAG 准备（图片 + 文本）
 
-🌟 v4.1: 使用本地 embedding（sentence-transformers），无需 OpenAI API Key
+🌟 v4.2: 使用 Vanna Service 的 Embedding API
+- 无需在 nanobot-webui 安装 sentence-transformers
+- 复用 Vanna 的 embedding model，避免重复
+- 通过 HTTP 调用 vanna-service:8000/api/embed
 """
 
 import os
 import json
 import asyncio
+import httpx
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from loguru import logger
 
 from nanobot.core.llm_core import llm_core
 
-# 🌟 v4.1: 本地 Embedding 模型（懒加载）
-_LOCAL_EMBEDDING_MODEL = None
-
-
-def _get_local_embedding_model():
-    """获取本地 embedding 模型（懒加载）"""
-    global _LOCAL_EMBEDDING_MODEL
-    
-    if _LOCAL_EMBEDDING_MODEL is None:
-        try:
-            from sentence_transformers import SentenceTransformer
-            # 使用多语言模型（支持中文）
-            model_name = os.environ.get("LOCAL_EMBEDDING_MODEL", "paraphrase-multilingual-MiniLM-L12-v2")
-            logger.info(f"   📦 加载本地 Embedding 模型: {model_name}")
-            _LOCAL_EMBEDDING_MODEL = SentenceTransformer(model_name)
-            logger.info(f"   ✅ Embedding 模型加载成功: {_LOCAL_EMBEDDING_MODEL.get_sentence_embedding_dimension()} 维")
-        except Exception as e:
-            logger.warning(f"   ⚠️ 加载本地 Embedding 模型失败: {e}")
-            _LOCAL_EMBEDDING_MODEL = None
-    
-    return _LOCAL_EMBEDDING_MODEL
+# 🌟 v4.2: Vanna Service URL (Docker network)
+VANNA_SERVICE_URL = os.environ.get("VANNA_SERVICE_URL", "http://vanna-service:8082")  # 🌟 使用正確端口
 
 
 class Stage7VectorIndexer:
@@ -48,7 +33,7 @@ class Stage7VectorIndexer:
     def __init__(
         self,
         db_client: Any = None,
-        embedding_model: str = "text-embedding-3-small",
+        embedding_model: str = "vanna-service",  # 🌟 v4.2: Use Vanna Service
         chunk_size: int = 512,
         chunk_overlap: int = 50
     ):
@@ -57,7 +42,7 @@ class Stage7VectorIndexer:
         
         Args:
             db_client: DB 客户端
-            embedding_model: Embedding 模型
+            embedding_model: Embedding 模型 (default: vanna-service)
             chunk_size: 切块大小（tokens）
             chunk_overlap: 切块重叠
         """
@@ -130,7 +115,9 @@ class Stage7VectorIndexer:
         """
         生成 Embedding
         
-        🌟 v4.1: 优先使用本地 sentence-transformers，无需 API Key
+        🌟 v4.2: 调用 Vanna Service 的 Embedding API
+        - 无需本地安装 sentence-transformers
+        - 复用 Vanna 的 embedding model
         
         Args:
             text: 文本内容
@@ -139,44 +126,32 @@ class Stage7VectorIndexer:
             Optional[List[float]]: Embedding 向量
         """
         try:
-            # 🌟 v4.1: 优先使用本地 embedding
-            local_model = _get_local_embedding_model()
-            
-            if local_model:
-                # 本地模型生成 embedding
-                embedding = local_model.encode(text[:2000], convert_to_numpy=True)  # 限制长度
-                logger.debug(f"   ✅ 本地 Embedding 生成成功: {len(embedding)} 维")
-                return embedding.tolist()
-            
-            # 🌟 Fallback: 如果本地模型不可用，尝试 API
-            api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("EMBEDDING_API_KEY")
-            api_base = os.environ.get("EMBEDDING_API_BASE", "https://api.openai.com/v1")
-            
-            if not api_key:
-                logger.warning("   ⚠️ 本地模型和 API Key 都不可用，跳过 embedding")
-                return None
-            
-            import httpx
-            
-            async with httpx.AsyncClient(timeout=30) as client:
+            # 🌟 v4.2: 调用 Vanna Service API
+            async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
-                    f"{api_base}/embeddings",
-                    headers={"Authorization": f"Bearer {api_key}"},
-                    json={
-                        "model": self.embedding_model,
-                        "input": text[:8000]
-                    }
+                    f"{VANNA_SERVICE_URL}/api/embed",
+                    json={"texts": [text[:2000]]}  # 限制长度
                 )
                 
                 if response.status_code == 200:
-                    data = response.json()
-                    embedding = data["data"][0]["embedding"]
-                    logger.debug(f"   ✅ API Embedding 生成成功: {len(embedding)} 维")
+                    result = response.json()
+                    embedding = result["embeddings"][0]
+                    logger.debug(f"   ✅ Vanna Service Embedding: {len(embedding)} 维")
                     return embedding
                 else:
-                    logger.warning(f"   ⚠️ Embedding API 失败: {response.status_code}")
+                    logger.warning(f"   ⚠️ Vanna Service 返回错误: {response.status_code}")
                     return None
                     
+        except httpx.ConnectError:
+            logger.warning(f"   ⚠️ 无法连接 Vanna Service: {VANNA_SERVICE_URL}")
+            return None
+        except Exception as e:
+            logger.warning(f"   ⚠️ Embedding 生成失败: {e}")
+            return None
+                    
+        except httpx.ConnectError:
+            logger.warning(f"   ⚠️ 无法连接 Vanna Service: {VANNA_SERVICE_URL}")
+            return None
         except Exception as e:
             logger.warning(f"   ⚠️ Embedding 生成失败: {e}")
             return None

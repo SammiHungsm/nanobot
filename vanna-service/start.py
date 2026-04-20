@@ -116,6 +116,18 @@ class TrainRequest(BaseModel):
     doc_id: Optional[str] = None  # Optional: specific document ID to train on
 
 
+class EmbedRequest(BaseModel):
+    """Embedding request model"""
+    texts: List[str]  # List of texts to embed
+
+
+class EmbedResponse(BaseModel):
+    """Embedding response model"""
+    embeddings: List[List[float]]  # List of embedding vectors
+    dimension: int  # Embedding dimension
+    model: str  # Model used
+
+
 class AskRequest(BaseModel):
     """Question request model"""
     question: str
@@ -749,6 +761,59 @@ async def ask_vanna(request: AskRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/embed", response_model=EmbedResponse)
+async def generate_embeddings(request: EmbedRequest):
+    """
+    Generate embeddings for texts using Vanna's embedding model
+    
+    This allows other services to use the same embedding model as Vanna.
+    No need to install sentence-transformers in multiple containers!
+    
+    Args:
+        request.texts: List of text strings to embed
+        
+    Returns:
+        List of embedding vectors (dimension: 384 for default model)
+    """
+    if vn is None:
+        raise HTTPException(status_code=503, detail="Vanna not initialized")
+    
+    try:
+        logger.info(f"📊 Generating embeddings for {len(request.texts)} texts...")
+        
+        # 🌟 Use Vanna's generate_embedding method
+        embeddings = []
+        for text in request.texts:
+            embedding = vn.generate_embedding(text[:2000])  # 限制长度
+            if embedding is not None and len(embedding) > 0:
+                # 🌟 Fix: Convert numpy array to list properly
+                import numpy as np
+                if isinstance(embedding, np.ndarray):
+                    embeddings.append(embedding.tolist())
+                else:
+                    embeddings.append(list(embedding))
+            else:
+                logger.warning(f"   ⚠️ Empty embedding for text: {text[:50]}...")
+                embeddings.append([0.0] * 384)  # Fallback: zero vector
+        
+        # Get dimension from first embedding
+        dimension = len(embeddings[0]) if embeddings else 0
+        
+        logger.info(f"✅ Generated {len(embeddings)} embeddings (dimension: {dimension})")
+        
+        return EmbedResponse(
+            embeddings=embeddings,
+            dimension=dimension,
+            model="all-MiniLM-L6-v2"  # ChromaDB default
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Embedding generation failed: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/train_ddl")
 async def train_with_ddl(ddl: str):
     """Provide DDL for training"""
@@ -932,4 +997,4 @@ async def get_column_changes():
 
 if __name__ == "__main__":
     logger.info("🚀 Starting Vanna API Service...")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8082)  # 🌟 修正端口為 8082

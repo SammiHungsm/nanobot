@@ -106,6 +106,15 @@ class Stage0_5_Registrar:
             # 🌟 v1.3: 使用原始文件名（如果提供），否则使用 file_path 的文件名
             filename_to_save = original_filename or Path(file_path).name
             
+            # 🌟 Bug fix: 確保 year 是整數
+            year = metadata.get("year")
+            if year is not None:
+                try:
+                    year = int(year)
+                except (ValueError, TypeError):
+                    logger.warning(f"   ⚠️ 無法將 year 轉換為整數: {year}")
+                    year = None
+            
             # 创建文档记录
             doc_result = await db_client.create_document(
                 doc_id=doc_id,
@@ -114,7 +123,8 @@ class Stage0_5_Registrar:
                 file_hash=file_hash,
                 file_size=file_size,
                 company_id=company_id,
-                document_type=metadata.get("doc_type", "annual_report")
+                document_type=metadata.get("doc_type", "annual_report"),
+                year=year  # 🌟 v4.8: 傳遞年份（已確保是整數）
             )
             
             # 🌟 v1.1: create_document 返回 None（INSERT 执行），需要单独查询 document_id
@@ -171,6 +181,9 @@ class Stage0_5_Registrar:
         stock_code = metadata.get("stock_code")
         name_en = metadata.get("name_en") or metadata.get("company_name")  # 🌟 优先 name_en
         name_zh = metadata.get("name_zh") or metadata.get("company_name_zh")  # 🌟 优先 name_zh
+        
+        # 🌟 v4.8.1: 調試日誌
+        logger.info(f"   📋 register_company_from_metadata 收到: stock_code={stock_code}, name_en={name_en}, name_zh={name_zh}")
         
         # 🌟 v2.6: Stage 0 只提取基本信息，auditor/address/chairman 由 Stage 4 Agent 提取
         
