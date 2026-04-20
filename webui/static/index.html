@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nanobot Financial Chat Dashboard</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome for icons -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <!-- Custom Styles -->
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+
+<body class="bg-slate-50 h-screen flex font-sans text-slate-800 overflow-hidden">
+
+    <!-- Login Overlay -->
+    <div id="login-overlay"
+        class="fixed inset-0 bg-slate-900/95 z-50 flex items-center justify-center backdrop-blur-sm transition-opacity duration-300">
+        <div class="bg-white p-8 rounded-2xl shadow-2xl w-full max-w-md mx-4 transform transition-transform">
+            <div class="text-center mb-8">
+                <div class="bg-blue-600 w-14 h-14 rounded-xl text-white flex items-center justify-center mx-auto mb-4 shadow-lg">
+                    <i class="fas fa-robot text-2xl"></i>
+                </div>
+                <h2 class="text-2xl font-bold text-slate-800">Nanobot Workspace</h2>
+                <p class="text-slate-500 text-sm mt-2">Sign in to access financial reports</p>
+            </div>
+            <form id="login-form" class="space-y-5">
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-1">Username</label>
+                    <div class="relative">
+                        <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <i class="fas fa-user text-slate-400"></i>
+                        </div>
+                        <input type="text" id="login-username" required
+                            class="w-full pl-10 pr-4 py-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                            placeholder="Enter your username">
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-1">Password</label>
+                    <div class="relative">
+                        <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <i class="fas fa-lock text-slate-400"></i>
+                        </div>
+                        <input type="password" id="login-password" required
+                            class="w-full pl-10 pr-4 py-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                            placeholder="••••••••">
+                    </div>
+                </div>
+                <button type="submit"
+                    class="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 transition shadow-md font-medium flex justify-center items-center">
+                    <span>Sign In</span>
+                    <i class="fas fa-arrow-right ml-2 text-sm"></i>
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Main Container -->
+    <div class="flex-1 flex flex-col h-full w-full">
+        <!-- Tab Navigation -->
+        <div class="bg-slate-100 border-b border-slate-200 px-4 pt-2">
+            <div class="flex space-x-1">
+                <button id="tab-chat" onclick="switchTab('chat')"
+                    class="tab-active px-6 py-3 rounded-t-lg font-medium text-sm transition-colors border border-b-0">
+                    <i class="fas fa-comments mr-2"></i>Chat
+                </button>
+                <button id="tab-library" onclick="switchTab('library')"
+                    class="tab-inactive px-6 py-3 rounded-t-lg font-medium text-sm transition-colors border border-b-0">
+                    <i class="fas fa-folder-open mr-2"></i>PDF Library
+                </button>
+                
+            </div>
+        </div>
+
+        <!-- Tab Content Container -->
+        <div class="flex-1 flex overflow-hidden">
+            <!-- Chat Tab Content -->
+            <div id="content-chat" class="flex-1 flex flex-row h-full overflow-hidden">
+                <!-- Sidebar -->
+                <aside class="w-72 bg-slate-900 text-white flex flex-col border-r border-slate-700/50">
+                    <!-- Sidebar Header -->
+                    <div class="p-5 border-b border-slate-700/50 flex items-center space-x-3">
+                        <div class="bg-blue-600 p-2 rounded-lg text-white">
+                            <i class="fas fa-robot text-lg"></i>
+                        </div>
+                        <div>
+                            <h1 class="text-base font-semibold text-white tracking-wide">Nanobot</h1>
+                            <p class="text-xs text-slate-400 font-medium">Financial Workspace</p>
+                        </div>
+                    </div>
+
+                    <!-- Document List Section -->
+                    <div class="p-4 flex-1 overflow-y-auto">
+                        <div class="flex items-center justify-between mb-4">
+                            <h2 class="text-xs font-bold text-slate-500 uppercase tracking-wider">Available Documents</h2>
+                            <button class="text-slate-400 hover:text-white transition-colors" title="Refresh List"
+                                onclick="refreshDocumentList()">
+                                <i class="fas fa-sync-alt text-xs"></i>
+                            </button>
+                        </div>
+
+                        <!-- Dynamic Document List Container -->
+                        <ul id="document-list" class="space-y-3">
+                            <!-- JS will populate documents here -->
+                        </ul>
+                    </div>
+
+                    <!-- Sidebar Footer -->
+                    <div class="p-4 border-t border-slate-700/50 text-xs text-slate-500 bg-slate-900/50">
+                        <p><i class="fas fa-info-circle mr-1"></i> Click a document to tag it in your chat.</p>
+                    </div>
+                </aside>
+
+                <!-- Right Main Area: Chat Interface -->
+                <main class="flex-1 flex flex-col h-full relative">
+                    <!-- Top Header -->
+                    <header class="bg-white border-b border-slate-200 p-4 shadow-sm flex justify-between items-center shrink-0 z-10">
+                        <div class="flex items-center md:hidden space-x-3">
+                            <div class="bg-blue-600 p-2 rounded-lg text-white">
+                                <i class="fas fa-robot text-sm"></i>
+                            </div>
+                            <h1 class="text-lg font-semibold text-slate-800 tracking-wide">Nanobot</h1>
+                        </div>
+                        <div class="hidden md:block">
+                            <h2 class="text-lg font-semibold text-slate-800">Financial Analysis Chat</h2>
+                        </div>
+
+                        <!-- Header Right Side: Status and User Profile -->
+                        <div class="flex items-center space-x-4">
+                            <div class="hidden md:flex items-center space-x-2 bg-green-50 px-3 py-1.5 rounded-full border border-green-200">
+                                <span class="relative flex h-2 w-2">
+                                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                                    <span class="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                                </span>
+                                <span class="text-xs font-medium text-green-700">MCP Online</span>
+                            </div>
+
+                            <!-- User Profile & Logout -->
+                            <div class="flex items-center space-x-3 border-l border-slate-200 pl-4">
+                                <div class="flex items-center space-x-2">
+                                    <div class="bg-blue-100 text-blue-700 h-8 w-8 rounded-full flex items-center justify-center font-bold text-sm">
+                                        <i class="fas fa-user-alt text-xs"></i>
+                                    </div>
+                                    <span id="display-username" class="text-sm font-medium text-slate-700 hidden sm:block">Guest</span>
+                                </div>
+                                <button id="logout-btn" type="button"
+                                    class="text-slate-400 hover:text-red-500 hover:bg-red-50 p-2 rounded-lg transition-colors"
+                                    title="Log Out">
+                                    <i class="fas fa-sign-out-alt"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </header>
+
+                    <!-- Chat History -->
+                    <div class="flex-1 overflow-y-auto p-4 md:p-6 chat-scroll" id="chat-container">
+                        <!-- System Greeting -->
+                        <div class="flex justify-start mb-6">
+                            <div class="bg-white border border-slate-200 rounded-2xl rounded-tl-sm shadow-sm p-4 max-w-[85%] md:max-w-[75%]">
+                                <p class="text-sm md:text-base leading-relaxed">
+                                    Hello! I am your AI Financial Assistant.<br>
+                                    Select a document from the left panel to tag it, upload a new report using the paperclip icon,
+                                    or ask me to analyze financial tables directly.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Bottom Input Area -->
+                    <footer class="bg-white border-t border-slate-200 p-4 shrink-0">
+                        <div class="max-w-4xl mx-auto">
+                            <form id="chat-form" class="flex flex-col relative">
+                                <!-- Hidden File Input -->
+                                <input type="file" id="file-upload" class="hidden" accept=".pdf,.csv,.txt" multiple>
+
+                                <!-- Text Input Container -->
+                                <div class="flex items-end bg-slate-100 rounded-xl border border-slate-200 focus-within:border-blue-500 focus-within:bg-white focus-within:ring-2 focus-within:ring-blue-100 transition-all overflow-hidden relative pb-1">
+
+                                    <!-- Attachment Button -->
+                                    <button type="button" id="attach-btn"
+                                        class="p-3.5 text-slate-400 hover:text-blue-600 transition-colors flex-shrink-0 rounded-l-xl z-10"
+                                        title="Upload Document">
+                                        <i class="fas fa-paperclip text-lg"></i>
+                                    </button>
+
+                                    <textarea id="chat-input" rows="1"
+                                        class="w-full bg-transparent pr-16 py-3.5 outline-none resize-none text-sm md:text-base self-center"
+                                        placeholder="Ask a question... e.g., 'Extract revenue from @report.pdf'"
+                                        oninput="this.style.height = ''; this.style.height = Math.min(this.scrollHeight, 120) + 'px'"></textarea>
+
+                                    <!-- Send Button (Inside Input) -->
+                                    <button type="submit" id="send-btn"
+                                        class="absolute right-2 bottom-2 bg-blue-600 text-white h-9 w-9 rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed z-10">
+                                        <i class="fas fa-paper-plane text-sm"></i>
+                                    </button>
+                                </div>
+                            </form>
+                            <div class="text-center mt-2 flex justify-between items-center px-1">
+                                <p class="text-[11px] text-slate-400">Powered by OpenDataLoader MCP Server</p>
+                                <p class="text-[11px] text-slate-400">Shift + Enter to add a new line</p>
+                            </div>
+                        </div>
+                    </footer>
+                </main>
+            </div>
+
+            <!-- Library Tab Content -->
+            <div id="content-library" class="flex-1 flex flex-col h-full hidden">
+                <!-- Library Header -->
+                <header class="bg-white border-b border-slate-200 p-4 shadow-sm flex justify-between items-center shrink-0">
+                    <div>
+                        <h2 class="text-lg font-semibold text-slate-800">PDF Library</h2>
+                        <p class="text-sm text-slate-500">Manage and preview your documents</p>
+                    </div>
+                    <div class="flex items-center space-x-3">
+                        <!-- Filter & Sort -->
+                        <select id="library-filter-status" onchange="Library.filterLibrary()" class="px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm">
+                            <option value="all">All Status</option>
+                            <option value="completed">Completed</option>
+                            <option value="processing">Processing</option>
+                            <option value="queued">Queued</option>
+                            <option value="failed">Failed</option>
+                        </select>
+                        <select id="library-sort" onchange="Library.filterLibrary()" class="px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-sm">
+                            <option value="date_desc">Newest First</option>
+                            <option value="date_asc">Oldest First</option>
+                            <option value="size_desc">Size: Large to Small</option>
+                            <option value="size_asc">Size: Small to Large</option>
+                            <option value="name_asc">Name: A to Z</option>
+                        </select>
+                        <div class="relative">
+                            <input type="text" id="library-search" placeholder="Search documents..."
+                                class="pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-sm"
+                                oninput="Library.filterLibrary()">
+                            <i class="fas fa-search absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400"></i>
+                        </div>
+                        <!-- Batch Actions -->
+                        <button id="batch-delete-btn" onclick="Library.batchDeleteSelected()" class="hidden bg-red-50 text-red-600 px-4 py-2 rounded-lg hover:bg-red-100 transition text-sm font-medium border border-red-200" title="Delete Selected">
+                            <i class="fas fa-trash-alt mr-1.5"></i><span id="batch-delete-count">0</span>
+                        </button>
+                        <button id="batch-download-btn" onclick="Library.batchDownloadSelected()" class="hidden bg-green-50 text-green-600 px-4 py-2 rounded-lg hover:bg-green-100 transition text-sm font-medium border border-green-200" title="Download Selected">
+                            <i class="fas fa-download mr-1.5"></i><span id="batch-download-count">0</span>
+                        </button>
+                        <label class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition cursor-pointer text-sm font-medium">
+                            <i class="fas fa-upload mr-2"></i>Upload
+                            <input type="file" id="library-file-upload" class="hidden" accept=".pdf" multiple>
+                        </label>
+                    </div>
+                </header>
+
+                <!-- Library Grid and Process Log -->
+                <div class="flex-1 flex overflow-hidden">
+                    <!-- Left: Library Grid -->
+                    <div class="flex-1 flex flex-col overflow-hidden">
+                        <!-- Grid with checkboxes -->
+                        <div class="flex-1 overflow-y-auto p-6">
+                            <div class="mb-3 flex items-center justify-between">
+                                <label class="flex items-center space-x-2 text-sm text-slate-600">
+                                    <input type="checkbox" id="select-all-checkbox" onchange="Library.toggleSelectAll(this)" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
+                                    <span>Select All</span>
+                                </label>
+                                <span id="library-count" class="text-sm text-slate-500">0 documents</span>
+                            </div>
+                            <div id="library-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                                <!-- JS will populate PDF cards here -->
+                            </div>
+
+                            <!-- Empty State -->
+                            <div id="library-empty" class="hidden flex flex-col items-center justify-center h-full text-slate-400">
+                                <i class="fas fa-folder-open text-6xl mb-4"></i>
+                                <p class="text-lg font-medium">No documents found</p>
+                                <p class="text-sm">Upload a PDF to get started</p>
+                            </div>
+
+                            <!-- Pagination -->
+                            <div id="library-pagination" class="hidden mt-4 flex items-center justify-center space-x-2">
+                                <button onclick="Library.prevPage()" class="px-3 py-1.5 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 text-sm disabled:opacity-50">
+                                    <i class="fas fa-chevron-left"></i>
+                                </button>
+                                <span id="pagination-info" class="text-sm text-slate-600">Page 1 of 1</span>
+                                <button onclick="Library.nextPage()" class="px-3 py-1.5 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 text-sm disabled:opacity-50">
+                                    <i class="fas fa-chevron-right"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right: Process Log Panel -->
+                    <div class="w-80 bg-slate-900 border-l border-slate-700 flex flex-col">
+                        <div class="p-3 border-b border-slate-700 flex items-center justify-between">
+                            <h3 class="text-sm font-semibold text-white"><i class="fas fa-terminal mr-2"></i>Processing Log</h3>
+                            <button onclick="Library.processingLogs = []; Library.renderProcessLog()" class="text-slate-400 hover:text-white" title="Clear logs">
+                                <i class="fas fa-trash-alt text-xs"></i>
+                            </button>
+                        </div>
+                        <div id="process-log-container" class="flex-1 overflow-y-auto p-3 font-mono text-xs bg-slate-950">
+                            <p class="text-slate-500 text-center py-4">No logs yet</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Details Panel -->
+                <div id="details-panel" class="hidden bg-white border-t border-slate-200 p-4 shadow-lg">
+                    <div class="flex justify-between items-start mb-3">
+                        <h3 class="font-semibold text-slate-800">Document Details</h3>
+                        <button onclick="Library.closeDetailsPanel()" class="text-slate-400 hover:text-slate-600">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    <div class="grid grid-cols-2 gap-3 text-sm">
+                        <div>
+                            <p class="text-slate-500">Name</p>
+                            <p id="detail-name" class="font-medium text-slate-800 truncate"></p>
+                        </div>
+                        <div>
+                            <p class="text-slate-500">Size</p>
+                            <p id="detail-size" class="font-medium text-slate-800"></p>
+                        </div>
+                        <div>
+                            <p class="text-slate-500">Uploaded</p>
+                            <p id="detail-date" class="font-medium text-slate-800"></p>
+                        </div>
+                        <div>
+                            <p class="text-slate-500">By</p>
+                            <p id="detail-uploader" class="font-medium text-slate-800"></p>
+                        </div>
+                        <div>
+                            <p class="text-slate-500">Pages</p>
+                            <p id="detail-pages" class="font-medium text-slate-800">-</p>
+                        </div>
+                    </div>
+                    <div class="mt-3 flex items-center justify-between">
+                        <div>
+                            <p class="text-slate-500 text-xs">Status</p>
+                            <p id="detail-status" class="font-medium text-xs"></p>
+                        </div>
+                        <div id="detail-progress-container" class="hidden flex-1 ml-4">
+                            <div class="flex justify-between text-[10px] text-slate-500 mb-1">
+                                <span>Processing</span>
+                                <span id="detail-progress-text"></span>
+                            </div>
+                            <div class="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                                <div id="detail-progress-bar" class="h-full bg-blue-500 transition-all duration-300" style="width: 0%"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Retry Button (only for failed documents) -->
+                    <div id="retry-button-container" class="hidden mt-3">
+                        <button onclick="Library.retryDocument()" class="w-full bg-orange-50 text-orange-600 py-2 rounded-lg hover:bg-orange-100 transition text-sm font-medium border border-orange-200">
+                            <i class="fas fa-redo-alt mr-1.5"></i>Retry Processing
+                        </button>
+                    </div>
+                    <div class="mt-4 flex space-x-2">
+                        <button onclick="Library.previewPDF()" class="flex-1 bg-slate-100 text-slate-700 py-2 rounded-lg hover:bg-slate-200 transition text-sm font-medium">
+                            <i class="fas fa-eye mr-1.5"></i>Preview
+                        </button>
+                        <button onclick="Library.downloadPDF()" class="flex-1 bg-slate-100 text-slate-700 py-2 rounded-lg hover:bg-slate-200 transition text-sm font-medium">
+                            <i class="fas fa-download mr-1.5"></i>Download
+                        </button>
+                        <button onclick="Library.viewProcessedOutput()" class="flex-1 bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 transition text-sm font-medium">
+                            <i class="fas fa-file-code mr-1.5"></i>View Output
+                        </button>
+                        <button onclick="Library.deleteSelectedDocument()" class="flex-[0.5] bg-red-50 text-red-600 py-2 rounded-lg hover:bg-red-100 transition text-sm font-medium border border-red-200" title="Delete Document">
+                            <i class="fas fa-trash-alt"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            
+        </div>
+    </div>
+
+    <!-- PDF Preview Modal -->
+    <div id="pdf-preview-modal" class="hidden fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-5xl h-[80vh] flex flex-col modal-animate">
+            <div class="flex justify-between items-center p-4 border-b border-slate-200">
+                <h3 id="preview-title" class="font-semibold text-slate-800 truncate flex-1"></h3>
+                <div class="flex items-center space-x-2">
+                    <a id="preview-open-new" href="#" target="_blank" class="text-slate-400 hover:text-blue-600" title="Open in new tab">
+                        <i class="fas fa-external-link-alt"></i>
+                    </a>
+                    <button onclick="closePreviewModal()" class="text-slate-400 hover:text-slate-600">
+                        <i class="fas fa-times text-lg"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="flex-1 overflow-hidden">
+                <iframe id="pdf-preview-frame" src="" class="w-full h-full border-0" frameborder="0"></iframe>
+            </div>
+        </div>
+    </div>
+
+    <!-- JSON Output Modal -->
+    <div id="json-output-modal" class="hidden fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-4xl max-h-[80vh] flex flex-col modal-animate">
+            <div class="flex justify-between items-center p-4 border-b border-slate-200">
+                <h3 class="font-semibold text-slate-800">Processed Output (JSON)</h3>
+                <div class="flex items-center space-x-2">
+                    <button onclick="copyJsonOutput()" class="text-slate-400 hover:text-blue-600" title="Copy to clipboard">
+                        <i class="fas fa-copy"></i>
+                    </button>
+                    <button onclick="downloadProcessedOutput()" class="text-slate-400 hover:text-blue-600" title="Download">
+                        <i class="fas fa-download"></i>
+                    </button>
+                    <button onclick="closeJsonModal()" class="text-slate-400 hover:text-slate-600">
+                        <i class="fas fa-times text-lg"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="flex-1 overflow-auto p-4 bg-slate-900">
+                <pre id="json-output-content" class="json-viewer text-slate-100"></pre>
+            </div>
+        </div>
+    </div>
+
+    <!-- Processed Output Preview (in details panel) -->
+    <div id="processed-output-preview" class="hidden mt-4 pt-4 border-t border-slate-200">
+        <h4 class="font-medium text-slate-700 mb-2 text-sm">Output Preview</h4>
+        <pre id="processed-output-content" class="json-viewer text-xs bg-slate-50 p-3 rounded-lg overflow-auto max-h-48 border border-slate-200"></pre>
+    </div>
+
+    <!-- Upload Progress Modal -->
+    <div id="upload-progress-modal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-md p-6 modal-animate">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="font-semibold text-slate-800"><i class="fas fa-upload mr-2"></i>Uploading...</h3>
+                <button onclick="Library.closeUploadModal()" class="text-slate-400 hover:text-slate-600">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="space-y-3">
+                <div class="flex justify-between text-sm text-slate-600">
+                    <span id="upload-file-name" class="truncate">Preparing...</span>
+                    <span id="upload-percent">0%</span>
+                </div>
+                <div class="w-full h-3 bg-slate-200 rounded-full overflow-hidden">
+                    <div id="upload-progress-bar" class="h-full bg-blue-600 transition-all duration-300" style="width: 0%"></div>
+                </div>
+                <p id="upload-status" class="text-xs text-slate-500">Initializing upload...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- JavaScript Files -->
+    <!-- 🌟 Markdown 渲染库 (marked.js) - 支持代码块和表格 -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="/static/js/api.js"></script>
+    <script src="/static/js/auth.js"></script>
+    <script src="/static/js/ui.js"></script>
+    <script src="/static/js/library.js"></script>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

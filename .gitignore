@@ -1,5 +1,6 @@
 # Project-specific
 .worktrees/
+config.json
 .assets
 .docs
 .env
@@ -14,6 +15,11 @@ webui/.vite/
 *.tsbuildinfo
 
 # Python bytecode & caches
+*.pyc
+dist/
+build/
+*.egg-info/
+*.egg
 *.pyc
 *.pyo
 *.pyd
@@ -52,6 +58,49 @@ coverage.xml
 # Lock files (project policy)
 poetry.lock
 uv.lock
+config\config.json
+
+# AI Context
+.cobridge
+
+# .traerules
+.traerules
+
+# .cursorrules
+.cursorrules
+
+# GitHub Copilot Instructions
+.github/copilot-instructions.md
+
+# ===========================================
+# Docker Data Volumes - DO NOT COMMIT
+# ===========================================
+# Generated PDF data
+./data/*
+webui/uploads/
+webui/outputs/
+webui/data/
+
+# PostgreSQL data
+postgres_data/
+
+# Vanna training data
+data/vanna/
+
+# Raw extracted data
+data/raw/
+
+# Processing outputs
+**/outputs/
+**/uploads/
+
+# ===========================================
+# Development artifacts
+# ===========================================
+*.log
+logs/
+*.tmp
+*.temp
 
 # Jupyter
 .ipynb_checkpoints/

@@ -9,6 +9,7 @@ import pydantic
 from loguru import logger
 
 from nanobot.config.schema import Config
+from nanobot.config.paths import NANOBOT_HOME  # 🌟 导入统一常量
 
 # Global variable to store current config path (for multi-instance support)
 _current_config_path: Path | None = None
@@ -24,7 +25,7 @@ def get_config_path() -> Path:
     """Get the configuration file path."""
     if _current_config_path:
         return _current_config_path
-    return Path.home() / ".nanobot" / "config.json"
+    return NANOBOT_HOME / "config.json"  # 🌟 使用统一常量
 
 
 def load_config(config_path: Path | None = None) -> Config:
@@ -90,9 +91,10 @@ def resolve_config_env_vars(config: Config) -> Config:
 
 
 def _resolve_env_vars(obj: object) -> object:
-    """Recursively resolve ``${VAR}`` patterns in string values."""
+    """Recursively resolve ``${VAR}`` and ``${VAR:-default}`` patterns in string values."""
     if isinstance(obj, str):
-        return re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", _env_replace, obj)
+        # Support both ${VAR} and ${VAR:-default} patterns
+        return re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}", _env_replace_with_default, obj)
     if isinstance(obj, dict):
         return {k: _resolve_env_vars(v) for k, v in obj.items()}
     if isinstance(obj, list):
@@ -100,10 +102,14 @@ def _resolve_env_vars(obj: object) -> object:
     return obj
 
 
-def _env_replace(match: re.Match[str]) -> str:
+def _env_replace_with_default(match: re.Match[str]) -> str:
+    """Replace ${VAR} or ${VAR:-default} with environment variable or default."""
     name = match.group(1)
+    default = match.group(2)  # None if no default provided
     value = os.environ.get(name)
     if value is None:
+        if default is not None:
+            return default
         raise ValueError(
             f"Environment variable '{name}' referenced in config is not set"
         )

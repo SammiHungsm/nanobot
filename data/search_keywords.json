@@ -1,0 +1,229 @@
+{
+  "version": "1.0.0",
+  "last_updated": "2026-04-13T10:00:00+08:00",
+  "categories": {
+    "revenue_breakdown": {
+      "keywords": [
+        {
+          "keyword": "revenue breakdown",
+          "confidence": "gold",
+          "source": "manual",
+          "added_at": "2026-04-13",
+          "usage_count": 0,
+          "hit_count": 0
+        },
+        {
+          "keyword": "geographical",
+          "confidence": "gold",
+          "source": "manual",
+          "added_at": "2026-04-13",
+          "usage_count": 0,
+          "hit_count": 0
+        },
+        {
+          "keyword": "geographic",
+          "confidence": "gold",
+          "source": "manual",
+          "added_at": "2026-04-13",
+          "usage_count": 0,
+          "hit_count": 0
+        },
+        {
+          "keyword": "region",
+          "confidence": "silver",
+          "source": "manual",
+          "added_at": "2026-04-13",
+          "usage_count": 0,
+          "hit_count": 0
+        },
+        {
+          "keyword": "segment",
+          "confidence": "silver",
+          "source": "manual",
+          "added_at": "2026-04-13",
+          "usage_count": 0,
+          "hit_count": 0
+        },
+        {
+          "keyword": "business segment",
+          "confidence": "silver",
+          "source": "manual",
+          "added_at": "2026-04-13",
+          "usage_count": 0,
+          "hit_count": 0
+        },
+        {
+          "keyword": "收入分佈",
+          "confidence": "gold",
+          "source": "manual",
+          "added_at": "2026-04-13",
+          "usage_count": 0,
+          "hit_count": 0
+        },
+        {
+          "keyword": "地區收入",
+          "confidence": "gold",
+          "source": "manual",
+          "added_at": "2026-04-13",
+          "usage_count": 0,
+          "hit_count": 0
+        },
+        {
+          "keyword": "業務分佈",
+          "confidence": "silver",
+          "source": "manual",
+          "added_at": "2026-04-13",
+          "usage_count": 0,
+          "hit_count": 0
+        },
+        {
+          "keyword": "地理分佈",
+          "confidence": "silver",
+          "source": "manual",
+          "added_at": "2026-04-13",
+          "usage_count": 0,
+          "hit_count": 0
+        },
+        {
+          "keyword": "歐洲",
+          "confidence": "bronze",
+          "source": "manual",
+          "added_at": "2026-04-13",
+          "usage_count": 0,
+          "hit_count": 0
+        },
+        {
+          "keyword": "美洲",
+          "confidence": "bronze",
+          "source": "manual",
+          "added_at": "2026-04-13",
+          "usage_count": 0,
+          "hit_count": 0
+        },
+        {
+          "keyword": "中國",
+          "confidence": "bronze",
+          "source": "manual",
+          "added_at": "2026-04-13",
+          "usage_count": 0,
+          "hit_count": 0
+        },
+        {
+          "keyword": "亞洲",
+          "confidence": "bronze",
+          "source": "manual",
+          "added_at": "2026-04-13",
+          "usage_count": 0,
+          "hit_count": 0
+        },
+        {
+          "keyword": "香港",
+          "confidence": "bronze",
+          "source": "manual",
+          "added_at": "2026-04-13",
+          "usage_count": 0,
+          "hit_count": 0
+        },
+        {
+          "keyword": "turnover",
+          "confidence": "silver",
+          "source": "manual",
+          "added_at": "2026-04-13",
+          "usage_count": 0,
+          "hit_count": 0
+        },
+        {
+          "keyword": "sales by",
+          "confidence": "silver",
+          "source": "manual",
+          "added_at": "2026-04-13",
+          "usage_count": 0,
+          "hit_count": 0
+        },
+        {
+          "keyword": "income by",
+          "confidence": "silver",
+          "source": "manual",
+          "added_at": "2026-04-13",
+          "usage_count": 0,
+          "hit_count": 0
+        }
+      ],
+      "description": "用於識別 Revenue Breakdown 相關頁面的關鍵字"
+    },
+    "key_personnel": {
+      "keywords": [
+        {
+          "keyword": "key personnel",
+          "confidence": "gold",
+          "source": "manual",
+          "added_at": "2026-04-13",
+          "usage_count": 0,
+          "hit_count": 0
+        },
+        {
+          "keyword": "board of directors",
+          "confidence": "gold",
+          "source": "manual",
+          "added_at": "2026-04-13",
+          "usage_count": 0,
+          "hit_count": 0
+        },
+        {
+          "keyword": "management team",
+          "confidence": "silver",
+          "source": "manual",
+          "added_at": "2026-04-13",
+          "usage_count": 0,
+          "hit_count": 0
+        },
+        {
+          "keyword": "高管",
+          "confidence": "gold",
+          "source": "manual",
+          "added_at": "2026-04-13",
+          "usage_count": 0,
+          "hit_count": 0
+        },
+        {
+          "keyword": "董事會",
+          "confidence": "gold",
+          "source": "manual",
+          "added_at": "2026-04-13",
+          "usage_count": 0,
+          "hit_count": 0
+        },
+        {
+          "keyword": "執行董事",
+          "confidence": "silver",
+          "source": "manual",
+          "added_at": "2026-04-13",
+          "usage_count": 0,
+          "hit_count": 0
+        }
+      ],
+      "description": "用於識別 Key Personnel 相關頁面的關鍵字"
+    }
+  },
+  "blocked_keywords": [
+    "total",
+    "sum",
+    "and",
+    "the",
+    "of",
+    "for",
+    "table",
+    "figure",
+    "page",
+    "1.",
+    "2.",
+    "2023",
+    "2024",
+    "2025"
+  ],
+  "metadata": {
+    "total_keywords": 24,
+    "categories_count": 2,
+    "note": "confidence levels: gold (trusted), silver (auto-approved), bronze (pending review)"
+  }
+}

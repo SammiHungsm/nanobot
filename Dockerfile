@@ -1,50 +1,91 @@
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+# syntax=docker/dockerfile:1
+# Nanobot Docker Image - CPU Only Version
+# 🚀 Optimized for fast rebuilds with BuildKit cache and multi-stage build
 
-# Install Node.js 20 for the WhatsApp bridge
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl ca-certificates gnupg git bubblewrap openssh-client && \
-    mkdir -p /etc/apt/keyrings && \
-    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg && \
-    echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" > /etc/apt/sources.list.d/nodesource.list && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends nodejs && \
-    apt-get purge -y gnupg && \
-    apt-get autoremove -y && \
-    rm -rf /var/lib/apt/lists/*
+FROM python:3.11-slim AS base
 
 WORKDIR /app
 
-# Install Python dependencies first (cached layer)
-COPY pyproject.toml README.md LICENSE ./
-RUN mkdir -p nanobot bridge && touch nanobot/__init__.py && \
-    uv pip install --system --no-cache . && \
-    rm -rf nanobot bridge
+# Install system dependencies (rarely changes)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    git \
+    default-jre-headless \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy the full source and install
-COPY nanobot/ nanobot/
-COPY bridge/ bridge/
-RUN uv pip install --system --no-cache .
+# ===========================================
+# Stage 1: Dependencies (cached layer)
+# ===========================================
+FROM base AS dependencies
 
-# Build the WhatsApp bridge
-WORKDIR /app/bridge
-RUN git config --global --add url."https://github.com/".insteadOf ssh://git@github.com/ && \
-    git config --global --add url."https://github.com/".insteadOf git@github.com: && \
-    npm install && npm run build
-WORKDIR /app
+# Copy ONLY dependency files first (for better caching)
+COPY pyproject.toml README.md ./
+COPY nanobot/ ./nanobot/
+COPY bridge/ ./bridge/
 
-# Create non-root user and config directory
-RUN useradd -m -u 1000 -s /bin/bash nanobot && \
-    mkdir -p /home/nanobot/.nanobot && \
-    chown -R nanobot:nanobot /home/nanobot /app
+# 🚀 Install with BuildKit cache - pip packages cached locally
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install typer anthropic pydantic pydantic-settings \
+    websockets websocket-client httpx ddgs oauth-cli-kit loguru \
+    readability-lxml rich croniter dingtalk-stream python-telegram-bot \
+    lark-oapi socksio python-socketio msgpack slack-sdk slackify-markdown \
+    qq-botpy python-socks prompt-toolkit questionary mcp json-repair \
+    chardet openai tiktoken psycopg2-binary vanna[postgres] aiohttp \
+    fastapi uvicorn asyncpg
 
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN sed -i 's/\r$//' /usr/local/bin/entrypoint.sh && chmod +x /usr/local/bin/entrypoint.sh
+# 🚀 Install CPU-only PyTorch with cache (用于本地 embedding)
+# 🌟 如果没有 embedding API（OpenAI/DashScope），需要本地 torch
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --index-url https://download.pytorch.org/whl/cpu \
+    torch==2.5.1 \
+    torchvision==0.20.1
+
+# 🌟 Install LlamaParse Cloud API (替代 OpenDataLoader)
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install llama_cloud>=2.3.0
+
+# Install nanobot package itself
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install .
+
+# ===========================================
+# Stage 2: Production (minimal image)
+# ===========================================
+FROM base AS production
+
+# Copy Python packages from dependencies stage
+COPY --from=dependencies /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+
+# Copy nanobot console script
+COPY --from=dependencies /usr/local/bin/nanobot /usr/local/bin/nanobot
+
+# 🚀 Copy application code LAST (changes frequently)
+COPY nanobot/ ./nanobot/
+COPY bridge/ ./bridge/
+
+# Create config directory
+RUN mkdir -p /app/config
+
+# Create non-root user
+RUN useradd --create-home --shell /bin/bash nanobot \
+    && mkdir -p /app/.data /app/config \
+    && chown -R nanobot:nanobot /app
+
+ENV PATH="/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
 
 USER nanobot
-ENV HOME=/home/nanobot
 
-# Gateway default port
-EXPOSE 18790
+VOLUME /app/.data
 
-ENTRYPOINT ["entrypoint.sh"]
-CMD ["status"]
+EXPOSE 8080
+
+ENV NANOBOT_CONFIG=/app/config/config.json
+ENV PYTHONUNBUFFERED=1
+ENV USE_CUDA=false
+ENV TORCH_DEVICE=cpu
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+CMD ["nanobot", "gateway", "--config", "/app/config/config.json"]

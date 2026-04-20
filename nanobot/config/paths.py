@@ -4,18 +4,24 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from nanobot.config.loader import get_config_path
 from nanobot.utils.helpers import ensure_dir
+
+
+# 🌟 全局常量：统一的基础路径
+NANOBOT_HOME = Path.home() / ".nanobot"
+DEFAULT_WORKSPACE = NANOBOT_HOME / "workspace"
 
 
 def get_data_dir() -> Path:
     """Return the instance-level runtime data directory."""
+    from nanobot.config.loader import get_config_path  # 🌟 延迟导入，避免循环依赖
     return ensure_dir(get_config_path().parent)
 
 
 def get_runtime_subdir(name: str) -> Path:
     """Return a named runtime subdirectory under the instance data dir."""
-    return ensure_dir(get_data_dir() / name)
+    from nanobot.config.loader import get_config_path  # 🌟 延迟导入
+    return ensure_dir(get_config_path().parent / name)
 
 
 def get_media_dir(channel: str | None = None) -> Path:
@@ -36,27 +42,26 @@ def get_logs_dir() -> Path:
 
 def get_workspace_path(workspace: str | None = None) -> Path:
     """Resolve and ensure the agent workspace path."""
-    path = Path(workspace).expanduser() if workspace else Path.home() / ".nanobot" / "workspace"
+    path = Path(workspace).expanduser() if workspace else DEFAULT_WORKSPACE
     return ensure_dir(path)
 
 
 def is_default_workspace(workspace: str | Path | None) -> bool:
     """Return whether a workspace resolves to nanobot's default workspace path."""
-    current = Path(workspace).expanduser() if workspace is not None else Path.home() / ".nanobot" / "workspace"
-    default = Path.home() / ".nanobot" / "workspace"
-    return current.resolve(strict=False) == default.resolve(strict=False)
+    current = Path(workspace).expanduser() if workspace is not None else DEFAULT_WORKSPACE
+    return current.resolve(strict=False) == DEFAULT_WORKSPACE.resolve(strict=False)
 
 
 def get_cli_history_path() -> Path:
     """Return the shared CLI history file path."""
-    return Path.home() / ".nanobot" / "history" / "cli_history"
+    return NANOBOT_HOME / "history" / "cli_history"
 
 
 def get_bridge_install_dir() -> Path:
     """Return the shared WhatsApp bridge installation directory."""
-    return Path.home() / ".nanobot" / "bridge"
+    return NANOBOT_HOME / "bridge"
 
 
 def get_legacy_sessions_dir() -> Path:
     """Return the legacy global session directory used for migration fallback."""
-    return Path.home() / ".nanobot" / "sessions"
+    return NANOBOT_HOME / "sessions"

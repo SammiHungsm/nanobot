@@ -48,14 +48,14 @@ dependencies = [
     "chardet>=3.0.2,<6.0.0",
     "openai>=2.8.0",
     "tiktoken>=0.12.0,<1.0.0",
-    "jinja2>=3.1.0,<4.0.0",
-    "dulwich>=0.22.0,<1.0.0",
-    "pyyaml>=6.0,<7.0.0",
-    "pypdf>=5.0.0,<6.0.0",
-    "python-docx>=1.1.0,<2.0.0",
-    "openpyxl>=3.1.0,<4.0.0",
-    "python-pptx>=1.0.0,<2.0.0",
-    "filelock>=3.25.2",
+    "asyncpg>=0.29.0",
+    "psycopg2-binary>=2.9.11",
+    "vanna[postgres]>=2.0.2",
+    "lm-format-enforcer>=0.10.0",  # 强制结构化 JSON 输出
+    "json-repair>=0.57.0,<1.0.0",  # JSON 修复
+    "llama_cloud>=2.3.0", # 🌟 LlamaParse Cloud Parser
+    "PyMuPDF>=1.24.0",  # 🌟 Stage 0 截取封面（独立运行，不等待 LlamaParse）
+    "beautifulsoup4>=4.12.0",  # 🌟 HTML 表格轉換 (Stage 2)
 ]
 
 [project.optional-dependencies]

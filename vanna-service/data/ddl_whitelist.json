@@ -1,0 +1,131 @@
+{
+  "description": "DDL Whitelist for Vanna - Simplified View-Based Access (Schema v2.3+)",
+  "version": "2.3.1",
+  "philosophy": "🌟 只暴露精心設計的 Views 和核心表，避免 Vanna 精神分裂。複雜的 Graph Relation 邏輯已在 PostgreSQL 層面解決。",
+  "allowed_tables": [
+    {
+      "name": "v_companies_for_vanna",
+      "allowed_columns": [
+        "id",
+        "name_en",
+        "name_zh",
+        "stock_code",
+        "sector",
+        "primary_industry",
+        "created_at"
+      ],
+      "note": "⭐ CRITICAL: 查詢公司行業時，永遠使用此視圖。primary_industry 已自動處理雙軌制（權威優先，AI fallback）。"
+    },
+    {
+      "name": "v_documents_for_vanna",
+      "allowed_columns": [
+        "id",
+        "filename",
+        "report_type",
+        "year",
+        "processing_status",
+        "owner_company_name_en",
+        "owner_stock_code",
+        "doc_theme"
+      ],
+      "note": "⭐ CRITICAL: 查詢文檔時，永遠使用此視圖。已攤平 JSONB 並關聯母公司。"
+    },
+    {
+      "name": "v_tables_with_context_for_vanna",
+      "allowed_columns": [
+        "table_id",
+        "document_id",
+        "table_type",
+        "table_title",
+        "table_data",
+        "related_explanation",
+        "chart_page_num",
+        "explanation_page_num"
+      ],
+      "note": "⭐⭐⭐ SUPER CRITICAL: 查詢圖表及其跨頁文字解釋時，永遠使用此視圖。table_data 包含精準數字，related_explanation 包含第 50 頁的解釋。"
+    },
+    {
+      "name": "document_summary",
+      "allowed_columns": [
+        "id",
+        "filename",
+        "report_type",
+        "year",
+        "processing_status",
+        "index_theme",
+        "owner_company_name",
+        "mentioned_companies_count"
+      ],
+      "note": "文檔摘要視圖，適合快速概覽。"
+    },
+    {
+      "name": "financial_metrics",
+      "allowed_columns": [
+        "company_id",
+        "year",
+        "metric_name",
+        "value",
+        "standardized_value",
+        "unit"
+      ],
+      "note": "⭐ CRITICAL: 跨公司比較時，必須用 standardized_value（已轉換 HKD）。"
+    },
+    {
+      "name": "market_data",
+      "allowed_columns": [
+        "company_id",
+        "data_date",
+        "close_price",
+        "market_cap",
+        "pe_ratio"
+      ],
+      "note": "市場數據表。data_date 是交易日期。"
+    },
+    {
+      "name": "revenue_breakdown",
+      "allowed_columns": [
+        "company_id",
+        "year",
+        "segment_name",
+        "segment_type",
+        "revenue_percentage",
+        "revenue_amount"
+      ],
+      "note": "收入分解表。segment_type 包括 geography, business, product。"
+    },
+    {
+      "name": "companies",
+      "allowed_columns": [
+        "id",
+        "stock_code",
+        "name_en",
+        "name_zh"
+      ],
+      "note": "⚠️ 僅用於簡單查詢。行業查詢請用 v_companies_for_vanna。"
+    },
+    {
+      "name": "documents",
+      "allowed_columns": [
+        "id",
+        "filename",
+        "report_type",
+        "year"
+      ],
+      "note": "⚠️ 僅用於簡單查詢。文檔詳情請用 v_documents_for_vanna。"
+    }
+  ],
+  "forbidden_keywords": [
+    "DROP",
+    "TRUNCATE",
+    "DELETE FROM",
+    "UPDATE SET",
+    "INSERT INTO",
+    "ALTER TABLE",
+    "raw_artifacts",
+    "artifact_relations",
+    "entity_relations",
+    "document_chunks"
+  ],
+  "forbidden_tables_note": "⚠️ 這些底層表已封裝在 Views 中，Vanna 不應直接查詢：raw_artifacts, artifact_relations, entity_relations, document_chunks。複雜的 Graph Relation 邏輯已在 PostgreSQL 層面解決。",
+  "max_result_rows": 100
+}

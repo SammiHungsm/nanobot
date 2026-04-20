@@ -1,0 +1,72 @@
+# Nanobot Docker Image - GPU Version
+# Full CUDA support for GPU-accelerated ML workloads
+
+FROM python:3.11-slim AS base
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+FROM base AS dependencies
+
+# Copy requirements, README, and source code needed for hatchling build
+COPY pyproject.toml README.md ./
+COPY nanobot/ ./nanobot/
+COPY bridge/ ./bridge/
+
+# Install nanobot WITHOUT PyTorch first
+RUN pip install --no-cache-dir -e .[api] \
+    && pip install --no-cache-dir fastapi uvicorn
+
+# Install PyTorch with CUDA 12.1 support (full GPU acceleration)
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu121 \
+    torch==2.5.1 \
+    torchvision==0.20.1 \
+    torchaudio==2.5.1
+
+# Install opendataloader-pdf with GPU support
+RUN pip install --no-cache-dir opendataloader-pdf[hybrid]>=2.2.0
+
+FROM base AS production
+
+# Copy Python packages from dependencies
+COPY --from=dependencies /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=dependencies /usr/local/bin/nanobot /usr/local/bin/nanobot
+
+# Copy application code
+COPY nanobot/ ./nanobot/
+COPY bridge/ ./bridge/
+
+# Create config directory (will be mounted at runtime)
+RUN mkdir -p /app/config
+
+# Create non-root user and setup directories
+RUN useradd --create-home --shell /bin/bash nanobot \
+    && mkdir -p /app/.data /app/config \
+    && chown -R nanobot:nanobot /app
+
+USER nanobot
+
+# Data volume
+VOLUME /app/.data
+
+# Expose web interface port
+EXPOSE 8080
+
+# Set environment variables for GPU mode
+ENV NANOBOT_CONFIG=/app/config/config.yaml
+ENV PYTHONUNBUFFERED=1
+ENV USE_CUDA=true
+ENV TORCH_DEVICE=cuda
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# Run nanobot
+CMD ["nanobot", "start", "--config", "/app/config/config.yaml"]

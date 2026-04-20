@@ -1,0 +1,76 @@
+# syntax=docker/dockerfile:1
+# Nanobot Web UI - FastAPI Frontend (GPU Version)
+# 🚀 Optimized for GPU acceleration with CUDA support
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies (rarely changes, good for caching)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    poppler-utils \
+    tesseract-ocr \
+    libgl1 \
+    libglib2.0-0 \
+    default-jre-headless \
+    && rm -rf /var/lib/apt/lists/*
+
+# 🚀 Step 1: Copy requirements FIRST for better caching
+COPY webui/requirements.txt .
+
+# Install Python dependencies with BuildKit cache
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements.txt
+
+# 🚀 Step 2: Copy nanobot package (changes less frequently than webui code)
+COPY nanobot/ /tmp/nanobot/
+COPY pyproject.toml /tmp/nanobot/
+COPY README.md /tmp/nanobot/
+COPY bridge/ /tmp/nanobot/bridge/
+
+# 🌟 GPU Version: Install PyTorch with CUDA 12.4 (compatible with CUDA 12.7 driver)
+# Use cu124 index to match host NVIDIA driver 566.07 (CUDA 12.7)
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+
+# Install nanobot package with cache
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install /tmp/nanobot/
+
+# 🚀 Step 3: Copy application code LAST (changes frequently)
+COPY webui/app/ ./app/
+COPY webui/static/ ./static/
+
+# Create data directories
+RUN mkdir -p /data/pdfs /app/uploads /app/outputs
+
+# 🌟 Copy entrypoint scripts
+COPY webui/entrypoint.sh /tmp/entrypoint.sh
+COPY webui/entrypoint_delayed.sh /tmp/entrypoint_delayed.sh
+RUN chmod +x /tmp/entrypoint.sh /tmp/entrypoint_delayed.sh
+
+# Create non-root user
+RUN useradd --create-home --shell /bin/bash nanobot \
+    && chown -R nanobot:nanobot /app /data
+
+USER nanobot
+
+EXPOSE 8080
+
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
+ENV MCP_SERVER_URL=http://OpenDataLoader-mcp:3000
+ENV PDF_DATA_DIR=/data/pdfs
+ENV PDF_UPLOAD_DIR=/app/uploads
+ENV PDF_OUTPUT_DIR=/app/outputs
+# 🌟 GPU Version: Enable CUDA
+ENV USE_CUDA=true
+ENV TORCH_DEVICE=cuda
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# 🌟 Use entrypoint to start Hybrid server + WebUI (GPU version uses delayed mode)
+# Note: entrypoint files are in /tmp/, docker-compose.gpu.yml overrides this
+ENTRYPOINT ["/bin/bash", "/tmp/entrypoint_delayed.sh"]
