@@ -47,7 +47,7 @@ class Stage5VannaTraining:
         """
         logger.info(f"🎯 Stage 6: Vanna 训练...")
         
-        vanna_url = os.environ.get("VANNA_SERVICE_URL", "http://vanna-service:8000")
+        vanna_url = os.environ.get("VANNA_SERVICE_URL", "http://vanna-service:8082")
         vanna_model = os.environ.get("VANNA_MODEL", "financial-sql")
         
         training_result = {

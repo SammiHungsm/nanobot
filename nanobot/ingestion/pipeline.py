@@ -266,11 +266,46 @@ class DocumentPipeline(BaseIngestionPipeline):
             if progress_callback:
                 progress_callback(50.0, "Stage 3: Router")
             
+            # 🌟 v4.9: 路由所有目標類型，不限於 revenue_breakdown
             stage3_result = await Stage3Router.find_target_pages(
                 artifacts=artifacts,
-                target_types=["revenue_breakdown"]
+                target_types=[
+                    "revenue_breakdown",
+                    "financial_metrics",
+                    "key_personnel",
+                    "shareholding",
+                    "market_data"
+                ]
             )
             result["stages"]["stage3"] = stage3_result
+            
+            # ===== Stage 3.5: Context Builder 🌟 結構化上下文 =====
+            if progress_callback:
+                progress_callback(55.0, "Stage 3.5: Context Builder")
+            
+            from nanobot.ingestion.stages.stage3_5_context_builder import Stage3_5_ContextBuilder
+            
+            # 🌟 讀取 raw output
+            raw_output = {}
+            if parse_result and parse_result.raw_output_dir:
+                import json
+                raw_output_path = Path(parse_result.raw_output_dir) / f"{parse_result.job_id}.json"
+                if raw_output_path.exists():
+                    with open(raw_output_path, 'r', encoding='utf-8') as f:
+                        raw_output = json.load(f)
+                    logger.info(f"   ✅ 讀取 raw output: {raw_output_path}")
+            
+            # 🌟 構建結構化上下文（利用 LlamaParse items）
+            context_result = await Stage3_5_ContextBuilder.build_context(
+                raw_output=raw_output,
+                candidate_pages=stage3_result,
+                max_pages=50
+            )
+            result["stages"]["stage3_5"] = {
+                "stats": context_result.get("stats", {}),
+                "sections_count": len(context_result.get("sections", [])),
+                "tables_count": len(context_result.get("tables", []))
+            }
             
             # ===== Stage 4: Agentic Extractor 🌟 唯一的入口 =====
             if progress_callback:
@@ -286,8 +321,15 @@ class DocumentPipeline(BaseIngestionPipeline):
                 index_theme=index_theme,
                 confirmed_doc_industry=confirmed_doc_industry,
                 db_client=self.db,
-                extraction_types=["revenue_breakdown"],
-                stage3_result=stage3_result  # 🌟 v4.8: 传入 Stage 3 路由结果
+                extraction_types=[
+                    "revenue_breakdown",
+                    "financial_metrics",
+                    "key_personnel",
+                    "shareholding",
+                    "market_data"
+                ],
+                stage3_result=stage3_result,  # 🌟 v4.8: 传入 Stage 3 路由结果
+                context_result=context_result  # 🌟 v4.10: 传入 Stage 3.5 結構化上下文
             )
             result["stages"]["stage4"] = stage4_result
             
@@ -377,7 +419,9 @@ class DocumentPipeline(BaseIngestionPipeline):
             return result
             
         except Exception as e:
+            import traceback
             logger.error(f"❌ process_pdf_full 失败: {e}")
+            logger.error(f"Traceback:\n{traceback.format_exc()}")
             result["status"] = "failed"
             result["error"] = str(e)
             return result

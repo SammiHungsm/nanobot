@@ -429,7 +429,8 @@ class UpdateDocumentStatusTool(Tool):
         self,
         document_id: int,
         status: str,
-        notes: Optional[str] = None
+        notes: Optional[str] = None,
+        **kwargs  # 🌟 防弹参数：吸收 LLM 幻觉产生的多余参数
     ) -> str:
         """更新文檔狀態 (Schema v2.3: processing_status)"""
         from nanobot.ingestion.repository.db_client import DBClient
@@ -508,7 +509,8 @@ class UpdateDynamicAttributesTool(Tool):
         self,
         document_id: int,
         attributes: Dict[str, Any],
-        merge: bool = True
+        merge: bool = True,
+        **kwargs  # 🌟 防弹参数：吸收 LLM 幻觉产生的多余参数
     ) -> str:
         """
         更新動態屬性
@@ -716,7 +718,8 @@ class RegisterNewKeywordTool(Tool):
         category: str,
         keyword: str,
         confidence: str = "bronze",
-        reasoning: Optional[str] = None
+        reasoning: Optional[str] = None,
+        **kwargs  # 🌟 防弹参数：吸收 LLM 幻觉产生的多余参数
     ) -> str:
         """註冊新關鍵字"""
         from nanobot.ingestion.utils.keyword_manager import KeywordManager
@@ -850,8 +853,12 @@ class InsertKeyPersonnelTool(Tool):
     def read_only(self) -> bool:
         return False
     
-    async def execute(self, company_id: int, personnel_list: List[Dict], document_id: Optional[int] = None) -> str:
-        """写入关键人员"""
+    async def execute(self, company_id: int, personnel_list: List[Dict], document_id: Optional[int] = None, **kwargs) -> str:
+        """写入关键人员
+        
+        🌟 防弹参数：
+        - **kwargs 吸收 LLM 幻觉产生的多余参数
+        """
         from nanobot.ingestion.repository.db_client import DBClient
         
         db = DBClient()
@@ -979,28 +986,35 @@ class InsertFinancialMetricsTool(Tool):
     def read_only(self) -> bool:
         return False
     
-    async def execute(self, company_id: int, year: int, metrics: List[Dict]) -> str:
-        """写入财务指标"""
+    async def execute(self, company_id: int, year: int, metrics: List[Dict], **kwargs) -> str:
+        """写入财务指标
+        
+        🌟 防弹参数：
+        - **kwargs 吸收 LLM 幻觉产生的多余参数（如 document_id）
+        """
         from nanobot.ingestion.repository.db_client import DBClient
         
         db = DBClient()
         await db.connect()
-        # 🌟 容錯：如果 LLM 傳了 document_id，自動轉成 source_document_id
-        if "document_id" in args and "source_document_id" not in args:
-            args["source_document_id"] = args["document_id"]
-            
+        
         try:
             inserted_count = 0
+            updated_count = 0
             
             async with db.connection() as conn:
                 for metric in metrics:
-                    await conn.execute(
+                    # 🌟 使用 ON CONFLICT DO UPDATE 避免重複插入
+                    result = await conn.execute(
                         """
                         INSERT INTO financial_metrics 
                         (company_id, year, metric_name, value, unit, standardized_value, source_page)
                         VALUES ($1, $2, $3, $4, $5, $6, $7)
-                        ON CONFLICT (company_id, year, fiscal_period, metric_name)  -- 🌟 v1.2: 修正约束名（需要 fiscal_period）
-                        DO UPDATE SET value = $4, standardized_value = $6
+                        ON CONFLICT (company_id, year, fiscal_period, metric_name) 
+                        DO UPDATE SET 
+                            value = EXCLUDED.value,
+                            unit = EXCLUDED.unit,
+                            standardized_value = EXCLUDED.standardized_value,
+                            source_page = EXCLUDED.source_page
                         """,
                         company_id,
                         year,
@@ -1010,14 +1024,19 @@ class InsertFinancialMetricsTool(Tool):
                         metric.get("standardized_value"),
                         metric.get("source_page")
                     )
-                    inserted_count += 1
+                    # 检查是插入还是更新
+                    if "INSERT 0 1" in str(result):
+                        inserted_count += 1
+                    else:
+                        updated_count += 1
             
             return json.dumps({
                 "success": True,
                 "company_id": company_id,
                 "year": year,
                 "inserted_count": inserted_count,
-                "message": f"✅ 写入 {inserted_count} 个财务指标"
+                "updated_count": updated_count,
+                "message": f"✅ 寫入 {inserted_count} 個新指標，更新 {updated_count} 個現有指標"
             }, indent=2, ensure_ascii=False)
             
         except Exception as e:
@@ -1028,11 +1047,11 @@ class InsertFinancialMetricsTool(Tool):
 
 class InsertShareholdingTool(Tool):
     """
-    [Tool] 写入股东结构数据
+    [Tool] 寫入股東結構數據
     
-    Schema v2.3:
-    - shareholder_name, share_type
-    - shares_held, percentage
+    Schema v2.3 實際結構：
+    - shareholder_name, shareholder_type (不是 share_type!)
+    - shares_held, percentage, is_controlling, is_institutional
     """
     
     @property
@@ -1043,7 +1062,8 @@ class InsertShareholdingTool(Tool):
     def description(self) -> str:
         return (
             "Insert shareholding structure into shareholding_structure table. "
-            "Use this when you find shareholder names and ownership percentages."
+            "Use this when you find shareholder names and ownership percentages. "
+            "Optional fields: shareholder_type, is_controlling, is_institutional, notes."
         )
     
     @property
@@ -1059,9 +1079,14 @@ class InsertShareholdingTool(Tool):
                         "type": "object",
                         "properties": {
                             "shareholder_name": {"type": "string", "description": "Shareholder name"},
-                            "share_type": {"type": ["string", "null"], "description": "Share type (e.g., 'ordinary')"},
+                            "shareholder_type": {"type": ["string", "null"], "description": "Shareholder type (e.g., 'individual', 'corporate', 'institutional')"},
                             "shares_held": {"type": ["number", "null"], "description": "Number of shares"},
-                            "percentage": {"type": "number", "description": "Ownership percentage"}
+                            "percentage": {"type": "number", "description": "Ownership percentage"},
+                            "is_controlling": {"type": ["boolean", "null"], "description": "Is controlling shareholder"},
+                            "is_institutional": {"type": ["boolean", "null"], "description": "Is institutional investor"},
+                            "trust_name": {"type": ["string", "null"], "description": "Trust name if applicable"},
+                            "trustee_name": {"type": ["string", "null"], "description": "Trustee name if applicable"},
+                            "notes": {"type": ["string", "null"], "description": "Additional notes"}
                         },
                         "required": ["shareholder_name", "percentage"]
                     },
@@ -1075,8 +1100,11 @@ class InsertShareholdingTool(Tool):
     def read_only(self) -> bool:
         return False
     
-    async def execute(self, company_id: int, year: int, shareholders: List[Dict]) -> str:
-        """写入股东结构"""
+    async def execute(self, company_id: int, year: int, shareholders: List[Dict], **kwargs) -> str:
+        """寫入股東結構
+        
+        🌟 防彈參數：**kwargs 吸收 LLM 幻覺產生的多餘參數
+        """
         from nanobot.ingestion.repository.db_client import DBClient
         
         db = DBClient()
@@ -1090,21 +1118,30 @@ class InsertShareholdingTool(Tool):
                     await conn.execute(
                         """
                         INSERT INTO shareholding_structure 
-                        (company_id, year, shareholder_name, share_type, shares_held, percentage)
-                        VALUES ($1, $2, $3, $4, $5, $6)
+                        (company_id, year, shareholder_name, shareholder_type, shares_held, percentage,
+                         is_controlling, is_institutional, trust_name, trustee_name, notes)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                         """,
                         company_id,
                         year,
                         sh.get("shareholder_name"),
-                        sh.get("share_type"),
+                        sh.get("shareholder_type"),  # 🌟 修正：shareholder_type 不是 share_type
                         sh.get("shares_held"),
-                        sh.get("percentage")
+                        sh.get("percentage"),
+                        sh.get("is_controlling"),
+                        sh.get("is_institutional"),
+                        sh.get("trust_name"),
+                        sh.get("trustee_name"),
+                        sh.get("notes")
                     )
                     inserted_count += 1
             
             return json.dumps({
                 "success": True,
-                "inserted_count": inserted_count
+                "company_id": company_id,
+                "year": year,
+                "inserted_count": inserted_count,
+                "message": f"✅ 寫入 {inserted_count} 個股東"
             }, indent=2, ensure_ascii=False)
             
         except Exception as e:
@@ -1174,8 +1211,11 @@ class InsertRevenueBreakdownTool(Tool):
     def read_only(self) -> bool:
         return False
     
-    async def execute(self, company_id: int, year: int, segments: List[Dict], document_id: Optional[int] = None) -> str:
-        """写入收入分解"""
+    async def execute(self, company_id: int, year: int, segments: List[Dict], document_id: Optional[int] = None, **kwargs) -> str:
+        """写入收入分解
+        
+        🌟 防弹参数：**kwargs 吸收 LLM 幻觉产生的多余参数
+        """
         from nanobot.ingestion.repository.db_client import DBClient
         
         # 🌟 v1.2: 强制转换 document_id 为整数（Agent 可能传字符串）
@@ -1306,7 +1346,8 @@ class InsertEntityRelationTool(Tool):
         target_entity_type: str,
         target_entity_name: str,
         confidence_score: float = 0.8,
-        event_year: Optional[int] = None
+        event_year: Optional[int] = None,
+        **kwargs  # 🌟 防弹参数：吸收 LLM 幻觉产生的多余参数
     ) -> str:
         """写入实体关系"""
         from nanobot.ingestion.repository.db_client import DBClient
@@ -1352,15 +1393,15 @@ class InsertEntityRelationTool(Tool):
 
 class InsertMarketDataTool(Tool):
     """
-    [Tool] 写入市场数据 🌟 市场数据遗漏修复
+    [Tool] 寫入市場數據
     
     功能：
-    - 写入 market_data 表
-    - 支持 PE Ratio, Market Cap, 股价等市场指标
+    - 寫入 market_data 表
+    - 支援 PE Ratio, Market Cap, 股價等市場指標
     
-    Schema v2.3:
-    - metric_name (pe_ratio, market_cap, stock_price)
-    - value, date
+    Schema v2.3 實際結構：
+    - company_id, data_date (必填)
+    - pe_ratio, market_cap, close_price, volume 等
     """
     
     @property
@@ -1372,7 +1413,8 @@ class InsertMarketDataTool(Tool):
         return (
             "Insert market data (PE ratio, market cap, stock price) into market_data table. "
             "Use this when you find market-related figures on the first page of annual reports. "
-            "⚠️ This is different from financial_metrics (which are for revenue/profit/assets)."
+            "⚠️ This is different from financial_metrics (which are for revenue/profit/assets). "
+            "Required: company_id, data_date. Optional: pe_ratio, market_cap, close_price, volume, etc."
         )
     
     @property
@@ -1381,72 +1423,236 @@ class InsertMarketDataTool(Tool):
             "type": "object",
             "properties": {
                 "company_id": {"type": "integer", "description": "Company ID"},
-                "document_id": {"type": "integer", "description": "Source document ID"},
-                "metrics": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "metric_name": {
-                                "type": "string",
-                                "description": "Metric name (e.g., 'pe_ratio', 'market_cap', 'stock_price')"
-                            },
-                            "value": {"type": "number", "description": "Value"},
-                            "unit": {"type": ["string", "null"], "description": "Unit (e.g., 'HKD', 'billion')"},
-                            "date": {"type": ["string", "null"], "description": "Date of the data"}
-                        },
-                        "required": ["metric_name", "value"]
-                    },
-                    "description": "List of market data metrics"
-                }
+                "data_date": {"type": "string", "description": "Data date (YYYY-MM-DD format, e.g., '2023-12-31')"},
+                "period_type": {"type": ["string", "null"], "description": "Period type (e.g., 'daily', 'yearly')"},
+                "pe_ratio": {"type": ["number", "null"], "description": "Price-to-Earnings ratio"},
+                "pb_ratio": {"type": ["number", "null"], "description": "Price-to-Book ratio"},
+                "market_cap": {"type": ["number", "null"], "description": "Market capitalization"},
+                "close_price": {"type": ["number", "null"], "description": "Closing stock price"},
+                "open_price": {"type": ["number", "null"], "description": "Opening stock price"},
+                "high_price": {"type": ["number", "null"], "description": "High stock price"},
+                "low_price": {"type": ["number", "null"], "description": "Low stock price"},
+                "volume": {"type": ["integer", "null"], "description": "Trading volume"},
+                "turnover": {"type": ["number", "null"], "description": "Turnover"},
+                "dividend_yield": {"type": ["number", "null"], "description": "Dividend yield (%)"},
+                "source": {"type": ["string", "null"], "description": "Data source"}
             },
-            "required": ["company_id", "document_id", "metrics"]
+            "required": ["company_id", "data_date"]
         }
     
     @property
     def read_only(self) -> bool:
         return False
     
-    async def execute(self, company_id: int, document_id: int, metrics: List[Dict]) -> str:
-        """写入市场数据"""
+    async def execute(self, company_id: int, data_date: str, **kwargs) -> str:
+        """寫入市場數據
+        
+        🌟 防彈參數：**kwargs 吸收 LLM 幻覺產生的多餘參數
+        """
         from nanobot.ingestion.repository.db_client import DBClient
+        from datetime import datetime, date as date_type
         
         db = DBClient()
         await db.connect()
         
         try:
-            inserted_count = 0
+            # 🌟 將字串日期轉換為 date 物件
+            if isinstance(data_date, str):
+                data_date_obj = datetime.strptime(data_date, "%Y-%m-%d").date()
+            elif isinstance(data_date, date_type):
+                data_date_obj = data_date
+            else:
+                data_date_obj = date_type.today()  # Fallback
             
             async with db.connection() as conn:
-                for metric in metrics:
-                    await conn.execute(
-                        """
-                        INSERT INTO market_data 
-                        (company_id, document_id, metric_name, value, unit, date)
-                        VALUES ($1, $2, $3, $4, $5, $6)
-                        """,
-                        company_id,
-                        document_id,
-                        metric.get("metric_name"),
-                        metric.get("value"),
-                        metric.get("unit"),
-                        metric.get("date")
-                    )
-                    inserted_count += 1
+                await conn.execute(
+                    """
+                    INSERT INTO market_data 
+                    (company_id, data_date, period_type, pe_ratio, pb_ratio, market_cap,
+                     close_price, open_price, high_price, low_price, volume, turnover,
+                     dividend_yield, source)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                    """,
+                    company_id,
+                    data_date_obj,  # 🌟 使用 date 物件
+                    kwargs.get("period_type"),
+                    kwargs.get("pe_ratio"),
+                    kwargs.get("pb_ratio"),
+                    kwargs.get("market_cap"),
+                    kwargs.get("close_price"),
+                    kwargs.get("open_price"),
+                    kwargs.get("high_price"),
+                    kwargs.get("low_price"),
+                    kwargs.get("volume"),
+                    kwargs.get("turnover"),
+                    kwargs.get("dividend_yield"),
+                    kwargs.get("source")
+                )
             
-            logger.info(f"✅ 写入 {inserted_count} 个市场数据指标")
+            logger.info(f"✅ 寫入市場數據: company_id={company_id}, date={data_date}")
             
             return json.dumps({
                 "success": True,
-                "inserted_count": inserted_count,
-                "message": f"✅ 写入 {inserted_count} 个市场数据到 market_data 表"
+                "company_id": company_id,
+                "data_date": data_date,
+                "message": f"✅ 成功寫入市場數據"
             }, indent=2, ensure_ascii=False)
             
         except Exception as e:
-            logger.error(f"❌ 写入市场数据失败: {e}")
+            logger.error(f"❌ 寫入市場數據失敗: {e}")
             return json.dumps({"success": False, "error": str(e)}, indent=2)
         finally:
             await db.close()
+
+
+class ExtractShareholdersFromTextTool(Tool):
+    """
+    [Tool] 從文本中提取股東結構
+    
+    🌟 專門用於處理年報中非結構化的股東信息
+    
+    使用場景：
+    - 董事報告中嘅持股信息
+    - 關聯方交易描述
+    - "Substantial Shareholders" 章節
+    """
+    
+    @property
+    def name(self) -> str:
+        return "extract_shareholders_from_text"
+    
+    @property
+    def description(self) -> str:
+        return (
+            "Extract shareholder information from unstructured text in annual reports. "
+            "Use this when shareholding_structure table is empty after normal extraction. "
+            "Returns structured shareholder data ready for insert_shareholding."
+        )
+    
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "text_content": {
+                    "type": "string",
+                    "description": "Text content containing shareholder information"
+                },
+                "company_id": {"type": "integer", "description": "Company ID"},
+                "year": {"type": "integer", "description": "Year"},
+                "document_id": {"type": "integer", "description": "Document ID"}
+            },
+            "required": ["text_content", "company_id", "year"]
+        }
+    
+    @property
+    def parameters_schema(self) -> dict[str, Any]:
+        return self.parameters
+    
+    async def execute(
+        self,
+        text_content: str,
+        company_id: int,
+        year: int,
+        document_id: int = None,
+        **kwargs
+    ) -> str:
+        """從文本中提取股東信息"""
+        from nanobot.core.llm_core import llm_core
+        
+        extraction_prompt = f"""
+請從以下年報文本中提取股東結構數據：
+
+{text_content[:10000]}
+
+提取要求：
+1. 識別所有提及的股東（個人、公司、機構）
+2. 提取持股數量和比例
+3. 標注股東類型：
+   - Executive Director（執行董事）
+   - Non-Executive Director（非執行董事）
+   - Independent Non-Executive Director（獨立非執行董事）
+   - Substantial Shareholder（主要股東，>5%）
+   - Institutional Investor（機構投資者）
+
+輸出 JSON 格式：
+{{
+  "shareholders": [
+    {{
+      "shareholder_name": "姓名",
+      "shareholder_type": "類型",
+      "shares_held": 持股數量,
+      "percentage": 持股比例,
+      "is_controlling": true/false,
+      "is_institutional": true/false,
+      "notes": "備註"
+    }}
+  ]
+}}
+
+⚠️ 只返回 JSON，不要其他內容。
+"""
+        
+        try:
+            response = await llm_core.chat(extraction_prompt, model="z-ai/glm4.7")
+            
+            # 解析 LLM 響應
+            import json
+            import re
+            
+            # 提取 JSON
+            json_match = re.search(r'\{[\s\S]*\}', response)
+            if json_match:
+                result = json.loads(json_match.group())
+                shareholders = result.get("shareholders", [])
+                
+                if shareholders:
+                    # 自動調用 insert_shareholding
+                    from nanobot.ingestion.repository.db_client import DBClient
+                    
+                    db = DBClient()
+                    await db.connect()
+                    
+                    inserted = 0
+                    async with db.connection() as conn:
+                        for sh in shareholders:
+                            try:
+                                await conn.execute(
+                                    """
+                                    INSERT INTO shareholding_structure 
+                                    (company_id, document_id, year, shareholder_name, shareholder_type,
+                                     shares_held, percentage, is_controlling, is_institutional, notes)
+                                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                                    """,
+                                    company_id,
+                                    document_id,
+                                    year,
+                                    sh.get("shareholder_name"),
+                                    sh.get("shareholder_type"),
+                                    sh.get("shares_held"),
+                                    sh.get("percentage"),
+                                    sh.get("is_controlling"),
+                                    sh.get("is_institutional"),
+                                    sh.get("notes")
+                                )
+                                inserted += 1
+                            except Exception as e:
+                                logger.warning(f"插入股東失敗: {e}")
+                    
+                    await db.close()
+                    
+                    return json.dumps({
+                        "success": True,
+                        "extracted_count": len(shareholders),
+                        "inserted_count": inserted,
+                        "shareholders": shareholders[:5]  # 只返回前 5 個
+                    }, indent=2, ensure_ascii=False)
+            
+            return json.dumps({"success": False, "error": "無法解析股東信息"}, indent=2)
+            
+        except Exception as e:
+            logger.error(f"❌ 提取股東失敗: {e}")
+            return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
 class CleanupLowPerformanceKeywordsTool(Tool):
@@ -1575,7 +1781,7 @@ class GetKeywordContextTool(Tool):
     def read_only(self) -> bool:
         return True
     
-    async def execute(self, keyword: str, category: Optional[str] = None) -> str:
+    async def execute(self, keyword: str, category: Optional[str] = None, **kwargs) -> str:
         """獲取上下文"""
         from nanobot.ingestion.utils.keyword_manager import KeywordManager
         
@@ -1630,7 +1836,7 @@ class SearchDocumentPagesTool(Tool):
     def read_only(self) -> bool:
         return True
     
-    async def execute(self, document_id: int, keywords: List[str], limit: int = 10) -> str:
+    async def execute(self, document_id: int, keywords: List[str], limit: int = 10, **kwargs) -> str:
         """搜索包底库"""
         from nanobot.ingestion.repository.db_client import DBClient
         db = DBClient()
@@ -1694,7 +1900,9 @@ class BackfillFromFallbackTool(Tool):
         return False
     
     async def execute(self, company_id: int, year: int, document_id: int, page_num: int, 
-                      data_type: str, extracted_data: Dict, new_keyword: Optional[str] = None) -> str:
+                      data_type: str, extracted_data: Dict, new_keyword: Optional[str] = None,
+                      **kwargs  # 🌟 防弹参数：吸收 LLM 幻觉产生的多余参数
+    ) -> str:
         """回填数据"""
         from nanobot.ingestion.repository.db_client import DBClient
         from nanobot.ingestion.utils.keyword_manager import KeywordManager
@@ -1779,12 +1987,12 @@ class BackfillFromFallbackTool(Tool):
                         await conn.execute(
                             """
                             INSERT INTO shareholding_structure 
-                            (company_id, year, shareholder_name, share_type, shares_held, 
+                            (company_id, year, shareholder_name, shareholder_type, shares_held, 
                              percentage, source_document_id)
                             VALUES ($1, $2, $3, $4, $5, $6, $7)
                             """,
                             company_id, year, shareholder_name,
-                            data.get("share_type"),
+                            data.get("shareholder_type"),  # 🌟 修正：shareholder_type
                             data.get("shares_held"),
                             data.get("percentage"),
                             document_id

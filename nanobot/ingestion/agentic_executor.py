@@ -193,9 +193,18 @@ class AgenticExecutor:
                 model=self.model
             )
             
+            # 🌟 Debug: 记录 LLM 响应状态
+            logger.debug(f"   📨 LLM Response: has_tool_calls={response.has_tool_calls}, finish_reason={response.finish_reason}")
+            if response.content:
+                logger.debug(f"   📝 Content preview: {response.content[:200]}...")
+            if response.tool_calls:
+                logger.debug(f"   🔧 Tool calls: {[tc.name for tc in response.tool_calls]}")
+            
             # 🌟 如果没有 Tool Calls，返回结果
             if not response.has_tool_calls:
                 logger.info(f"✅ Agentic Workflow 完成 (iterations={iterations})")
+                logger.debug(f"   📝 LLM Response (no tool_calls): {response.content[:500] if response.content else 'None'}...")
+                logger.debug(f"   🏁 Finish Reason: {response.finish_reason}")
                 return {
                     "content": response.content,
                     "tool_calls": all_tool_calls,

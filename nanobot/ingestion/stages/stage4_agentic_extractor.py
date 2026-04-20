@@ -64,6 +64,7 @@ class Stage4AgenticExtractor:
             InsertRevenueBreakdownTool,  # 🆕 致命遗漏修复
             InsertEntityRelationTool,    # 🆕 知识图谱修复
             InsertMarketDataTool,        # 🆕 市场数据修复
+            ExtractShareholdersFromTextTool,  # 🆕 v4.11: 專門提取股東
             SearchDocumentPagesTool,
             BackfillFromFallbackTool,
             InsertArtifactRelationTool
@@ -84,6 +85,7 @@ class Stage4AgenticExtractor:
             InsertRevenueBreakdownTool,  # 🆕
             InsertEntityRelationTool,    # 🆕
             InsertMarketDataTool,        # 🆕
+            ExtractShareholdersFromTextTool,  # 🆕 v4.11
             SearchDocumentPagesTool,     # 🌟 Continuous Learning
             BackfillFromFallbackTool,    # 🌟 Continuous Learning
         ]
@@ -103,20 +105,20 @@ class Stage4AgenticExtractor:
         db_client: Any = None,
         extraction_types: List[str] = None,
         progress_callback: Any = None,
-        stage3_result: Dict[str, Any] = None  # 🌟 v4.8: Stage 3 路由结果
+        stage3_result: Dict[str, Any] = None,  # 🌟 v4.8: Stage 3 路由结果
+        context_result: Dict[str, Any] = None  # 🌟 v4.10: Stage 3.5 結構化上下文
     ) -> Dict[str, Any]:
         """
-        🌟 Agentic 多表写入（v4.8 - 使用 Stage 3 路由结果）
+        🌟 Agentic 多表写入（v4.10 - 使用結構化上下文）
         
         根据文档类型使用不同的写入策略：
         - 指数报告（规则 A）：所有成分股指派同一行业
         - 年报（规则 B）：AI 提取各公司行业
         
-        🌟 v4.8 新特性：
-        - 使用 Stage 3 的路由结果，优先传入候选页面
-        - LLM 自己决定调用哪个 Tool
-        - 支持 Continuous Learning Loop
-        - 自动搜索包底库找遗漏数据
+        🌟 v4.10 新特性：
+        - 使用 Stage 3.5 的結構化上下文（章節樹、表格上下文）
+        - Agent 不再需要同時做「理解文檔」和「提取數據」
+        - 表格帶有所屬章節、附近文本等上下文信息
         
         Args:
             artifacts: Artifacts 列表
@@ -131,6 +133,7 @@ class Stage4AgenticExtractor:
             extraction_types: 提取类型
             progress_callback: 进度回调
             stage3_result: Stage 3 路由结果（包含候选页面）
+            context_result: Stage 3.5 結構化上下文（章節樹、表格上下文）
             
         Returns:
             Dict: 写入结果
@@ -260,63 +263,118 @@ Step 5: 完成
 开始执行！
 """
         
-        # 🌟 v4.8: 智能选择候选页面内容
-        # 优先使用 Stage 3 的路由结果，而不是固定的前 20 页
-        candidate_pages = {}
-        
-        if stage3_result:
-            # 从 Stage 3 结果中提取候选页面
-            for data_type, pages in stage3_result.items():
-                if isinstance(pages, list) and pages:
-                    candidate_pages[data_type] = pages
-                    logger.info(f"   📍 Stage 3 路由结果: {data_type} -> {len(pages)} 个候选页面")
-        
-        # 🌟 构建内容文本
-        content_parts = []
-        
-        if candidate_pages:
-            # 方案 A: 使用 Stage 3 候选页面
-            logger.info(f"   🎯 使用 Stage 3 候选页面构建内容...")
+        # 🌟 v4.10: 使用結構化上下文構建內容
+        # 如果有 Stage 3.5 上下文，使用結構化信息
+        if context_result:
+            logger.info(f"   🏗️ 使用 Stage 3.5 結構化上下文...")
             
-            # 收集所有候选页面编号
-            all_candidate_page_nums = set()
-            for pages in candidate_pages.values():
-                all_candidate_page_nums.update(pages)
+            from nanobot.ingestion.stages.stage3_5_context_builder import Stage3_5_ContextBuilder
             
-            # 按页码排序，限制最多 50 页
-            sorted_pages = sorted(all_candidate_page_nums)[:50]
-            logger.info(f"   📄 候选页面: {sorted_pages[:10]}... (共 {len(sorted_pages)} 页)")
+            # 格式化上下文
+            context_text = Stage3_5_ContextBuilder.format_context_for_llm(context_result)
             
-            # 提取这些页面的内容
-            for page_num in sorted_pages:
-                if page_num <= len(artifacts):
-                    artifact = artifacts[page_num - 1]  # 页码从 1 开始
+            # 提取按類型分組的內容
+            content_by_type = context_result.get("content_by_type", {})
+            
+            # 構建結構化提示
+            user_message = f"""
+請分析以下 PDF 內容，提取數據並寫入數據庫：
+
+{context_text}
+
+## 📄 詳細內容（按數據類型分組）
+
+"""
+            
+            # 添加每個類型的表格信息
+            for data_type, type_data in content_by_type.items():
+                tables = type_data.get("tables", [])
+                if tables:
+                    user_message += f"\n### {data_type.upper()} 表格\n\n"
+                    for i, tbl in enumerate(tables[:3]):  # 每類最多 3 個表格
+                        user_message += f"**Table {i+1} @ Page {tbl['page_num']} - Section: {tbl.get('section_title', 'N/A')}**\n\n"
+                        user_message += tbl.get("md", "")[:2000]  # 限制每個表格 2000 字符
+                        user_message += "\n\n"
+            
+            user_message += f"""
+公司 ID: {company_id}
+年份: {year}
+文檔 ID: {document_id}
+
+🌟 **重要執行規則：**
+
+1. **直接調用 insert_* Tools**，不要只是搜索！
+2. 上面已經按數據類型分組好表格，請逐一處理：
+   - REVENUE_BREAKDOWN 表格 → 調用 insert_revenue_breakdown
+   - FINANCIAL_METRICS 表格 → 調用 insert_financial_metrics
+   - KEY_PERSONNEL 表格 → 調用 insert_key_personnel
+   - SHAREHOLDING 表格 → 調用 insert_shareholding
+   - MARKET_DATA 表格 → 調用 insert_market_data
+
+3. **不要重複搜索**，上面已經提供表格內容
+4. **每個數據類型至少調用一次 insert Tool**
+
+⚠️ 如果你只搜索而不插入數據，任務將失敗！
+
+請開始執行！
+"""
+        else:
+            # 🌟 v4.8: Fallback - 智能選擇候選頁面內容
+            candidate_pages = {}
+            
+            if stage3_result:
+                # 从 Stage 3 结果中提取候选页面
+                for data_type, pages in stage3_result.items():
+                    if isinstance(pages, list) and pages:
+                        candidate_pages[data_type] = pages
+                        logger.info(f"   📍 Stage 3 路由结果: {data_type} -> {len(pages)} 个候选页面")
+            
+            # 🌟 构建内容文本
+            content_parts = []
+            
+            if candidate_pages:
+                # 方案 A: 使用 Stage 3 候选页面
+                logger.info(f"   🎯 使用 Stage 3 候选页面构建内容...")
+                
+                # 收集所有候选页面编号
+                all_candidate_page_nums = set()
+                for pages in candidate_pages.values():
+                    all_candidate_page_nums.update(pages)
+                
+                # 按页码排序，限制最多 50 页
+                sorted_pages = sorted(all_candidate_page_nums)[:50]
+                logger.info(f"   📄 候选页面: {sorted_pages[:10]}... (共 {len(sorted_pages)} 页)")
+                
+                # 提取这些页面的内容
+                for page_num in sorted_pages:
+                    if page_num <= len(artifacts):
+                        artifact = artifacts[page_num - 1]  # 页码从 1 开始
+                        content = artifact.get("content", "") or artifact.get("markdown", "") or ""
+                        if content:
+                            content_parts.append(f"=== 第 {page_num} 页 ===\n{content}")
+                
+                # 构建路由提示
+                routing_hint = "\n".join([
+                    f"- {data_type}: 第 {', '.join(map(str, pages[:10]))} 页..."
+                    for data_type, pages in candidate_pages.items()
+                ])
+            else:
+                # 方案 B: Fallback 到前 20 页
+                logger.info(f"   ⚠️ 没有 Stage 3 路由结果，使用前 20 页...")
+                for i, artifact in enumerate(artifacts[:20]):
                     content = artifact.get("content", "") or artifact.get("markdown", "") or ""
                     if content:
-                        content_parts.append(f"=== 第 {page_num} 页 ===\n{content}")
+                        content_parts.append(f"=== 第 {i + 1} 页 ===\n{content}")
+                routing_hint = "（没有路由提示，请自行分析）"
             
-            # 构建路由提示
-            routing_hint = "\n".join([
-                f"- {data_type}: 第 {', '.join(map(str, pages[:10]))} 页..."
-                for data_type, pages in candidate_pages.items()
-            ])
-        else:
-            # 方案 B: Fallback 到前 20 页
-            logger.info(f"   ⚠️ 没有 Stage 3 路由结果，使用前 20 页...")
-            for i, artifact in enumerate(artifacts[:20]):
-                content = artifact.get("content", "") or artifact.get("markdown", "") or ""
-                if content:
-                    content_parts.append(f"=== 第 {i + 1} 页 ===\n{content}")
-            routing_hint = "（没有路由提示，请自行分析）"
-        
-        # 合并内容，限制总长度
-        content_text = "\n\n".join(content_parts)
-        if len(content_text) > 50000:  # 增加到 50000 字符
-            content_text = content_text[:50000] + "\n\n... (内容已截断)"
-        
-        # 🌟 构建用户消息
-        if candidate_pages:
-            user_message = f"""
+            # 合并内容，限制总长度
+            content_text = "\n\n".join(content_parts)
+            if len(content_text) > 50000:  # 增加到 50000 字符
+                content_text = content_text[:50000] + "\n\n... (内容已截断)"
+            
+            # 🌟 构建用户消息
+            if candidate_pages:
+                user_message = f"""
 请分析以下 PDF 内容，提取数据并写入数据库：
 
 📌 Stage 3 路由提示（重点页面）：
@@ -336,11 +394,15 @@ PDF 内容（候选页面）：
    - revenue_breakdown（收入分解）→ insert_revenue_breakdown
    - financial_metrics（财务指标）→ insert_financial_metrics
    - key_personnel（关键人员）→ insert_key_personnel
+   - shareholding（股东结构）→ insert_shareholding
+   - market_data（市场数据）→ insert_market_data
+
+⚠️ 必须调用所有相关 Tool！不要遗漏任何数据类型！
 
 请开始执行！
 """
-        else:
-            user_message = f"""
+            else:
+                user_message = f"""
 请分析以下 PDF 内容，提取数据并写入数据库：
 
 PDF 内容：
@@ -352,11 +414,12 @@ PDF 内容：
 
 请开始执行！
 """
+
         
         # 🌟 创建 AgenticExecutor
         executor = AgenticExecutor(
             tools_registry=tools_registry,
-            max_iterations=15,
+            max_iterations=40,  # 🌟 v4.11: 增加到 40 以支持更多 Tool 调用
             model=llm_core.default_model
         )
         
