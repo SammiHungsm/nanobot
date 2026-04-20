@@ -16,6 +16,15 @@ import json
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass, field
 from loguru import logger
+from pathlib import Path
+
+# 🌟 v4.13: PyMuPDF TOC Fallback
+try:
+    import pymupdf
+    PYMUPDF_AVAILABLE = True
+except ImportError:
+    PYMUPDF_AVAILABLE = False
+    logger.warning("⚠️ PyMuPDF not available, TOC fallback will be disabled")
 
 
 @dataclass
@@ -56,7 +65,8 @@ class Stage3_5_ContextBuilder:
         cls,
         raw_output: Dict[str, Any],
         candidate_pages: Dict[str, List[int]],
-        max_pages: int = 50
+        max_pages: int = 50,
+        pdf_path: str = None  # 🌟 v4.13: 用於 PyMuPDF TOC Fallback
     ) -> Dict[str, Any]:
         """
         構建結構化上下文
@@ -65,6 +75,7 @@ class Stage3_5_ContextBuilder:
             raw_output: LlamaParse raw output
             candidate_pages: Stage 3 路由結果 {data_type: [page_nums]}
             max_pages: 最大處理頁數
+            pdf_path: PDF 文件路徑（用於 PyMuPDF TOC Fallback）
             
         Returns:
             {
@@ -134,6 +145,27 @@ class Stage3_5_ContextBuilder:
                         "bbox": item.get("bbox", [])
                     })
         
+        # 🌟 v4.13: TOC Fallback - 如果 LlamaParse headings 太少，使用 PyMuPDF
+        if len(all_headings) < 5:  # 少於 5 個 heading 就啟用 Fallback
+            logger.warning(f"   ⚠️ LlamaParse headings 過少 ({len(all_headings)}), 啟用 PyMuPDF TOC Fallback...")
+            
+            # 嘗試從 PDF 提取原生書籤
+            if pdf_path and Path(pdf_path).exists():
+                toc_headings = cls._extract_toc_from_pdf(pdf_path)
+                
+                if toc_headings:
+                    all_headings = toc_headings
+                    logger.info(f"   ✅ 使用 PyMuPDF TOC: {len(all_headings)} 個書籤")
+                else:
+                    # 最後手段：字體大小推斷
+                    logger.warning("   ⚠️ PyMuPDF TOC 為空，嘗試字體大小推斷...")
+                    font_headings = cls._infer_headings_from_font_size(pdf_path, sorted_pages)
+                    if font_headings:
+                        all_headings = font_headings
+                        logger.info(f"   ✅ 使用字體推斷: {len(all_headings)} 個標題")
+            else:
+                logger.warning(f"   ⚠️ PDF 路徑無效或未提供: {pdf_path}")
+        
         logger.info(f"   📊 提取: {len(all_headings)} headings, {len(all_tables)} tables, {len(all_images)} images")
         
         # 3. 構建章節樹
@@ -168,6 +200,116 @@ class Stage3_5_ContextBuilder:
         logger.info(f"   ✅ 上下文構建完成: {len(sections)} 章節, {len(tables_with_context)} 帶上下文表格")
         
         return result
+    
+    @classmethod
+    def _extract_toc_from_pdf(cls, pdf_path: str) -> List[Dict]:
+        """
+        🌟 v4.13: 使用 PyMuPDF 提取 PDF 原生書籤 (TOC)
+        
+        Fallback 策略：
+        1. 優先使用 LlamaParse 的 heading items
+        2. 如果 headings 太少，使用 PyMuPDF 提取 PDF 原生書籤
+        
+        Args:
+            pdf_path: PDF 文件路徑
+            
+        Returns:
+            List[Dict]: [{"page_num": int, "level": int, "title": str}]
+        """
+        if not PYMUPDF_AVAILABLE:
+            logger.warning("⚠️ PyMuPDF not available, skipping TOC extraction")
+            return []
+        
+        try:
+            doc = pymupdf.open(pdf_path)
+            toc = doc.get_toc()  # [[level, title, page_num], ...]
+            doc.close()
+            
+            headings = []
+            for item in toc:
+                level, title, page_num = item[0], item[1], item[2]
+                headings.append({
+                    "page_num": int(page_num),
+                    "level": level,
+                    "title": title,
+                    "md": f"{'#' * level} {title}"
+                })
+            
+            logger.info(f"   📑 PyMuPDF TOC 提取: {len(headings)} 個書籤")
+            return headings
+            
+        except Exception as e:
+            logger.warning(f"⚠️ PyMuPDF TOC 提取失敗: {e}")
+            return []
+    
+    @classmethod
+    def _infer_headings_from_font_size(cls, pdf_path: str, pages: List[int]) -> List[Dict]:
+        """
+        🌟 v4.13: 使用字體大小推斷標題層級（最後手段）
+        
+        啟發式規則：
+        - 字體大小 > 16px → level 1 (主標題)
+        - 字體大小 14-16px → level 2 (副標題)
+        - 字體大小 12-14px → level 3 (小標題)
+        
+        Args:
+            pdf_path: PDF 文件路徑
+            pages: 頁碼列表
+            
+        Returns:
+            List[Dict]: [{"page_num": int, "level": int, "title": str}]
+        """
+        if not PYMUPDF_AVAILABLE:
+            return []
+        
+        try:
+            doc = pymupdf.open(pdf_path)
+            headings = []
+            
+            for page_num in pages:
+                if page_num > len(doc):
+                    continue
+                    
+                page = doc[page_num - 1]  # 0-indexed
+                blocks = page.get_text("dict")["blocks"]
+                
+                for block in blocks:
+                    if "lines" not in block:
+                        continue
+                        
+                    for line in block["lines"]:
+                        for span in line["spans"]:
+                            font_size = span["size"]
+                            text = span["text"].strip()
+                            
+                            # 過濾太短或太長的文本
+                            if len(text) < 3 or len(text) > 100:
+                                continue
+                            
+                            # 判斷層級
+                            level = None
+                            if font_size >= 16:
+                                level = 1
+                            elif font_size >= 14:
+                                level = 2
+                            elif font_size >= 12:
+                                level = 3
+                            
+                            if level:
+                                headings.append({
+                                    "page_num": page_num,
+                                    "level": level,
+                                    "title": text,
+                                    "md": f"{'#' * level} {text}"
+                                })
+            
+            doc.close()
+            logger.info(f"   📝 字體大小推斷: {len(headings)} 個候選標題")
+            return headings
+            
+        except Exception as e:
+            logger.warning(f"⚠️ 字體大小推斷失敗: {e}")
+            return []
     
     @classmethod
     def _build_section_tree(

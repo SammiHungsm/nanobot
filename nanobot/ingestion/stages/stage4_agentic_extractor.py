@@ -65,11 +65,9 @@ class Stage4AgenticExtractor:
             InsertEntityRelationTool,    # 🆕 知识图谱修复
             InsertMarketDataTool,        # 🆕 市场数据修复
             ExtractShareholdersFromTextTool,  # 🆕 v4.11: 專門提取股東
-            InsertMentionedCompanyTool,  # 🆕 v4.12: 提及公司
-            SearchDocumentPagesTool,
-            BackfillFromFallbackTool,
-            InsertArtifactRelationTool
+            InsertMentionedCompanyTool  # 🆕 v4.12: 提及公司
         )
+        # ❌ 移除 InsertArtifactRelationTool - Agent 无法看到 UUID，改用 entity_resolver.py 的 Regex 处理
         
         # 🌟 构建 Tools Registry
         tool_classes = [
@@ -336,7 +334,7 @@ Step 5: 完成
    [ ] 關鍵人員 (insert_key_personnel) - 💡 提示：常出現在「董事及高級管理層」文字段落中
    [ ] 股東結構 (insert_shareholding 或 ExtractShareholdersFromTextTool)
    [ ] 市場數據 (insert_market_data)
-   [ ] 提及的其他公司 (insert_mentioned_company) - 💡 提示：在純文字段落中尋找子公司、收購對象或合作夥伴
+   [ ] 提及的其他公司 (insert_mentioned_company) - 💡 **主動狩獵模式**：子公司和聯營公司通常在文件較後方（可能在第 100+ 頁的「附註」中）。如果你在目前的文本中找不到，【必須】呼叫 `search_document_pages` 工具，搜尋關鍵字如 "subsidiary", "joint venture", "associate", "附屬公司", "聯營公司", "子公司"，然後再提取！
 
 3. **不要重複搜索**，請善用上面已經提供的上下文內容。
 

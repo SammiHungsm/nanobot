@@ -299,7 +299,8 @@ class DocumentPipeline(BaseIngestionPipeline):
             context_result = await Stage3_5_ContextBuilder.build_context(
                 raw_output=raw_output,
                 candidate_pages=stage3_result,
-                max_pages=50
+                max_pages=50,
+                pdf_path=str(pdf_path)  # 🌟 v4.13: 用於 PyMuPDF TOC Fallback
             )
             result["stages"]["stage3_5"] = {
                 "stats": context_result.get("stats", {}),
