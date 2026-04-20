@@ -65,6 +65,7 @@ class Stage4AgenticExtractor:
             InsertEntityRelationTool,    # 🆕 知识图谱修复
             InsertMarketDataTool,        # 🆕 市场数据修复
             ExtractShareholdersFromTextTool,  # 🆕 v4.11: 專門提取股東
+            InsertMentionedCompanyTool,  # 🆕 v4.12: 提及公司
             SearchDocumentPagesTool,
             BackfillFromFallbackTool,
             InsertArtifactRelationTool
@@ -86,6 +87,7 @@ class Stage4AgenticExtractor:
             InsertEntityRelationTool,    # 🆕
             InsertMarketDataTool,        # 🆕
             ExtractShareholdersFromTextTool,  # 🆕 v4.11
+            InsertMentionedCompanyTool,  # 🆕 v4.12
             SearchDocumentPagesTool,     # 🌟 Continuous Learning
             BackfillFromFallbackTool,    # 🌟 Continuous Learning
         ]
@@ -173,13 +175,14 @@ class Stage4AgenticExtractor:
 6. insert_revenue_breakdown - 写入收入分解 🌟 新增！（按地区/业务划分）
 7. insert_entity_relation - 写入实体关系 🌟 新增！（知识图谱）
 8. insert_market_data - 写入市场数据 🌟 新增！（PE、市值、股价）
-9. register_new_keyword - 注册新关键词（发现特殊标题时使用）
-10. search_document_pages - 搜索包底库找遗漏数据（🌟 关键！）
-11. backfill_from_fallback - 回填数据到结构化表
-12. update_dynamic_attributes - 更新 JSONB 动态属性（🌟 新字段用这个！）
-13. update_document_status - 更新文档状态
-14. create_review_record - 创建审核记录（不确定时使用）
-15. insert_artifact_relation - 写入跨模态图文关联 🌟 新增！（图表与文字解释）
+9. insert_mentioned_company - 写入提及的其他公司 🆕 v4.12！（子公司、对手、合作伙伴）
+10. register_new_keyword - 注册新关键词（发现特殊标题时使用）
+11. search_document_pages - 搜索包底库找遗漏数据（🌟 关键！）
+12. backfill_from_fallback - 回填数据到结构化表
+13. update_dynamic_attributes - 更新 JSONB 动态属性（🌟 新字段用这个！）
+14. update_document_status - 更新文档状态
+15. create_review_record - 创建审核记录（不确定时使用）
+16. insert_artifact_relation - 写入跨模态图文关联 🌟 新增！（图表与文字解释）
 
 🌟 执行流程（必须严格遵守）：
 
@@ -224,12 +227,17 @@ Step 3: 动态写入 🌟 关键！（选择正确的 Tool）
    → 使用 insert_entity_relation
    → 例如：「张三是腾讯CEO」、「A公司收购B公司」
 
-7️⃣ 自定义字段（Schema 没有的）🆕
+7️⃣ 提及的其他公司（子公司、竞争对手、合作伙伴）🆕 v4.12
+   → 使用 insert_mentioned_company
+   → 例子：「本集团下辖子公司 ABC Limited」、「我们的竞争对手 XYZ Corp」
+   → relation_type 可选: subsidiary, competitor, partner, investor, customer, mentioned
+
+8️⃣ 自定义字段（Schema 没有的）🆕
    → 使用 update_dynamic_attributes
    → 例如：环保评分、ESG 指标、特殊披露
    → 存入 JSONB，无需 ALTER TABLE
 
-8️⃣ 发现图表与文字解释的关联 🆕
+9️⃣ 发现图表与文字解释的关联 🆕
    → 使用 insert_artifact_relation
    → 必须提供图表的 artifact_id (source) 和文字段落的 artifact_id (target)
    → 例如：「第 50 页的文字在解释第 5 页的图表」
@@ -289,30 +297,54 @@ Step 5: 完成
             # 添加每個類型的表格信息
             for data_type, type_data in content_by_type.items():
                 tables = type_data.get("tables", [])
+                texts = type_data.get("texts", [])  # 🆕 獲取對應的文字段落
+                
                 if tables:
                     user_message += f"\n### {data_type.upper()} 表格\n\n"
-                    for i, tbl in enumerate(tables[:3]):  # 每類最多 3 個表格
+                    # 🌟 放寬到 8 個表格，每個表格 3000 字符
+                    for i, tbl in enumerate(tables[:8]):  # 放寬到 8 個
                         user_message += f"**Table {i+1} @ Page {tbl['page_num']} - Section: {tbl.get('section_title', 'N/A')}**\n\n"
-                        user_message += tbl.get("md", "")[:2000]  # 限制每個表格 2000 字符
+                        user_message += tbl.get("md", "")[:3000]  # 放寬到 3000 字符
                         user_message += "\n\n"
+                
+                # 🌟 新增：針對 key_personnel 和 shareholding 強制注入文字段落
+                if data_type in ["key_personnel", "shareholding"]:
+                    if texts:
+                        user_message += f"\n### {data_type.upper()} 相關文字段落 🆕\n\n"
+                        user_message += "⚠️ 以下係純文字內容，可能包含董事名單、股東信息等。請仔細閱讀並提取！\n\n"
+                        for i, txt in enumerate(texts[:5]):
+                            user_message += f"**Text {i+1} @ Page {txt.get('page_num', 'N/A')}**\n"
+                            user_message += txt.get("content", "")[:2000]
+                            user_message += "\n\n"
             
             user_message += f"""
 公司 ID: {company_id}
 年份: {year}
 文檔 ID: {document_id}
 
-🌟 **重要執行規則：**
+🌟 **重要執行規則 (嚴格遵守)：**
 
-1. **直接調用 insert_* Tools**，不要只是搜索！
-2. 上面已經按數據類型分組好表格，請逐一處理：
-   - REVENUE_BREAKDOWN 表格 → 調用 insert_revenue_breakdown
-   - FINANCIAL_METRICS 表格 → 調用 insert_financial_metrics
-   - KEY_PERSONNEL 表格 → 調用 insert_key_personnel
-   - SHAREHOLDING 表格 → 調用 insert_shareholding
-   - MARKET_DATA 表格 → 調用 insert_market_data
+1. **雙軌提取策略 (Table + Text)**：
+   - 數據可能在【表格】中，也可能在【純文字段落】中。
+   - 如果在表格中找到：直接調用 `insert_*` 系列 Tool。
+   - 如果在表格中找不到 Key Personnel 或 Shareholder：你【必須】調用 `ExtractShareholdersFromTextTool` 或閱讀純文字內容進行提取！絕對不能直接放棄！
 
-3. **不要重複搜索**，上面已經提供表格內容
-4. **每個數據類型至少調用一次 insert Tool**
+2. **必須完成的強制清單 (Checklist)**：
+   在你宣佈任務完成之前，請檢查是否已經嘗試提取以下 6 類數據。如果某項沒有找到，請明確創建 Review Record 說明原因：
+   [ ] 財務指標 (insert_financial_metrics)
+   [ ] 收入分解 (insert_revenue_breakdown)
+   [ ] 關鍵人員 (insert_key_personnel) - 💡 提示：常出現在「董事及高級管理層」文字段落中
+   [ ] 股東結構 (insert_shareholding 或 ExtractShareholdersFromTextTool)
+   [ ] 市場數據 (insert_market_data)
+   [ ] 提及的其他公司 (insert_mentioned_company) - 💡 提示：在純文字段落中尋找子公司、收購對象或合作夥伴
+
+3. **不要重複搜索**，請善用上面已經提供的上下文內容。
+
+## 📝 文本段落 - 用於提取實體關係 (Entity Relations) 及關鍵人員
+
+以下係純文本內容，請從中提取【公司併購】、【人事任命】、【股東關係】、【董事名單】等：
+
+{context_result.get("text_content", "")[:5000]}
 
 ⚠️ 如果你只搜索而不插入數據，任務將失敗！
 

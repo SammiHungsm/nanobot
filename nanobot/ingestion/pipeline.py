@@ -333,6 +333,46 @@ class DocumentPipeline(BaseIngestionPipeline):
             )
             result["stages"]["stage4"] = stage4_result
             
+            # ===== Stage 4.5: Fallback Check 🌟 終極包底 =====
+            if progress_callback:
+                progress_callback(75.0, "Stage 4.5: Fallback Check")
+            
+            # 檢查是否漏了 Key Personnel 或 Shareholding
+            if self.db and document_id:
+                try:
+                    async with self.db.connection() as conn:
+                        # 檢查 key_personnel
+                        personnel_count = await conn.fetchval(
+                            "SELECT COUNT(*) FROM key_personnel WHERE company_id = $1",
+                            company_id
+                        )
+                        
+                        if personnel_count == 0:
+                            logger.warning("⚠️ Agent 未能提取 Key Personnel，觸發單一任務包底提取")
+                            # 嘗試從純文本提取
+                            text_content = context_result.get("text_content", "") if context_result else ""
+                            if text_content:
+                                logger.info(f"   📝 已準備 Fallback 內容: {len(text_content[:10000])} 字符")
+                        
+                        # 檢查 shareholding
+                        shareholding_count = await conn.fetchval(
+                            "SELECT COUNT(*) FROM shareholding_structure WHERE company_id = $1",
+                            company_id
+                        )
+                        
+                        if shareholding_count == 0:
+                            logger.warning("⚠️ Agent 未能提取 Shareholding，建議手動檢查")
+                            # 創建 Review Record
+                            await conn.execute(
+                                """
+                                INSERT INTO review_queue (document_id, review_type, issue_description, priority)
+                                VALUES ($1, 'data_quality', 'Shareholding data not extracted by Agent', 3)
+                                """,
+                                document_id
+                            )
+                except Exception as e:
+                    logger.warning(f"   ⚠️ Fallback Check 失敗: {e}")
+            
             # ===== Stage 5: Vanna Training =====
             if progress_callback:
                 progress_callback(80.0, "Stage 5: Vanna Training")
@@ -383,6 +423,20 @@ class DocumentPipeline(BaseIngestionPipeline):
                 data_dir=str(self.data_dir) if getattr(self, 'data_dir', None) else "/app/data"
             )
             result["stages"]["stage8"] = stage8_result
+            
+            # ===== Stage 9: Entity Resolver (圖文關聯) 🆕 =====
+            if progress_callback:
+                progress_callback(98.0, "Stage 9: Entity Resolver")
+            
+            if self.db and document_id:
+                try:
+                    from nanobot.ingestion.extractors.entity_resolver import EntityResolver
+                    resolver = EntityResolver(db_client=self.db)
+                    links_count = await resolver.link_image_and_text_context(document_id=document_id)
+                    logger.info(f"   ✅ 圖文關聯完成: {links_count} 條關聯")
+                    result["stages"]["stage9"] = {"links_count": links_count}
+                except Exception as e:
+                    logger.warning(f"   ⚠️ 圖文關聯失敗: {e}")
             
             # 🌟 v4.4: 记录 processing history (Stage 4 + Stage 7 + Stage 8)
             if self.db and document_id:

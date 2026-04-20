@@ -194,6 +194,7 @@ class Stage2Enrichment:
         # ===== 1. 預先掃描：找出含有圖片和表格的頁碼 =====
         pages_with_images = set()
         pages_with_tables = set()
+        pages_with_charts = set()  # 🆕 新增：頁面是否有圖表
         for a in artifacts:
             if a is not None:
                 p_num = a.get("page", 0)
@@ -202,13 +203,18 @@ class Stage2Enrichment:
                     pages_with_images.add(p_num)
                 elif a_type == "table":
                     pages_with_tables.add(p_num)
+                elif a_type == "chart":  # 🆕 新增：處理圖表類型
+                    pages_with_charts.add(p_num)
                 # 🌟 Bug 修復：檢測 text artifact 中的 HTML 表格
                 elif a_type == "text":
                     content = str(a.get("content", ""))
                     if "<table" in content.lower() or "</table>" in content.lower():
                         pages_with_tables.add(p_num)
+                    # 🆕 新增：檢測文本中的圖表提及
+                    if any(kw in content.lower() for kw in ["figure", "chart", "graph", "diagram", "圖", "圖表", "圖形"]):
+                        pages_with_charts.add(p_num)
 
-        logger.info(f"   📊 頁面分布: {len(pages_with_images)} 頁有圖片, {len(pages_with_tables)} 頁有表格")
+        logger.info(f"   📊 頁面分布: {len(pages_with_images)} 頁有圖片, {len(pages_with_tables)} 頁有表格, {len(pages_with_charts)} 頁有圖表")
 
         # ===== 2. 處理並保存所有純文字頁面 =====
         text_artifacts = [a for a in artifacts if a is not None and a.get("type") == "text"]
@@ -222,7 +228,8 @@ class Stage2Enrichment:
                         page_num=page_num,
                         markdown_content=content,
                         has_images=(page_num in pages_with_images),  # ✅ 動態判斷
-                        has_tables=(page_num in pages_with_tables)   # ✅ Bug 修復：使用 has_tables
+                        has_tables=(page_num in pages_with_tables),   # ✅ Bug 修復：使用 has_tables
+                        has_charts=(page_num in pages_with_charts)    # 🆕 新增：圖表判斷
                     )
                     stats["pages_saved"] += 1
                 except Exception as e:

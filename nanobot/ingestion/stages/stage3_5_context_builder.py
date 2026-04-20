@@ -155,6 +155,7 @@ class Stage3_5_ContextBuilder:
             "tables": tables_with_context,
             "images": all_images,
             "content_by_type": content_by_type,
+            "text_content": "\n\n".join([f"=== Page {p} ===\n{c}" for p, c in sorted(page_contents.items())[:20]]),  # 🌟 新增：纯文本内容用于提取 entity_relation
             "stats": {
                 "total_pages": len(sorted_pages),
                 "total_headings": len(all_headings),

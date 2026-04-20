@@ -2109,3 +2109,142 @@ class InsertArtifactRelationTool:
                 return "❌ 寫入失敗，請檢查資料庫日誌。"
         except Exception as e:
             return f"❌ 寫入時發生錯誤: {str(e)}"
+
+# ===== 🆕 InsertMentionedCompanyTool (v4.12) =====
+class InsertMentionedCompanyArgs(BaseModel):
+    """提取並寫入文件中提及的其他公司"""
+    name_en: Optional[str] = Field(None, description="公司英文名稱")
+    name_zh: Optional[str] = Field(None, description="公司中文名稱")
+    stock_code: Optional[str] = Field(None, description="股票代碼 (如有，例如 0700.HK，否則留空)")
+    relation_type: str = Field("mentioned", description="與主公司的關係分類: subsidiary, competitor, partner, investor, customer, mentioned")
+
+class InsertMentionedCompanyTool:
+    """[Tool] 寫入文件中提及的其他公司（子公司、對手等）"""
+    name = "insert_mentioned_company"
+    description = (
+        "當在文件中發現提及其他公司（如子公司、聯子公司、聯營公司、競爭對手、合作夥伴、大客戶）時調用。"
+        "將其寫入數據庫並與當前文檔建立關聯。"
+    )
+    args_schema = InsertMentionedCompanyArgs
+
+    @staticmethod
+    async def execute(args: dict, context: dict) -> str:
+        name_en = args.get("name_en")
+        name_zh = args.get("name_zh")
+        stock_code = args.get("stock_code")
+        relation_type = args.get("relation_type", "mentioned")
+        
+        if not name_en and not name_zh:
+            return "❌ 失敗：必須提供 name_en 或 name_zh"
+        
+        document_id = context.get("document_id")
+        db_client = context.get("db_client")
+        
+        if not db_client:
+            return "❌ 錯誤：無法獲取數據庫連接"
+        
+        if not document_id:
+            return "❌ 錯誤：缺少 document_id"
+        
+        try:
+            # 1. UPSERT：寫入或查詢這間提及公司的 ID
+            if not stock_code:
+                import uuid
+                stock_code = f"UNKNOWN_{uuid.uuid4().hex[:6]}"
+            
+            company_id = await db_client.upsert_company(
+                stock_code=stock_code,
+                name_en=name_en,
+                name_zh=name_zh,
+                name_source="agentic_extractor"
+            )
+            
+            if not company_id:
+                return f"❌ 失敗：無法創建公司 {name_en or name_zh}"
+            
+            # 2. 建立多對多關聯
+            success = await db_client.add_mentioned_company(
+                document_id=document_id,
+                company_id=company_id,
+                relation_type=relation_type,
+                extraction_source="agentic_extractor"
+            )
+            
+            if success:
+                return f"✅ 成功寫入提及公司: {name_en or name_zh} (ID: {company_id}, 關聯類型: {relation_type})"
+            else:
+                return "❌ 失敗：無法建立文檔關聯"
+                
+        except Exception as e:
+            logger.error(f"❌ InsertMentionedCompanyTool 執行失敗: {e}")
+            return f"❌ 執行失敗: {str(e)}"
+
+
+# ===== 🆕 InsertMentionedCompanyTool (v4.12) =====
+class InsertMentionedCompanyArgs(BaseModel):
+    """提取並寫入文件中提及的其他公司"""
+    name_en: Optional[str] = Field(None, description="公司英文名稱")
+    name_zh: Optional[str] = Field(None, description="公司中文名稱")
+    stock_code: Optional[str] = Field(None, description="股票代碼 (如有，例如 0700.HK，否則留空)")
+    relation_type: str = Field("mentioned", description="與主公司的關係分類: subsidiary, competitor, partner, investor, customer, mentioned")
+
+class InsertMentionedCompanyTool:
+    """[Tool] 寫入文件中提及的其他公司（子公司、對手等）"""
+    name = "insert_mentioned_company"
+    description = (
+        "當在文件中發現提及其他公司（如子公司、聯子公司、聯營公司、競爭對手、合作夥伴、大客戶）時調用。"
+        "將其寫入數據庫並與當前文檔建立關聯。"
+    )
+    args_schema = InsertMentionedCompanyArgs
+
+    @staticmethod
+    async def execute(args: dict, context: dict) -> str:
+        name_en = args.get("name_en")
+        name_zh = args.get("name_zh")
+        stock_code = args.get("stock_code")
+        relation_type = args.get("relation_type", "mentioned")
+        
+        if not name_en and not name_zh:
+            return "❌ 失敗：必須提供 name_en 或 name_zh"
+        
+        document_id = context.get("document_id")
+        db_client = context.get("db_client")
+        
+        if not db_client:
+            return "❌ 錯誤：無法獲取數據庫連接"
+        
+        if not document_id:
+            return "❌ 錯誤：缺少 document_id"
+        
+        try:
+            # 1. UPSERT：寫入或查詢這間提及公司的 ID
+            if not stock_code:
+                import uuid
+                stock_code = f"UNKNOWN_{uuid.uuid4().hex[:6]}"
+            
+            company_id = await db_client.upsert_company(
+                stock_code=stock_code,
+                name_en=name_en,
+                name_zh=name_zh,
+                name_source="agentic_extractor"
+            )
+            
+            if not company_id:
+                return f"❌ 失敗：無法創建公司 {name_en or name_zh}"
+            
+            # 2. 建立多對多關聯
+            success = await db_client.add_mentioned_company(
+                document_id=document_id,
+                company_id=company_id,
+                relation_type=relation_type,
+                extraction_source="agentic_extractor"
+            )
+            
+            if success:
+                return f"✅ 成功寫入提及公司: {name_en or name_zh} (ID: {company_id}, 關聯類型: {relation_type})"
+            else:
+                return "❌ 失敗：無法建立文檔關聯"
+                
+        except Exception as e:
+            logger.error(f"❌ InsertMentionedCompanyTool 執行失敗: {e}")
+            return f"❌ 執行失敗: {str(e)}"
