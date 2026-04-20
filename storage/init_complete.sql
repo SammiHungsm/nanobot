@@ -324,7 +324,8 @@ CREATE TABLE IF NOT EXISTS document_pages (
     ocr_confidence FLOAT DEFAULT 0.0,
     has_tables BOOLEAN DEFAULT FALSE,
     has_images BOOLEAN DEFAULT FALSE,
-    
+    has_charts BOOLEAN DEFAULT FALSE,
+
     -- 【向量嵌入欄位 Vector Embedding Field】
     embedding_vector VECTOR(384),  -- 🌟 本地 Embedding 模型維度（sentence-transformers）
     
@@ -335,7 +336,7 @@ CREATE TABLE IF NOT EXISTS document_pages (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     
     -- 【約束 Constraint】
-    CONSTRAINT unique_page UNIQUE (document_id, page_num)
+    CONSTRAINT unique_doc_page_table UNIQUE (document_id, page_number, table_index)
 );
 
 -- 【索引策略 Index Strategy】
@@ -456,7 +457,8 @@ CREATE TABLE IF NOT EXISTS document_tables (
 CREATE INDEX IF NOT EXISTS idx_tables_document_id ON document_tables(document_id);
 CREATE INDEX IF NOT EXISTS idx_tables_table_type ON document_tables(table_type);
 CREATE INDEX IF NOT EXISTS idx_tables_page_number ON document_tables(page_number);
-
+ALTER TABLE document_tables 
+ADD CONSTRAINT unique_doc_page_table UNIQUE (document_id, page_number, table_index);
 
 -- ============================================================
 -- 【表 8: review_queue 人工審核隊列表】

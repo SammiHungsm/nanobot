@@ -121,6 +121,8 @@ services:
       context: ./vanna-service
       dockerfile: Dockerfile
     container_name: vanna-service
+    env_file:           
+      - .env  
     volumes:
       - vanna_data:/app/data
       - vanna_onnx_cache:/root/.cache/chroma

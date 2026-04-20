@@ -985,7 +985,10 @@ class InsertFinancialMetricsTool(Tool):
         
         db = DBClient()
         await db.connect()
-        
+        # 🌟 容錯：如果 LLM 傳了 document_id，自動轉成 source_document_id
+        if "document_id" in args and "source_document_id" not in args:
+            args["source_document_id"] = args["document_id"]
+            
         try:
             inserted_count = 0
             
@@ -1880,7 +1883,9 @@ class InsertArtifactRelationTool:
         db_client = context.get("db_client")
         if not db_client:
             return "❌ Error: Database client not found in context."
-        
+
+        if "document_id" in args and "source_document_id" not in args:
+            args["source_document_id"] = args["document_id"]
         try:
             success = await db_client.insert_artifact_relation(
                 document_id=args["document_id"],

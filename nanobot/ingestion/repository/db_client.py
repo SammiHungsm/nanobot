@@ -886,7 +886,8 @@ class DBClient:
         doc_id: str = None,  # 🌟 可选：用于向后兼容（如果没有传入 document_id）
         content_type: str = "markdown",  # 🌟 可选：保留参数但不写入 db
         has_images: bool = False,
-        has_tables: bool = False  # 🌟 Bug 修复：改为 has_tables 匹配数据库列名
+        has_tables: bool = False , # 🌟 Bug 修复：改为 has_tables 匹配数据库列名
+        has_charts: bool = False
     ) -> bool:
         """
         插入單個 PDF 頁面的原始 Markdown 到兜底表
@@ -936,19 +937,21 @@ class DBClient:
                 await conn.execute(
                     """
                     INSERT INTO document_pages 
-                    (document_id, page_num, markdown_content, has_images, has_tables)
-                    VALUES ($1, $2, $3, $4, $5)
+                    (document_id, page_num, markdown_content, has_images, has_tables, has_charts)
+                    VALUES ($1, $2, $3, $4, $5, $6)
                     ON CONFLICT (document_id, page_num) 
                     DO UPDATE SET 
                         markdown_content = $3,
                         has_images = $4,
-                        has_tables = $5
+                        has_tables = $5,
+                        has_charts = $6
                     """,
                     actual_document_id,  # 🌟 直接传入整数，不再使用子查询
                     page_num,
                     markdown_content,
                     has_images,
-                    has_tables  # 🌟 Bug 修复：使用 has_tables
+                    has_tables,  # 🌟 Bug 修复：使用 has_tables
+                    has_charts                      
                 )
             
             logger.debug(f"✅ Page {page_num} 已寫入 document_pages 兜底表")
@@ -2000,7 +2003,7 @@ class DBClient:
                 updated_at = CURRENT_TIMESTAMP
         """
         try:
-            await self.execute(
+            await self.execute_query(
                 query, 
                 document_id, 
                 source_artifact_id, 

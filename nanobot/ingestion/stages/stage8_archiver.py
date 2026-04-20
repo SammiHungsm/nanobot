@@ -67,7 +67,7 @@ class Stage8Archiver:
                 continue
             
             try:
-                # 检查是否有表格/图片
+                # 检查是否有表格/图片/图表 🌟 恢复 has_charts 逻辑
                 has_tables = any(
                     a is not None and a.get("type") == "table" and a.get("page") == page_num
                     for a in artifacts
@@ -76,13 +76,18 @@ class Stage8Archiver:
                     a is not None and a.get("type") == "image" and a.get("page") == page_num
                     for a in artifacts
                 )
+                has_charts = any(
+                    a is not None and a.get("type") == "chart" and a.get("page") == page_num
+                    for a in artifacts
+                )
                 
                 await db_client.insert_document_page(
                     document_id=document_id,
                     page_num=page_num,  # 🌟 v1.1: 修正参数名 - page_number -> page_num
                     markdown_content=content,  # 🌟 v1.1: 修正参数名 - content -> markdown_content
-                    has_charts=has_tables,  # 🌟 v1.1: 修正参数名 - has_tables -> has_charts
-                    has_images=has_images
+                    has_images=has_images,
+                    has_tables=has_tables,
+                    has_charts=has_charts  # 🌟 恢复 has_charts 参数传递
                 )
                 result["pages_saved"] += 1
                 
