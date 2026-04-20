@@ -101,16 +101,18 @@ class Stage4AgenticExtractor:
         confirmed_doc_industry: str = None,
         db_client: Any = None,
         extraction_types: List[str] = None,
-        progress_callback: Any = None
+        progress_callback: Any = None,
+        stage3_result: Dict[str, Any] = None  # 🌟 v4.8: Stage 3 路由结果
     ) -> Dict[str, Any]:
         """
-        🌟 Agentic 多表写入（v4.0 - 真正的 Tool Calling）
+        🌟 Agentic 多表写入（v4.8 - 使用 Stage 3 路由结果）
         
         根据文档类型使用不同的写入策略：
         - 指数报告（规则 A）：所有成分股指派同一行业
         - 年报（规则 B）：AI 提取各公司行业
         
-        🌟 新特性：
+        🌟 v4.8 新特性：
+        - 使用 Stage 3 的路由结果，优先传入候选页面
         - LLM 自己决定调用哪个 Tool
         - 支持 Continuous Learning Loop
         - 自动搜索包底库找遗漏数据
@@ -127,6 +129,7 @@ class Stage4AgenticExtractor:
             db_client: DB 客户端
             extraction_types: 提取类型
             progress_callback: 进度回调
+            stage3_result: Stage 3 路由结果（包含候选页面）
             
         Returns:
             Dict: 写入结果
@@ -249,17 +252,91 @@ Step 5: 完成
 开始执行！
 """
         
-        # 🌟 合并 artifacts 内容作为用户消息
-        content_text = "\n\n".join([
-            a.get("content", "") or a.get("markdown", "") or ""
-            for a in artifacts[:20]  # 限制内容长度
-        ])
+        # 🌟 v4.8: 智能选择候选页面内容
+        # 优先使用 Stage 3 的路由结果，而不是固定的前 20 页
+        candidate_pages = {}
         
-        user_message = f"""
+        if stage3_result:
+            # 从 Stage 3 结果中提取候选页面
+            for data_type, pages in stage3_result.items():
+                if isinstance(pages, list) and pages:
+                    candidate_pages[data_type] = pages
+                    logger.info(f"   📍 Stage 3 路由结果: {data_type} -> {len(pages)} 个候选页面")
+        
+        # 🌟 构建内容文本
+        content_parts = []
+        
+        if candidate_pages:
+            # 方案 A: 使用 Stage 3 候选页面
+            logger.info(f"   🎯 使用 Stage 3 候选页面构建内容...")
+            
+            # 收集所有候选页面编号
+            all_candidate_page_nums = set()
+            for pages in candidate_pages.values():
+                all_candidate_page_nums.update(pages)
+            
+            # 按页码排序，限制最多 50 页
+            sorted_pages = sorted(all_candidate_page_nums)[:50]
+            logger.info(f"   📄 候选页面: {sorted_pages[:10]}... (共 {len(sorted_pages)} 页)")
+            
+            # 提取这些页面的内容
+            for page_num in sorted_pages:
+                if page_num <= len(artifacts):
+                    artifact = artifacts[page_num - 1]  # 页码从 1 开始
+                    content = artifact.get("content", "") or artifact.get("markdown", "") or ""
+                    if content:
+                        content_parts.append(f"=== 第 {page_num} 页 ===\n{content}")
+            
+            # 构建路由提示
+            routing_hint = "\n".join([
+                f"- {data_type}: 第 {', '.join(map(str, pages[:10]))} 页..."
+                for data_type, pages in candidate_pages.items()
+            ])
+        else:
+            # 方案 B: Fallback 到前 20 页
+            logger.info(f"   ⚠️ 没有 Stage 3 路由结果，使用前 20 页...")
+            for i, artifact in enumerate(artifacts[:20]):
+                content = artifact.get("content", "") or artifact.get("markdown", "") or ""
+                if content:
+                    content_parts.append(f"=== 第 {i + 1} 页 ===\n{content}")
+            routing_hint = "（没有路由提示，请自行分析）"
+        
+        # 合并内容，限制总长度
+        content_text = "\n\n".join(content_parts)
+        if len(content_text) > 50000:  # 增加到 50000 字符
+            content_text = content_text[:50000] + "\n\n... (内容已截断)"
+        
+        # 🌟 构建用户消息
+        if candidate_pages:
+            user_message = f"""
 请分析以下 PDF 内容，提取数据并写入数据库：
 
-PDF 内容（前 20 页）：
-{content_text[:10000]}
+📌 Stage 3 路由提示（重点页面）：
+{routing_hint}
+
+PDF 内容（候选页面）：
+{content_text}
+
+公司 ID: {company_id}
+年份: {year}
+文档 ID: {document_id}
+
+🌟 重要提示：
+1. 上面的内容是根据 Stage 3 路由结果筛选的候选页面
+2. 请重点关注这些页面中的表格数据
+3. 使用正确的 Tool 写入数据：
+   - revenue_breakdown（收入分解）→ insert_revenue_breakdown
+   - financial_metrics（财务指标）→ insert_financial_metrics
+   - key_personnel（关键人员）→ insert_key_personnel
+
+请开始执行！
+"""
+        else:
+            user_message = f"""
+请分析以下 PDF 内容，提取数据并写入数据库：
+
+PDF 内容：
+{content_text}
 
 公司 ID: {company_id}
 年份: {year}

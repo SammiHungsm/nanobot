@@ -286,7 +286,8 @@ class DocumentPipeline(BaseIngestionPipeline):
                 index_theme=index_theme,
                 confirmed_doc_industry=confirmed_doc_industry,
                 db_client=self.db,
-                extraction_types=["revenue_breakdown"]
+                extraction_types=["revenue_breakdown"],
+                stage3_result=stage3_result  # 🌟 v4.8: 传入 Stage 3 路由结果
             )
             result["stages"]["stage4"] = stage4_result
             

@@ -54,7 +54,6 @@ dependencies = [
     "lm-format-enforcer>=0.10.0",  # 强制结构化 JSON 输出
     "json-repair>=0.57.0,<1.0.0",  # JSON 修复
     "llama_cloud>=2.3.0", # 🌟 LlamaParse Cloud Parser
-    "PyMuPDF>=1.24.0",  # 🌟 Stage 0 截取封面（独立运行，不等待 LlamaParse）
     "beautifulsoup4>=4.12.0",  # 🌟 HTML 表格轉換 (Stage 2)
 ]
 
@@ -86,7 +85,7 @@ langsmith = [
     "langsmith>=0.1.0",
 ]
 pdf = [
-    "pymupdf>=1.25.0",
+    # PyMuPDF removed - no longer needed
 ]
 dev = [
     "pytest>=9.0.0,<10.0.0",
@@ -94,7 +93,6 @@ dev = [
     "aiohttp>=3.9.0,<4.0.0",
     "pytest-cov>=6.0.0,<7.0.0",
     "ruff>=0.1.0",
-    "pymupdf>=1.25.0",
 ]
 
 [project.scripts]

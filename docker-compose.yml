@@ -45,6 +45,8 @@ services:
     <<: *common-config
     command: ["nanobot", "gateway", "--config", "/app/config/config.json"]
     restart: unless-stopped
+    env_file:           
+      - .env  
     ports:
       - "18790:18790"
       - "8081:8081"
@@ -150,6 +152,8 @@ services:
   ingestion-worker:
     <<: *common-config
     container_name: ingestion-worker
+    env_file:           
+      - .env
     profiles:
       - worker
     command: ["python", "-m", "nanobot.ingestion.batch_processor"]

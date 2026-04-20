@@ -525,7 +525,8 @@ class PDFParser:
         
         # 🌟 从 Markdown 中提取所有图片引用路径
         markdown_full = getattr(response, 'markdown_full', '') or ''
-        markdown_refs = re.findall(r'!\[.*?\]\((images/[^\)]+)\)', markdown_full)
+        # 將原本搵 images/ 嘅 regex 換成呢個，去 match 原始嘅 LlamaParse 格式
+        markdown_refs = re.findall(r'!\[.*?\]\((page_[^\)]+)\)', markdown_full)
         logger.info(f"   📝 Markdown 中引用了 {len(markdown_refs)} 个图片路径")
 
         # 🌟 定义单一图片下载任务

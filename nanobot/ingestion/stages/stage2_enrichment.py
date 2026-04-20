@@ -1,12 +1,13 @@
 """
-Stage 2: 多模態富文本擴充 (v3.5 RAG-Anything 精準上下文與防禦性修復)
+Stage 2: 多模態富文本擴充 (v3.6 PyMuPDF Removed)
 
 職責：
 - 從 LlamaParse Cloud 下載圖片
-- 🌟 防禦性檢查：攔截 LlamaParse 失敗的 Markdown 表格，動用 PyMuPDF 截圖重解
-- 🌟 RAG-Anything：滑動視窗提取精準上下文 (Title, Caption, 前後文)
+- RAG-Anything：滑動視窗提取精準上下文 (Title, Caption, 前後文)
 - Vision 分析圖片內容 + 實體關係，輸出完美 Markdown Representation
 - 寫入資料庫 (raw_artifacts, document_pages)
+
+🌟 v3.6: PyMuPDF 已移除，表格防禦性截圖功能已停用
 """
 
 import os
@@ -21,7 +22,7 @@ from nanobot.core.llm_core import llm_core
 
 
 class Stage2Enrichment:
-    """Stage 2: 多模態富文本擴充 (v3.5 RAG-Anything 精準上下文)"""
+    """Stage 2: 多模態富文本擴充 (v3.6 PyMuPDF Removed)"""
 
     @staticmethod
     def _is_messy_table(md_content: str) -> bool:
@@ -170,17 +171,13 @@ class Stage2Enrichment:
         pdf_path: str = None,
         vision_model: str = None,
         db_client: Any = None,
-        vision_limit: int = 20
+        vision_limit: int = 2000
     ) -> Dict[str, Any]:
 
         logger.info(f"🎨 Stage 2: 開始保存 Artifacts + RAG-Anything 精準上下文分析...")
 
-        # 確保有引入 fitz 用於截圖
-        try:
-            import fitz
-        except ImportError:
-            logger.warning("未安裝 PyMuPDF (fitz)，將無法使用表格防禦性截圖功能。")
-            fitz = None
+        # 🌟 v3.6: PyMuPDF 已移除，表格防禦性截圖功能已停用
+        # 如需此功能，請考慮使用其他 PDF 庫或重新安裝 PyMuPDF
 
         if raw_output_dir:
             doc_dir = Path(raw_output_dir)
@@ -256,53 +253,11 @@ class Stage2Enrichment:
                     final_content = Stage2Enrichment._html_table_to_markdown(table_content_str)
                     logger.info(f" ✅ HTML 表格轉換完成 (Page {page_num})")
 
-                # 🌟 啟動防禦性檢查
-                if fitz and Stage2Enrichment._is_messy_table(table_content_str) and pdf_path and os.path.exists(pdf_path):
-                    logger.info(f" ⚠️ 發現混亂表格/圖表誤判 (Page {page_num})，啟動 Vision 修復機制...")
-                    try:
-                        doc = fitz.open(pdf_path)
-                        page = doc.load_page(page_num - 1)
-                        pix = page.get_pixmap(dpi=150)
-
-                        img_filename = f"page_{page_num}_table_fix_{i}.png"
-                        img_path = images_dir / img_filename
-                        pix.save(str(img_path))
-                        doc.close()
-
-                        with open(img_path, "rb") as f:
-                            img_base64 = base64.b64encode(f.read()).decode("utf-8")
-
-                        # 擷取精準上下文
-                        precise_context = Stage2Enrichment._get_precise_context(artifacts, i)
-
-                        vision_result = await Stage2Enrichment._analyze_image_with_precise_context(
-                            image_base64=img_base64,
-                            context_data=precise_context,
-                            vision_model=vision_model or llm_core.vision_model
-                        )
-
-                        final_content = vision_result.get("markdown_representation", table_content_str)
-                        logger.info(f" ✅ Vision 表格/圖表修復成功！(Page {page_num})")
-
-                        # 儲存修復產生的圖檔紀錄
-                        if db_client:
-                            await db_client.insert_raw_artifact(
-                                artifact_id=f"vision_fixed_tbl_{doc_id}_p{page_num}_{i}",
-                                document_id=document_id,
-                                artifact_type="vision_analysis",
-                                page_num=page_num,
-                                content_json={
-                                    "filename": img_filename,
-                                    "local_path": str(img_path),
-                                    "analysis": vision_result,
-                                    "structural_context": precise_context,
-                                    "is_table_fix": True
-                                },
-                                content=final_content
-                            )
-
-                    except Exception as e:
-                        logger.warning(f" ⚠️ 表格 Vision 修復失敗: {e}，將使用原始混亂內容")
+                # 🌟 v3.6: 防禦性檢查（PyMuPDF 已移除）
+                # 如果表格解析混亂，記錄警告，但繼續使用原始內容
+                if Stage2Enrichment._is_messy_table(table_content_str):
+                    logger.warning(f" ⚠️ 發現混亂表格 (Page {page_num})，PyMuPDF 已移除，無法使用 Vision 修復")
+                    logger.warning(f"    建議：檢查 LlamaParse 解析結果或手動修復表格")
 
                 # 寫入最終表格結果
                 if db_client:
@@ -357,6 +312,23 @@ class Stage2Enrichment:
                                 local_path = str(img_path)
                     except Exception as e:
                         logger.warning(f" ⚠️ Fallback 下載圖片失敗: {e}")
+
+                if local_path and os.path.exists(local_path):
+                    file_size_kb = os.path.getsize(local_path) / 1024
+                    
+                    if file_size_kb < 15.0:
+                        logger.debug(f"   ⏭️ 圖片太小 ({file_size_kb:.1f}KB)，疑似 Logo/裝飾，跳過 Vision 分析")
+                        stats["images_saved"] += 1
+                        if db_client:
+                            await db_client.insert_raw_artifact(
+                                artifact_id=f"img_{doc_id}_p{page_num}_{i}",
+                                document_id=document_id,
+                                artifact_type="image",
+                                page_num=page_num,
+                                content_json={"filename": filename, "local_path": local_path},
+                                content=filename
+                            )
+                        continue  # 🌟 跳過 Vision，直接處理下一個 Artifact
 
                 if local_path and stats["vision_analyzed"] < vision_limit:
                     try:
@@ -438,9 +410,12 @@ class Stage2Enrichment:
 - 圖表後的分析：{context_data['next_text']}
 
 請仔細觀察圖片，並結合上述邏輯上下文，過濾幻覺，輸出一個高精度的 JSON：
-1. "type": 圖片類型 (chart, table, diagram, photo)
-2. "title": 綜合上下文給這張圖表一個精確的標題
-3. "markdown_representation": 🌟 最重要！請將圖表中的「核心數據」轉換成排版完美的 Markdown (條列式數據描述或表格格式)。這將直接進入向量資料庫。
+1. "type": 判斷這是 chart(圖表), table(表格掃描件), diagram(架構圖), 還是 photo(普通照片)。
+2. "title": 綜合上下文給這張圖表一個精確的標題。
+3. "markdown_representation": 🌟 最重要！
+   - 如果是 Table，請轉換為標準 Markdown 表格。
+   - 如果是 Chart (圓餅圖/柱狀圖)，請轉換為條列式的數據描述 (e.g., - 2023年: 45%)。
+   這將直接進入向量資料庫。
 4. "key_entities": 提取圖表中提及的重要實體 (如公司、地區、指標)。
 
 輸出格式必須是純 JSON，不要包含 ```json 標籤：
