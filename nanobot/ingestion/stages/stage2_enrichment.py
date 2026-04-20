@@ -239,10 +239,18 @@ class Stage2Enrichment:
             art_type = artifact.get("type")
             page_num = artifact.get("page", 0)
 
+            # 🌟 新增：判斷這個 "text" Artifact 是否暗藏了 HTML 表格
+            is_html_table_in_text = False
+            if art_type == "text":
+                content_lower = str(artifact.get("content", "")).lower()
+                if "<table" in content_lower or "</table>" in content_lower:
+                    is_html_table_in_text = True
+
             # ---------------------------
             # 處理 Table (加入防禦性截圖修復 + HTML 表格轉換)
             # ---------------------------
-            if art_type == "table":
+            # 🌟 修正：如果類型是 table，或者文本中包含 HTML 表格，都進入處理！
+            if art_type == "table" or is_html_table_in_text:
                 raw_table_content = artifact.get("content", "")
                 table_content_str = str(raw_table_content)
                 final_content = raw_table_content

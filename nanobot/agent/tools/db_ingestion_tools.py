@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 
 from nanobot.agent.tools.base import Tool
-
+from pydantic import BaseModel, Field
 
 class GetDBSchemaTool(Tool):
     """
@@ -1859,3 +1859,40 @@ def register_ingestion_tools(registry) -> None:
         logger.warning("⚠️ Multimodal RAG tools not available")
     
     logger.info("✅ Registered 19 ingestion tools (including 3 new Tools: revenue_breakdown, entity_relation, market_data)")
+
+
+# 1. 定義參數 Schema
+class InsertArtifactRelationArgs(BaseModel):
+    document_id: int = Field(..., description="文檔的內部整數 ID (document_id)")
+    source_artifact_id: str = Field(..., description="源實體 ID (通常是圖表或圖片的 artifact_id)")
+    target_artifact_id: str = Field(..., description="目標實體 ID (通常是解釋性文字段落的 artifact_id)")
+    relation_type: str = Field("explained_by", description="關係類型，例如 'explained_by' 或 'referenced_in'")
+    confidence_score: float = Field(1.0, description="關聯置信度 (0.0 - 1.0)")
+
+# 2. 定義 Tool 類別
+class InsertArtifactRelationTool:
+    name = "insert_artifact_relation"
+    description = "將圖表或圖片與解釋它的文字段落建立跨模態關聯，解決圖文跨頁斷裂問題。"
+    args_schema = InsertArtifactRelationArgs
+
+    @staticmethod
+    async def execute(args: dict, context: dict) -> str:
+        db_client = context.get("db_client")
+        if not db_client:
+            return "❌ Error: Database client not found in context."
+        
+        try:
+            success = await db_client.insert_artifact_relation(
+                document_id=args["document_id"],
+                source_artifact_id=args["source_artifact_id"],
+                target_artifact_id=args["target_artifact_id"],
+                relation_type=args.get("relation_type", "explained_by"),
+                confidence_score=args.get("confidence_score", 1.0),
+                extraction_method="llm_inferred"
+            )
+            if success:
+                return f"✅ 成功寫入圖文關聯: {args['source_artifact_id']} ➔ {args['target_artifact_id']}"
+            else:
+                return "❌ 寫入失敗，請檢查資料庫日誌。"
+        except Exception as e:
+            return f"❌ 寫入時發生錯誤: {str(e)}"

@@ -66,6 +66,7 @@ class Stage4AgenticExtractor:
             InsertMarketDataTool,        # 🆕 市场数据修复
             SearchDocumentPagesTool,
             BackfillFromFallbackTool,
+            InsertArtifactRelationTool
         )
         
         # 🌟 构建 Tools Registry
@@ -175,6 +176,7 @@ class Stage4AgenticExtractor:
 12. update_dynamic_attributes - 更新 JSONB 动态属性（🌟 新字段用这个！）
 13. update_document_status - 更新文档状态
 14. create_review_record - 创建审核记录（不确定时使用）
+15. insert_artifact_relation - 写入跨模态图文关联 🌟 新增！（图表与文字解释）
 
 🌟 执行流程（必须严格遵守）：
 
@@ -224,6 +226,11 @@ Step 3: 动态写入 🌟 关键！（选择正确的 Tool）
    → 例如：环保评分、ESG 指标、特殊披露
    → 存入 JSONB，无需 ALTER TABLE
 
+8️⃣ 发现图表与文字解释的关联 🆕
+   → 使用 insert_artifact_relation
+   → 必须提供图表的 artifact_id (source) 和文字段落的 artifact_id (target)
+   → 例如：「第 50 页的文字在解释第 5 页的图表」
+
 ========================================
 
 - 见到财务数字（利润、资产、负债） → insert_financial_metrics
@@ -231,8 +238,9 @@ Step 3: 动态写入 🌟 关键！（选择正确的 Tool）
 - 见到股东持股比例 → insert_shareholding
 - 见到按地区/业务划分的收入 → insert_revenue_breakdown 🌟 新增！
 - 见到市场数据（PE ratio、市值、股价） → insert_market_data 🌟 新增！
-- 见到人物-公司关系（张三是腾讯CEO） → insert_entity_relation 🌟 新增！
-- 见到新名词/新标题（如「按地区划分之收益」）→ 
+- 见到人物-公司关系（张三是腾讯CEO） → insert_entity_relation
+- 发现图表与文字解释的关联 ➔ 使用 insert_artifact_relation 🌟 新增！
+- 见到新名词/新标题（如「按地区划分之收益」）→
   ① register_new_keyword 注册
   ② update_dynamic_attributes 写入 JSONB
 

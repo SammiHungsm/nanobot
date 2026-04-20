@@ -1978,3 +1978,38 @@ class DBClient:
             priority=priority,
             issue_description=issue_description
         )
+
+    async def insert_artifact_relation(
+        self,
+        document_id: int,
+        source_artifact_id: str,
+        target_artifact_id: str,
+        relation_type: str = "explained_by",
+        confidence_score: float = 1.0,
+        extraction_method: str = "llm_inferred"
+    ) -> bool:
+        """寫入圖表與文字解釋的跨模態關聯"""
+        query = """
+            INSERT INTO artifact_relations 
+            (document_id, source_artifact_id, target_artifact_id, relation_type, confidence_score, extraction_method)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (source_artifact_id, target_artifact_id) 
+            DO UPDATE SET 
+                relation_type = EXCLUDED.relation_type,
+                confidence_score = EXCLUDED.confidence_score,
+                updated_at = CURRENT_TIMESTAMP
+        """
+        try:
+            await self.execute(
+                query, 
+                document_id, 
+                source_artifact_id, 
+                target_artifact_id, 
+                relation_type, 
+                confidence_score, 
+                extraction_method
+            )
+            return True
+        except Exception as e:
+            logger.error(f"❌ 插入 artifact_relation 失敗: {e}")
+            return False

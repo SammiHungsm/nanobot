@@ -91,3 +91,37 @@ export async function deleteSession(
   );
   return body.deleted;
 }
+
+// 刪除單一文檔
+export async function deleteDocument(
+  token: string,
+  docId: string,
+  base: string = "",
+): Promise<boolean> {
+  const body = await request<{ success: boolean }>(
+    `${base}/api/documents/${encodeURIComponent(docId)}`,
+    token,
+    { method: "DELETE" }
+  );
+  return body.success;
+}
+
+// 批量刪除文檔
+export async function batchDeleteDocuments(
+  token: string,
+  docIds: string[],
+  base: string = "",
+): Promise<boolean> {
+  const body = await request<{ success: boolean }>(
+    `${base}/api/documents/batch-delete`,
+    token,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(docIds),
+    }
+  );
+  return body.success;
+}

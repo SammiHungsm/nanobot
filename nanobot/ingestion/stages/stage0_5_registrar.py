@@ -58,7 +58,7 @@ class Stage0_5_Registrar:
             return None
         
         try:
-            existing_doc = await db_client.check_document_exists(file_hash)
+            existing_doc = await db_client.check_document_exists(doc_id="", file_hash=file_hash)
             
             if existing_doc:
                 logger.info(f"   ⚠️ 文件已存在: doc_id={existing_doc.get('doc_id')}")
@@ -232,20 +232,9 @@ class Stage0_5_Registrar:
         
         完整流程：
         1. 计算 Hash
-        2. 检查重复
-        3. 注册文档
-        4. 注册公司
-        
-        Args:
-            pdf_path: PDF 路径
-            doc_id: 文档 ID
-            metadata: Stage 0 提取的 Metadata
-            original_filename: 🌟 原始上传文件名
-            db_client: DB 客户端
-            skip_duplicate: 是否跳过重复文件
-            
-        Returns:
-            Dict: {"file_hash", "is_duplicate", "document_id", "company_id"}
+        2. 检查重复 (防呆与复用)
+        3. 注册公司
+        4. 注册文档 (如果是新文件)
         """
         logger.info(f"📋 Stage 0.5: Registrar 开始...")
         
@@ -262,16 +251,39 @@ class Stage0_5_Registrar:
         result["file_hash"] = file_hash
         logger.info(f"   📄 文件 Hash: {file_hash[:16]}...")
         
-        # Step 2: 检查重复
-        if skip_duplicate and db_client:
+        # 🌟 Step 2: 检查重复 (不论 skip_duplicate 是 True 还是 False，都必须检查以防止 DB 崩溃！)
+        existing_doc = None
+        if db_client:
             existing_doc = await Stage0_5_Registrar.check_duplicate(file_hash, db_client)
             
-            if existing_doc:
+        if existing_doc:
+            if skip_duplicate:
+                # 原始逻辑：如果开启了 skip_duplicate，直接结束整个 Pipeline
                 result["is_duplicate"] = True
                 result["document_id"] = existing_doc.get("id")
                 result["status"] = "duplicate"
-                logger.info(f"   ⚠️ 文件已处理过，跳过")
+                logger.info(f"   ⚠️ 文件已处理过，中止后续 Pipeline (skip_duplicate=True)")
                 return result
+            else:
+                # 🌟 新增逻辑：强制重新处理模式 (skip_duplicate=False)
+                logger.info(f"   ♻️ 发现重复文件，启动【重新处理模式】！沿用旧 DB 记录 ID: {existing_doc.get('id')}")
+                result["is_duplicate"] = True
+                result["document_id"] = existing_doc.get("id")
+                
+                # 依然去更新一次公司资料 (upsert 是安全的)
+                company_id = await Stage0_5_Registrar.register_company_from_metadata(
+                    metadata=metadata,
+                    db_client=db_client
+                )
+                result["company_id"] = company_id
+                
+                logger.info(f"✅ Stage 0.5 完成 (继承旧档): document_id={result['document_id']}, company_id={result['company_id']}")
+                # ！！！重点！！！ 直接 return，跳过 Step 4 的 INSERT，完美避开 Unique Constraint 报错！
+                return result
+
+        # ==========================================
+        # 下面是【全新文件】的正常处理流程
+        # ==========================================
         
         # Step 3: 注册公司（从 Metadata）
         company_id = await Stage0_5_Registrar.register_company_from_metadata(
@@ -280,13 +292,13 @@ class Stage0_5_Registrar:
         )
         result["company_id"] = company_id
         
-        # Step 4: 注册文档
+        # Step 4: 注册全新文档
         doc_result = await Stage0_5_Registrar.register_document(
             doc_id=doc_id,
             file_path=pdf_path,
             file_hash=file_hash,
             company_id=company_id,
-            original_filename=original_filename,  # 🌟 v1.3: 传递原始文件名
+            original_filename=original_filename,
             db_client=db_client,
             metadata=metadata
         )

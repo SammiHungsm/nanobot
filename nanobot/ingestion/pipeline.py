@@ -236,7 +236,7 @@ class DocumentPipeline(BaseIngestionPipeline):
                 doc_id=doc_id,
                 company_id=company_id,
                 document_id=document_id,
-                data_dir=Path(self.data_dir) if hasattr(self, 'data_dir') else Path("/app/data"),
+                data_dir=Path(self.data_dir) if getattr(self, 'data_dir', None) else Path("/app/data"),
                 raw_output_dir=raw_output_dir,  # 🌟 v4.1: 传入 Stage 1 创建的文件夹路径
                 db_client=self.db,
                 vision_limit=20
@@ -338,7 +338,7 @@ class DocumentPipeline(BaseIngestionPipeline):
                 document_id=document_id,
                 stages_result=result["stages"],
                 db_client=self.db,
-                data_dir=str(self.data_dir) if hasattr(self, 'data_dir') else None
+                data_dir=str(self.data_dir) if getattr(self, 'data_dir', None) else "/app/data"
             )
             result["stages"]["stage8"] = stage8_result
             
