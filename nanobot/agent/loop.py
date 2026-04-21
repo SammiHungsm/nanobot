@@ -257,6 +257,19 @@ class AgentLoop:
 
     def _register_default_tools(self) -> None:
         """Register the default set of tools."""
+        
+        # 🌟 1. 引入 RAG 相關的 Tools (確保這些工具檔案存在於 nanobot/agent/tools/ 目錄下)
+        try:
+            from nanobot.agent.tools.vanna_tool import VannaQueryTool
+            from nanobot.agent.tools.multimodal_rag import (
+                GetChartContextTool, 
+                FindChartByFigureNumberTool, 
+                AssembleMultimodalPromptTool
+            )
+        except ImportError as e:
+            logger.warning(f"⚠️ 無法載入 RAG Tools: {e}")
+            VannaQueryTool = None
+
         allowed_dir = (
             self.workspace if (self.restrict_to_workspace or self.exec_config.sandbox) else None
         )
@@ -293,7 +306,15 @@ class AgentLoop:
             self.tools.register(
                 CronTool(self.cron_service, default_timezone=self.context.timezone or "UTC")
             )
-
+            
+        # 🌟 2. 註冊 RAG 工具到工具箱 (在函式的最後面加入)
+        if VannaQueryTool:
+            self.tools.register(VannaQueryTool())
+            self.tools.register(FindChartByFigureNumberTool())
+            self.tools.register(GetChartContextTool())
+            self.tools.register(AssembleMultimodalPromptTool())
+            logger.info("✅ Vanna 與多模態圖表檢索 Tools 註冊成功！")
+            
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy)."""
         if self._mcp_connected or self._mcp_connecting or not self._mcp_servers:

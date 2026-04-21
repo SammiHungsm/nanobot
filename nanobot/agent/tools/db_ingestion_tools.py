@@ -1346,12 +1346,21 @@ class InsertEntityRelationTool(Tool):
         target_entity_type: str,
         target_entity_name: str,
         confidence_score: float = 0.8,
-        event_year: Optional[int] = None,
+        event_year: Optional[Any] = None,  # 🌟 這裡：把類型改成 Any，接收 LLM 的任何亂寫
         **kwargs  # 🌟 防弹参数：吸收 LLM 幻觉产生的多余参数
     ) -> str:
         """写入实体关系"""
         from nanobot.ingestion.repository.db_client import DBClient
         
+        # 🌟 這裡：加入防呆轉換機制
+        actual_event_year = None
+        if event_year is not None:
+            try:
+                actual_event_year = int(event_year)
+            except (ValueError, TypeError):
+                logger.warning(f"⚠️ 無法將 event_year '{event_year}' 轉換為整數，將設為 NULL")
+                actual_event_year = None
+
         db = DBClient()
         await db.connect()
         
@@ -1372,7 +1381,7 @@ class InsertEntityRelationTool(Tool):
                     target_entity_type,
                     target_entity_name,
                     confidence_score,
-                    event_year
+                    actual_event_year  # 🌟 這裡：使用轉換後的值
                 )
             
             logger.info(f"✅ 写入实体关系: {source_entity_name} → {relation_type} → {target_entity_name}")

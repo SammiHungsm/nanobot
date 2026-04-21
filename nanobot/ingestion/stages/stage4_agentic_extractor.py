@@ -65,7 +65,9 @@ class Stage4AgenticExtractor:
             InsertEntityRelationTool,    # 🆕 知识图谱修复
             InsertMarketDataTool,        # 🆕 市场数据修复
             ExtractShareholdersFromTextTool,  # 🆕 v4.11: 專門提取股東
-            InsertMentionedCompanyTool  # 🆕 v4.12: 提及公司
+            InsertMentionedCompanyTool,  # 🆕 v4.12: 提及公司
+            SearchDocumentPagesTool,     # 🌟 Continuous Learning
+            BackfillFromFallbackTool,    # 🌟 Continuous Learning
         )
         # ❌ 移除 InsertArtifactRelationTool - Agent 无法看到 UUID，改用 entity_resolver.py 的 Regex 处理
         

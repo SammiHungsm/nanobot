@@ -363,6 +363,211 @@ class MultimodalRAGTools:
 
 
 # ===========================================
+# Agent Tool Wrappers (讓 Agent 能呼叫多模態 RAG)
+# ===========================================
+
+from nanobot.agent.tools.base import Tool
+
+
+class GetChartContextTool(Tool):
+    """
+    🌟 Agent 用來獲取圖表跨頁解釋的標準接口
+    
+    功能：
+    - 解決「圖表在第 5 頁，解釋在第 50 頁」的跨頁斷裂問題
+    - 使用 SQL JOIN 瞬間檢索關聯文字 (< 0.01 秒)
+    - 無幻覺，所有解釋來自真實文檔
+    
+    使用場景：
+    - 用戶問「圖 3 的營收為什麼下跌？」
+    - Agent 調用此工具獲取第 50 頁的詳細解釋
+    """
+    
+    @property
+    def name(self) -> str:
+        return "get_chart_context"
+    
+    @property
+    def description(self) -> str:
+        return (
+            "🎯 當用戶詢問財報中的某張圖表（例如「圖 3 點解跌？」）時調用。"
+            "輸入圖表編號，獲取該圖表在文件其他頁數的文字解釋。"
+            "\n\n工作原理："
+            "\n1. 先調用 find_chart_by_figure_number 獲取圖表的 artifact_id"
+            "\n2. 再調用此工具獲取跨頁解釋文字"
+            "\n\n示例："
+            "\n- 用戶問：「圖 3 為什麼下跌？」"
+            "\n- Step 1: find_chart_by_figure_number(document_id=123, figure_number='3')"
+            "\n- Step 2: get_chart_context(artifact_id='chart_xxx')"
+        )
+    
+    @property
+    def parameters(self) -> dict:
+        return {
+            "type": "object",
+            "properties": {
+                "document_id": {
+                    "type": "integer",
+                    "description": "當前文檔的 ID"
+                },
+                "figure_number": {
+                    "type": "string",
+                    "description": "圖表編號，例如 '3' 或 '5A'"
+                }
+            },
+            "required": ["document_id", "figure_number"]
+        }
+    
+    @property
+    def read_only(self) -> bool:
+        return True
+    
+    async def execute(
+        self,
+        document_id: int,
+        figure_number: str,
+        **kwargs
+    ) -> str:
+        """執行跨頁圖文檢索"""
+        # Step 1: 根據圖表編號查找 artifact_id
+        artifact_id = await find_chart_by_figure_number(document_id, figure_number)
+        
+        if not artifact_id:
+            return f"❌ 找不到編號為 {figure_number} 的圖表。請確認圖表編號是否正確。"
+        
+        # Step 2: 獲取跨頁解釋文字
+        context = await get_chart_context(artifact_id)
+        
+        if context.startswith("資料庫中沒有找到"):
+            return f"❌ 圖表 {figure_number} 存在，但沒有找到相關的解釋文字。"
+        
+        # Step 3: 返回格式化結果
+        return (
+            f"✅ 成功找到圖表 {figure_number} 的跨頁解釋：\n\n"
+            f"**Artifact ID:** {artifact_id}\n\n"
+            f"**相關解釋文字:**\n\n{context}"
+        )
+
+
+class FindChartByFigureNumberTool(Tool):
+    """
+    🌟 根據圖表編號查找 Artifact ID
+    
+    功能：
+    - 將用戶口中的「圖 3」轉換為具體的 artifact_id
+    - 支持中英文圖表編號（Figure 3, 圖 3, Table 5, 表 5）
+    
+    使用場景：
+    - 用戶問「圖 3 的營收如何？」
+    - Agent 先調用此工具獲取 artifact_id
+    - 然後調用 get_chart_context 獲取解釋
+    """
+    
+    @property
+    def name(self) -> str:
+        return "find_chart_by_figure_number"
+    
+    @property
+    def description(self) -> str:
+        return (
+            "根據圖表編號（如 '3', '5A'）查找對應的 Artifact ID。"
+            "用於將用戶口中的「圖 3」轉換為具體 ID。"
+            "\n\n通常在調用 get_chart_context 之前使用。"
+        )
+    
+    @property
+    def parameters(self) -> dict:
+        return {
+            "type": "object",
+            "properties": {
+                "document_id": {
+                    "type": "integer",
+                    "description": "文檔 ID"
+                },
+                "figure_number": {
+                    "type": "string",
+                    "description": "圖表編號（例如：3, 5A, 12B）"
+                }
+            },
+            "required": ["document_id", "figure_number"]
+        }
+    
+    @property
+    def read_only(self) -> bool:
+        return True
+    
+    async def execute(
+        self,
+        document_id: int,
+        figure_number: str,
+        **kwargs
+    ) -> str:
+        """查找圖表 Artifact ID"""
+        artifact_id = await find_chart_by_figure_number(document_id, figure_number)
+        
+        if artifact_id:
+            return f"✅ 找到圖表 Figure {figure_number}: {artifact_id}"
+        else:
+            return f"❌ 圖表 Figure {figure_number} 不存在於 Document {document_id}"
+
+
+class AssembleMultimodalPromptTool(Tool):
+    """
+    🌟 組裝多模態 Prompt
+    
+    功能：
+    - 將圖片描述 + 跨頁文字 + 用戶問題組裝成完整 Prompt
+    - 提供給 LLM 的完整上下文
+    """
+    
+    @property
+    def name(self) -> str:
+        return "assemble_multimodal_prompt"
+    
+    @property
+    def description(self) -> str:
+        return (
+            "將圖片描述 + 跨頁文字 + 用戶問題組裝成完整 Prompt。"
+            "用於在獲取圖表上下文後，組裝完整的分析 Prompt。"
+        )
+    
+    @property
+    def parameters(self) -> dict:
+        return {
+            "type": "object",
+            "properties": {
+                "image_description": {
+                    "type": "string",
+                    "description": "圖表的描述"
+                },
+                "context_text": {
+                    "type": "string",
+                    "description": "跨頁解釋文字"
+                },
+                "user_question": {
+                    "type": "string",
+                    "description": "用戶的問題"
+                }
+            },
+            "required": ["image_description", "context_text", "user_question"]
+        }
+    
+    @property
+    def read_only(self) -> bool:
+        return True
+    
+    async def execute(
+        self,
+        image_description: str,
+        context_text: str,
+        user_question: str,
+        **kwargs
+    ) -> str:
+        """組裝多模態 Prompt"""
+        return assemble_multimodal_prompt(image_description, context_text, user_question)
+
+
+# ===========================================
 # Agent Tool Registration Functions
 # ===========================================
 

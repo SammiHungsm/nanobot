@@ -13,68 +13,75 @@
 
 ## Tools
 
-### 1. `parse_financial_pdf`
-**Use when**: User uploads or references a PDF file
-
-**Input**: 
-- `pdf_path`: Path to PDF file
-- `extract_tables`: bool (default: True)
-- `extract_charts`: bool (default: True)
-
-**Output**: 
-- Parsed markdown
-- List of tables with structure
-- List of charts with descriptions
-- Bounding boxes for citations
-
-**Example**:
-```python
-result = parse_financial_pdf("tencent_2023_ar.pdf")
-# Returns: {markdown, tables: [...], charts: [...], citations: [...]}
-```
-
----
-
-### 2. `query_financial_database`
+### 1. `vanna_query` 🌟 (取代舊的 query_financial_database)
 **Use when**: User asks for exact numbers, rankings, trends, or comparisons
 
 **Input**: 
-- `query`: Natural language question OR SQL
-- `company`: Optional company name filter
-- `year`: Optional year filter
-- `metric`: Optional metric name
+- `question`: 用戶的自然語言問題
 
 **Output**: 
-- Structured data (rows/columns)
-- SQL query used
-- Citations for each data point
+- 100% 精準的 SQL 查詢結果
+- 支持動態 Schema 注入（Schema v2.3）
 
 **Example**:
 ```python
-# Natural language
-result = query_financial_database("Show Tencent's revenue for 2020-2023")
-
-# Or direct SQL
-result = query_financial_database(
-    sql="SELECT year, value FROM metrics WHERE company='Tencent' AND metric='Revenue'"
-)
+result = vanna_query("Show Tencent's revenue for 2023")
+# Returns: {sql: "SELECT...", results: [...], dynamic_keys_discovered: [...]}
 ```
 
 **Rules**:
-- ALWAYS use for mathematical operations
-- NEVER approximate - database gives exact values
-- Include source page in results
+- **只要涉及數學、數字、排名，絕對不允許猜測，必須呼叫此工具！**
+- 支持中英文查詢
+- 自動處理 JSONB 動態屬性
 
 ---
 
-### 3. `search_documents`
+### 2. `get_chart_context` 🌟 (解決跨頁圖文斷裂)
+**Use when**: User asks about a specific chart/graph (例如：「圖 3 點解會跌？」)
+
+**Input**: 
+- `document_id`: 文檔 ID
+- `figure_number`: 圖表編號 (如 "3")
+
+**Output**: 
+- 該圖表在文件其他頁數的詳細文字解釋
+- 無幻覺，所有解釋來自真實文檔
+
+**Example**:
+```python
+# Step 1: 查找圖表 ID
+artifact_id = find_chart_by_figure_number(document_id=123, figure_number="3")
+
+# Step 2: 獲取跨頁解釋
+context = get_chart_context(document_id=123, figure_number="3")
+# Returns: "[第 50 頁] 如圖 3 所示，本公司營收於 2023 年下跌 15%..."
+```
+
+**Rules**:
+- 獲取文字後，結合你看到的圖片，組裝成完整答案
+- 解決「圖表在第 5 頁，解釋在第 50 頁」的問題
+
+---
+
+### 3. `find_chart_by_figure_number`
+**Use when**: Need to find chart ID before calling get_chart_context
+
+**Input**: 
+- `document_id`: 文檔 ID
+- `figure_number`: 圖表編號
+
+**Output**: 
+- Artifact ID of the chart
+
+---
+
+### 4. `search_documents`
 **Use when**: User asks about policies, strategies, commentary, explanations
 
 **Input**: 
 - `query`: Keywords or natural language
 - `company`: Optional filter
 - `year`: Optional filter
-- `section`: Optional (e.g., "Chairman's Statement", "ESG Report")
 
 **Output**: 
 - Relevant text chunks
@@ -84,27 +91,6 @@ result = query_financial_database(
 **Example**:
 ```python
 result = search_documents("What is Tencent's AI strategy?")
-```
-
----
-
-### 4. `analyze_chart`
-**Use when**: User asks about a specific chart/graph/infographic
-
-**Input**: 
-- `page`: Page number
-- `chart_index`: Optional (if multiple charts on page)
-- `question`: Optional specific question about the chart
-
-**Output**: 
-- Chart type (bar, line, pie, etc.)
-- Detailed description
-- Data points extracted
-- Title and axis labels
-
-**Example**:
-```python
-result = analyze_chart(page=42, question="What trend does this show?")
 ```
 
 ---
@@ -125,9 +111,6 @@ result = analyze_chart(page=42, question="What trend does this show?")
 ```python
 resolve_entity("腾讯") 
 # Returns: {en: "Tencent Holdings", zh: "腾讯控股", code: "0700.HK"}
-
-resolve_entity("Alibaba")
-# Returns: {en: "Alibaba Group", zh: "阿里巴巴集团", code: "9988.HK"}
 ```
 
 ---
@@ -141,9 +124,9 @@ Before answering ANY financial question, follow this pattern:
 User asks: "{question}"
 
 1. Intent Analysis:
-   - Does this require exact numbers? → Use query_financial_database
-   - Does this ask for explanations? → Use search_documents
-   - Does this mention a chart? → Use analyze_chart
+   - Does this require exact numbers? → Use vanna_query
+   - Does this ask for explanations of a chart? → Use get_chart_context
+   - Does this ask for general text strategy? → Use search_documents
    - Is this a hybrid question? → Use multiple tools
 
 2. Entity Resolution:

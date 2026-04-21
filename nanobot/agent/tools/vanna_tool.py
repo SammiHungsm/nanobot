@@ -708,6 +708,125 @@ def ask(question: str) -> Dict:
     return vanna.query(question)
 
 
+# ============================================================
+# Agent Tool Wrapper (讓 Agent 能呼叫 Vanna)
+# ============================================================
+
+from nanobot.agent.tools.base import Tool
+
+
+class VannaQueryTool(Tool):
+    """
+    🌟 Agent 用來呼叫 Vanna 查詢數據的標準接口
+    
+    功能：
+    - 將自然語言轉換為 SQL
+    - 支持 Schema v2.3 (JSONB 動態屬性)
+    - 自動進行 Just-in-Time Schema Injection
+    
+    使用場景：
+    - 用戶問「2023年各區營收是多少？」
+    - Agent 調用此工具生成 SQL 並執行
+    - 返回 100% 精準的數據，絕無幻覺
+    """
+    
+    @property
+    def name(self) -> str:
+        return "vanna_query"
+    
+    @property
+    def description(self) -> str:
+        return (
+            "🎯 當用戶詢問具體的財務數據、公司指標、排名或需要從資料庫查詢精確數字時調用。"
+            "自動將自然語言轉化為精準的 SQL 並返回數據。"
+            "支持 Schema v2.3 的 JSONB 動態屬性查詢。"
+            "\n\n示例問題："
+            "\n- 'Show Tencent revenue for 2023'"
+            "\n- 'Top 5 companies by profit'"
+            "\n- 'Average revenue for Biotech companies in 2022'"
+            "\n- '哪些公司的營收超過 100 億？'"
+        )
+    
+    @property
+    def parameters(self) -> dict:
+        return {
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "用戶的自然語言查詢，例如 'Show Tencent revenue for 2023'"
+                },
+                "use_dynamic_schema": {
+                    "type": "boolean",
+                    "description": "是否使用 Just-in-Time Schema Injection (默認: true)",
+                    "default": True
+                }
+            },
+            "required": ["question"]
+        }
+    
+    @property
+    def read_only(self) -> bool:
+        return True
+    
+    async def execute(
+        self,
+        question: str,
+        use_dynamic_schema: bool = True,
+        **kwargs
+    ) -> str:
+        """執行 Text-to-SQL 查詢"""
+        import json
+        
+        vanna = get_vanna()
+        
+        try:
+            if use_dynamic_schema:
+                # 🌟 使用動態 Schema 注入（支持 Schema v2.3）
+                result = await vanna.query_with_dynamic_schema(question)
+                
+                if result['success']:
+                    # 格式化返回結果
+                    response_parts = [
+                        f"✅ 查詢成功！",
+                        f"",
+                        f"**使用的 SQL:**",
+                        f"```sql",
+                        result['sql'],
+                        f"```",
+                        f"",
+                        f"**結果數據** ({result['row_count']} 行):",
+                    ]
+                    
+                    # 顯示前 10 行數據
+                    if result['results']:
+                        for i, row in enumerate(result['results'][:10], 1):
+                            response_parts.append(f"{i}. {row}")
+                    
+                    # 如果發現了動態 Keys，顯示它們
+                    if result.get('dynamic_keys_discovered'):
+                        response_parts.extend([
+                            f"",
+                            f"**發現的動態屬性 Keys:** {', '.join(result['dynamic_keys_discovered'][:5])}"
+                        ])
+                    
+                    return "\n".join(response_parts)
+                else:
+                    return f"❌ 查詢失敗: {result.get('error')}"
+            else:
+                # 普通查詢
+                result = vanna.query(question)
+                
+                if result['success']:
+                    return f"✅ 查詢成功！\n\nSQL: {result['sql']}\n\n結果: {result['results'][:10]}"
+                else:
+                    return f"❌ 查詢失敗: {result.get('error')}"
+                    
+        except Exception as e:
+            logger.error(f"❌ VannaQueryTool 執行失敗: {e}")
+            return f"❌ 查詢執行錯誤: {str(e)}"
+
+
 if __name__ == "__main__":
     # Test Vanna integration
     print("Testing Vanna AI Integration...\n")

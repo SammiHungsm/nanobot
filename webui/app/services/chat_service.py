@@ -16,28 +16,22 @@ async def process_chat_message(
     document_path: Optional[str] = None,
     session_id: Optional[str] = None
 ) -> str:
-    """
-    Process chat message - tries WebAPI first, falls back to local processing.
-    
-    Args:
-        user_message: User's message text
-        username: Current username
-        document_path: Optional document path if tagged
-        session_id: Optional session ID for conversation continuity
-        
-    Returns:
-        Bot response text
-    """
-    # Try WebAPI first
+    # 組合傳給 Agent 的完整訊息，如果使用者有選文件，就自動在背景幫他標註
+    # 這樣後端 Agent 就能透過 Prompt 或 Context 知道要查哪份 PDF
+    enriched_message = user_message
+    if document_path and "[Doc:" not in user_message:
+        enriched_message = f"[Target Document: {document_path}]\n{user_message}"
+
     try:
         async with httpx.AsyncClient(timeout=300.0) as client:
             response = await client.post(
                 f"{settings.NANOBOT_API_URL}/api/chat",
                 json={
-                    "message": user_message,
+                    "message": enriched_message,  # 🌟 傳送包含文件提示的訊息
                     "username": username,
                     "chat_id": session_id or "webui-session",
                     "user_id": username,
+                    "document_path": document_path  # 🌟 (可選) 讓後端 API 直接接收文件路徑
                 }
             )
             
