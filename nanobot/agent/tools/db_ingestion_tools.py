@@ -11,11 +11,68 @@ Database Ingestion Tools - Smart Insert with Industry Assignment Rules
 from __future__ import annotations
 
 import json
+import hashlib
 from typing import Any, Dict, List, Optional
 from loguru import logger
 
 from nanobot.agent.tools.base import Tool
 from pydantic import BaseModel, Field
+
+
+# ============================================================
+# Helper: 名称转 ID (Method A 的核心魔法)
+# ============================================================
+
+async def _resolve_company_id(
+    db_client: Any,
+    company_id: Optional[int],
+    company_name: Optional[str],
+    context: dict = None
+) -> tuple[Optional[int], Optional[str]]:
+    """
+    🌟 名称转 ID 的核心魔法 (Method A)
+    
+    LLM 只擅长理解文字（公司名称），不擅长记住数据库的 ID。
+    这个函数让 Python 负责查 ID，LLM 只需要传公司名称。
+    
+    Args:
+        db_client: 数据库客户端
+        company_id: LLM 传入的 company_id（母公司）
+        company_name: LLM 传入的公司名称（子公司/竞争对手等）
+        context: 执行上下文（包含默认 company_id）
+        
+    Returns:
+        tuple[company_id, error_message]: 返回解析后的 company_id，或错误信息
+    """
+    actual_company_id = company_id
+    error_msg = None
+    
+    # 如果 LLM 传入了公司名称（不是母公司）
+    if company_name and str(company_name).lower() not in ["", "none", "null"]:
+        try:
+            # 生成虚拟股票代码（因为 stock_code 必填且唯一）
+            pseudo_code = "SUB_" + hashlib.md5(company_name.encode()).hexdigest()[:6].upper()
+            
+            # 尝试 Upsert 公司
+            new_id = await db_client.upsert_company(
+                stock_code=pseudo_code,
+                name_en=company_name
+            )
+            
+            if new_id:
+                actual_company_id = new_id
+                logger.info(f"🆕 名称转ID成功: '{company_name}' -> ID={new_id}")
+            else:
+                error_msg = f"无法为公司 '{company_name}' 创建记录"
+        except Exception as e:
+            error_msg = f"解析公司名称 '{company_name}' 失败: {e}"
+            logger.warning(f"⚠️ {error_msg}")
+    
+    # Fallback: 使用上下文中的默认 company_id
+    if not actual_company_id and context:
+        actual_company_id = context.get("company_id")
+    
+    return actual_company_id, error_msg
 
 class GetDBSchemaTool(Tool):
     """
@@ -796,6 +853,7 @@ class InsertKeyPersonnelTool(Tool):
     功能：
     - 写入 key_personnel 表
     - 支持 board_role, committee_membership 等
+    - 🌟 支持通过公司名称写入（Method A）
     
     Schema v2.3:
     - name_en, name_zh, position_title_en
@@ -811,7 +869,8 @@ class InsertKeyPersonnelTool(Tool):
     def description(self) -> str:
         return (
             "Insert key personnel (directors, executives) into key_personnel table. "
-            "Use this when you find board members, management team, or committee members."
+            "Use this when you find board members, management team, or committee members. "
+            "🌟 Supports company_name for subsidiary data (Method A)."
         )
     
     @property
@@ -819,8 +878,15 @@ class InsertKeyPersonnelTool(Tool):
         return {
             "type": "object",
             "properties": {
-                "company_id": {"type": "integer", "description": "Company ID"},
-                "document_id": {"type": "integer", "description": "Document ID"},
+                "company_id": {
+                    "type": ["integer", "null"], 
+                    "description": "母公司的 ID（如果是母公司数据，请填此项）"
+                },
+                "company_name": {
+                    "type": ["string", "null"], 
+                    "description": "🌟 如果数据属于子公司、关联公司或竞争对手，请填写他们的公司名称，系统会自动查找或创建对应的 ID"
+                },
+                "document_id": {"type": ["integer", "null"], "description": "Document ID"},
                 "personnel_list": {
                     "type": "array",
                     "items": {
@@ -846,25 +912,45 @@ class InsertKeyPersonnelTool(Tool):
                     "description": "List of key personnel to insert"
                 }
             },
-            "required": ["company_id", "personnel_list"]
+            "required": ["personnel_list"]
         }
     
     @property
     def read_only(self) -> bool:
         return False
     
-    async def execute(self, company_id: int, personnel_list: List[Dict], document_id: Optional[int] = None, **kwargs) -> str:
+    async def execute(self, personnel_list: List[Dict], company_id: int = None, 
+                      company_name: str = None, document_id: Optional[int] = None, **kwargs) -> str:
         """写入关键人员
         
+        🌟 Method A: 支持 company_name 参数
         🌟 防弹参数：
         - **kwargs 吸收 LLM 幻觉产生的多余参数
         """
         from nanobot.ingestion.repository.db_client import DBClient
         
+        context = kwargs.get("context", {})
         db = DBClient()
         await db.connect()
         
         try:
+            # 🌟 Method A: 名称转 ID
+            actual_company_id, error = await _resolve_company_id(
+                db_client=db,
+                company_id=company_id,
+                company_name=company_name,
+                context=context
+            )
+            
+            if error:
+                return json.dumps({"success": False, "error": error}, indent=2)
+            
+            if not actual_company_id:
+                return json.dumps({
+                    "success": False, 
+                    "error": "必须提供 company_id 或 company_name"
+                }, indent=2)
+            
             inserted_count = 0
             
             async with db.connection() as conn:
@@ -875,13 +961,12 @@ class InsertKeyPersonnelTool(Tool):
                         continue  # 🌟 v1.2: 跳过没有 name_en 的记录
                     
                     # committee_membership 需要转为 JSON
-                    import json
                     committee_json = json.dumps(person.get("committee_membership", [])) if person.get("committee_membership") else None
                     
                     # 🌟 v1.2: 先检查是否存在，再决定 INSERT 或 UPDATE
                     existing = await conn.fetchval(
                         "SELECT id FROM key_personnel WHERE company_id = $1 AND name_en = $2",
-                        company_id,
+                        actual_company_id,  # 🌟 使用转换后的 ID
                         name_en
                     )
                     
@@ -908,7 +993,7 @@ class InsertKeyPersonnelTool(Tool):
                             (company_id, document_id, name_en, name_zh, position_title_en, board_role, committee_membership, biography)
                             VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
                             """,
-                            company_id,
+                            actual_company_id,  # 🌟 使用转换后的 ID
                             document_id,
                             name_en,
                             person.get("name_zh"),
@@ -921,9 +1006,10 @@ class InsertKeyPersonnelTool(Tool):
             
             return json.dumps({
                 "success": True,
-                "company_id": company_id,
+                "company_id": actual_company_id,
+                "company_name": company_name,
                 "inserted_count": inserted_count,
-                "message": f"✅ 写入 {inserted_count} 位关键人员"
+                "message": f"✅ 写入 {inserted_count} 位关键人员 (公司: {company_name or f'ID={actual_company_id}'})"
             }, indent=2, ensure_ascii=False)
             
         except Exception as e:
@@ -939,6 +1025,7 @@ class InsertFinancialMetricsTool(Tool):
     功能：
     - 写入 financial_metrics 表
     - 支持标准化货币单位
+    - 🌟 支持通过公司名称写入（Method A）
     
     Schema v2.3:
     - metric_name (如 revenue, net_income, total_assets)
@@ -953,7 +1040,8 @@ class InsertFinancialMetricsTool(Tool):
     def description(self) -> str:
         return (
             "Insert financial metrics into financial_metrics table. "
-            "Use this when you find financial figures like revenue, profit, assets, liabilities."
+            "Use this when you find financial figures like revenue, profit, assets, liabilities. "
+            "🌟 Supports company_name for subsidiary/competitor data (Method A)."
         )
     
     @property
@@ -961,7 +1049,14 @@ class InsertFinancialMetricsTool(Tool):
         return {
             "type": "object",
             "properties": {
-                "company_id": {"type": "integer", "description": "Company ID"},
+                "company_id": {
+                    "type": ["integer", "null"], 
+                    "description": "母公司的 ID（如果是母公司数据，请填此项）"
+                },
+                "company_name": {
+                    "type": ["string", "null"], 
+                    "description": "🌟 如果数据属于子公司、关联公司或竞争对手，请填写他们的公司名称，系统会自动查找或创建对应的 ID"
+                },
                 "year": {"type": "integer", "description": "Financial year"},
                 "metrics": {
                     "type": "array",
@@ -979,25 +1074,48 @@ class InsertFinancialMetricsTool(Tool):
                     "description": "List of financial metrics"
                 }
             },
-            "required": ["company_id", "year", "metrics"]
+            "required": ["year", "metrics"]
         }
     
     @property
     def read_only(self) -> bool:
         return False
     
-    async def execute(self, company_id: int, year: int, metrics: List[Dict], **kwargs) -> str:
+    async def execute(self, year: int, metrics: List[Dict], company_id: int = None, 
+                      company_name: str = None, **kwargs) -> str:
         """写入财务指标
+        
+        🌟 Method A: 支持 company_name 参数
+        - 如果传入 company_name，系统会自动查找或创建公司 ID
+        - LLM 不需要记住 ID，只需要传公司名称
         
         🌟 防弹参数：
         - **kwargs 吸收 LLM 幻觉产生的多余参数（如 document_id）
         """
         from nanobot.ingestion.repository.db_client import DBClient
         
+        context = kwargs.get("context", {})
         db = DBClient()
         await db.connect()
         
         try:
+            # 🌟 Method A: 名称转 ID
+            actual_company_id, error = await _resolve_company_id(
+                db_client=db,
+                company_id=company_id,
+                company_name=company_name,
+                context=context
+            )
+            
+            if error:
+                return json.dumps({"success": False, "error": error}, indent=2)
+            
+            if not actual_company_id:
+                return json.dumps({
+                    "success": False, 
+                    "error": "必须提供 company_id 或 company_name"
+                }, indent=2)
+            
             inserted_count = 0
             updated_count = 0
             
@@ -1016,7 +1134,7 @@ class InsertFinancialMetricsTool(Tool):
                             standardized_value = EXCLUDED.standardized_value,
                             source_page = EXCLUDED.source_page
                         """,
-                        company_id,
+                        actual_company_id,  # 🌟 使用转换后的 ID
                         year,
                         metric.get("metric_name"),
                         metric.get("value"),
@@ -1032,11 +1150,12 @@ class InsertFinancialMetricsTool(Tool):
             
             return json.dumps({
                 "success": True,
-                "company_id": company_id,
+                "company_id": actual_company_id,
+                "company_name": company_name,
                 "year": year,
                 "inserted_count": inserted_count,
                 "updated_count": updated_count,
-                "message": f"✅ 寫入 {inserted_count} 個新指標，更新 {updated_count} 個現有指標"
+                "message": f"✅ 寫入 {inserted_count} 個新指標，更新 {updated_count} 個現有指標 (公司: {company_name or f'ID={actual_company_id}'})"
             }, indent=2, ensure_ascii=False)
             
         except Exception as e:
@@ -1048,6 +1167,8 @@ class InsertFinancialMetricsTool(Tool):
 class InsertShareholdingTool(Tool):
     """
     [Tool] 寫入股東結構數據
+    
+    🌟 支持通过公司名称写入（Method A）
     
     Schema v2.3 實際結構：
     - shareholder_name, shareholder_type (不是 share_type!)
@@ -1063,7 +1184,8 @@ class InsertShareholdingTool(Tool):
         return (
             "Insert shareholding structure into shareholding_structure table. "
             "Use this when you find shareholder names and ownership percentages. "
-            "Optional fields: shareholder_type, is_controlling, is_institutional, notes."
+            "Optional fields: shareholder_type, is_controlling, is_institutional, notes. "
+            "🌟 Supports company_name for subsidiary data (Method A)."
         )
     
     @property
@@ -1071,7 +1193,14 @@ class InsertShareholdingTool(Tool):
         return {
             "type": "object",
             "properties": {
-                "company_id": {"type": "integer", "description": "Company ID"},
+                "company_id": {
+                    "type": ["integer", "null"], 
+                    "description": "母公司的 ID（如果是母公司数据，请填此项）"
+                },
+                "company_name": {
+                    "type": ["string", "null"], 
+                    "description": "🌟 如果数据属于子公司、关联公司或竞争对手，请填写他们的公司名称，系统会自动查找或创建对应的 ID"
+                },
                 "year": {"type": "integer", "description": "Year"},
                 "shareholders": {
                     "type": "array",
@@ -1093,24 +1222,44 @@ class InsertShareholdingTool(Tool):
                     "description": "List of shareholders"
                 }
             },
-            "required": ["company_id", "year", "shareholders"]
+            "required": ["year", "shareholders"]
         }
     
     @property
     def read_only(self) -> bool:
         return False
     
-    async def execute(self, company_id: int, year: int, shareholders: List[Dict], **kwargs) -> str:
+    async def execute(self, year: int, shareholders: List[Dict], company_id: int = None,
+                      company_name: str = None, **kwargs) -> str:
         """寫入股東結構
         
+        🌟 Method A: 支持 company_name 参数
         🌟 防彈參數：**kwargs 吸收 LLM 幻覺產生的多餘參數
         """
         from nanobot.ingestion.repository.db_client import DBClient
         
+        context = kwargs.get("context", {})
         db = DBClient()
         await db.connect()
         
         try:
+            # 🌟 Method A: 名称转 ID
+            actual_company_id, error = await _resolve_company_id(
+                db_client=db,
+                company_id=company_id,
+                company_name=company_name,
+                context=context
+            )
+            
+            if error:
+                return json.dumps({"success": False, "error": error}, indent=2)
+            
+            if not actual_company_id:
+                return json.dumps({
+                    "success": False, 
+                    "error": "必须提供 company_id 或 company_name"
+                }, indent=2)
+            
             inserted_count = 0
             
             async with db.connection() as conn:
@@ -1122,7 +1271,7 @@ class InsertShareholdingTool(Tool):
                          is_controlling, is_institutional, trust_name, trustee_name, notes)
                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                         """,
-                        company_id,
+                        actual_company_id,  # 🌟 使用转换后的 ID
                         year,
                         sh.get("shareholder_name"),
                         sh.get("shareholder_type"),  # 🌟 修正：shareholder_type 不是 share_type
@@ -1138,10 +1287,11 @@ class InsertShareholdingTool(Tool):
             
             return json.dumps({
                 "success": True,
-                "company_id": company_id,
+                "company_id": actual_company_id,
+                "company_name": company_name,
                 "year": year,
                 "inserted_count": inserted_count,
-                "message": f"✅ 寫入 {inserted_count} 個股東"
+                "message": f"✅ 寫入 {inserted_count} 個股東 (公司: {company_name or f'ID={actual_company_id}'})"
             }, indent=2, ensure_ascii=False)
             
         except Exception as e:
@@ -1158,6 +1308,7 @@ class InsertRevenueBreakdownTool(Tool):
     - 写入 revenue_breakdown 表
     - 支持 business/geography/product 三种 segment_type
     - Agent 见到「按地区划分收入」时必须用这个 Tool
+    - 🌟 支持通过公司名称写入（Method A）
     
     Schema v2.3:
     - segment_name, segment_type (business/geography/product)
@@ -1173,7 +1324,8 @@ class InsertRevenueBreakdownTool(Tool):
         return (
             "Insert revenue breakdown data into revenue_breakdown table. "
             "Use this when you find revenue split by business segments, geography, or products. "
-            "⚠️ This is NOT the same as financial_metrics! Use this specifically for revenue breakdown tables."
+            "⚠️ This is NOT the same as financial_metrics! Use this specifically for revenue breakdown tables. "
+            "🌟 Supports company_name for subsidiary data (Method A)."
         )
     
     @property
@@ -1181,7 +1333,14 @@ class InsertRevenueBreakdownTool(Tool):
         return {
             "type": "object",
             "properties": {
-                "company_id": {"type": "integer", "description": "Company ID"},
+                "company_id": {
+                    "type": ["integer", "null"], 
+                    "description": "母公司的 ID（如果是母公司数据，请填此项）"
+                },
+                "company_name": {
+                    "type": ["string", "null"], 
+                    "description": "🌟 如果数据属于子公司、关联公司或竞争对手，请填写他们的公司名称，系统会自动查找或创建对应的 ID"
+                },
                 "year": {"type": "integer", "description": "Financial year"},
                 "document_id": {"type": ["integer", "null"], "description": "Source document ID"},
                 "segments": {
@@ -1204,19 +1363,23 @@ class InsertRevenueBreakdownTool(Tool):
                     "description": "List of revenue segments"
                 }
             },
-            "required": ["company_id", "year", "segments"]
+            "required": ["year", "segments"]
         }
     
     @property
     def read_only(self) -> bool:
         return False
     
-    async def execute(self, company_id: int, year: int, segments: List[Dict], document_id: Optional[int] = None, **kwargs) -> str:
+    async def execute(self, year: int, segments: List[Dict], company_id: int = None,
+                      company_name: str = None, document_id: Optional[int] = None, **kwargs) -> str:
         """写入收入分解
         
+        🌟 Method A: 支持 company_name 参数
         🌟 防弹参数：**kwargs 吸收 LLM 幻觉产生的多余参数
         """
         from nanobot.ingestion.repository.db_client import DBClient
+        
+        context = kwargs.get("context", {})
         
         # 🌟 v1.2: 强制转换 document_id 为整数（Agent 可能传字符串）
         if document_id is not None:
@@ -1229,6 +1392,23 @@ class InsertRevenueBreakdownTool(Tool):
         await db.connect()
         
         try:
+            # 🌟 Method A: 名称转 ID
+            actual_company_id, error = await _resolve_company_id(
+                db_client=db,
+                company_id=company_id,
+                company_name=company_name,
+                context=context
+            )
+            
+            if error:
+                return json.dumps({"success": False, "error": error}, indent=2)
+            
+            if not actual_company_id:
+                return json.dumps({
+                    "success": False, 
+                    "error": "必须提供 company_id 或 company_name"
+                }, indent=2)
+            
             inserted_count = 0
             
             async with db.connection() as conn:
@@ -1245,7 +1425,7 @@ class InsertRevenueBreakdownTool(Tool):
                             revenue_percentage = $6,
                             source_document_id = $8
                         """,
-                        company_id,
+                        actual_company_id,  # 🌟 使用转换后的 ID
                         year,
                         seg.get("segment_name"),
                         seg.get("segment_type", "geography"),
@@ -1260,10 +1440,11 @@ class InsertRevenueBreakdownTool(Tool):
             
             return json.dumps({
                 "success": True,
-                "company_id": company_id,
+                "company_id": actual_company_id,
+                "company_name": company_name,
                 "year": year,
                 "inserted_count": inserted_count,
-                "message": f"✅ 写入 {inserted_count} 个收入分解项到 revenue_breakdown 表"
+                "message": f"✅ 写入 {inserted_count} 个收入分解项到 revenue_breakdown 表 (公司: {company_name or f'ID={actual_company_id}'})"
             }, indent=2, ensure_ascii=False)
             
         except Exception as e:
@@ -1273,18 +1454,14 @@ class InsertRevenueBreakdownTool(Tool):
             await db.close()
 
 
+from typing import Any, Optional
+import json
+from loguru import logger
+# 假設你的 Tool 基類已經 import，保留你原本的 import
+
 class InsertEntityRelationTool(Tool):
     """
-    [Tool] 写入实体关系（知识图谱） 🌟 知识图谱遗漏修复
-    
-    功能：
-    - 写入 entity_relations 表
-    - 支持 person/company/event/location 四种实体类型
-    - 支持 CEO_of/partner_of/acquired/located_in 等关系
-    
-    使用场景：
-    - Agent 读到「张三是腾讯的CEO」→ 写入实体关系
-    - Agent 读到「公司A收购公司B」→ 写入收购关系
+    [Tool] 写入实体关系（知识图谱） 🌟 知识图谱遗漏修复 (严格强约束版)
     """
     
     @property
@@ -1295,9 +1472,9 @@ class InsertEntityRelationTool(Tool):
     def description(self) -> str:
         return (
             "Insert entity relation (knowledge graph) into entity_relations table. "
-            "Use this when you find relationships like 'Person A is CEO of Company B', "
-            "'Company A acquired Company B', or 'Person X located in Region Y'. "
-            "Supports person/company/event/location entity types."
+            "⚠️ STRICT RULE: You MUST use standardized official names for entities. "
+            "Do NOT use pronouns like 'The Company', 'The Group', or 'It'. "
+            "Resolve them to the actual company name before inserting."
         )
     
     @property
@@ -1311,17 +1488,34 @@ class InsertEntityRelationTool(Tool):
                     "enum": ["person", "company", "event", "location"],
                     "description": "Type of the source entity"
                 },
-                "source_entity_name": {"type": "string", "description": "Name of the source entity"},
+                "source_entity_name": {
+                    "type": "string", 
+                    "description": "Name of the source entity (e.g., 'Tencent Holdings' NOT 'The Group')"
+                },
                 "relation_type": {
                     "type": "string",
-                    "description": "Type of relation (e.g., 'CEO_of', 'partner_of', 'acquired', 'located_in', 'subsidiary_of')"
+                    # 🌟 第 1 層防護：在 Schema 中嚴格鎖死 Enum，不讓 LLM 亂作夢！
+                    "enum": [
+                        "executive_of",      # 董事/高管
+                        "subsidiary_of",     # 子公司
+                        "acquired_by",       # 被收購
+                        "partnered_with",    # 合作夥伴
+                        "competitor_of",     # 競爭對手
+                        "invested_in",       # 投資
+                        "supplier_of",       # 供應商
+                        "customer_of"        # 客戶
+                    ],
+                    "description": "Type of relation. YOU MUST STRICTLY CHOOSE FROM THIS LIST ONLY."
                 },
                 "target_entity_type": {
                     "type": "string",
                     "enum": ["person", "company", "event", "location"],
                     "description": "Type of the target entity"
                 },
-                "target_entity_name": {"type": "string", "description": "Name of the target entity"},
+                "target_entity_name": {
+                    "type": "string", 
+                    "description": "Name of the target entity"
+                },
                 "confidence_score": {
                     "type": "number",
                     "default": 0.8,
@@ -1346,13 +1540,39 @@ class InsertEntityRelationTool(Tool):
         target_entity_type: str,
         target_entity_name: str,
         confidence_score: float = 0.8,
-        event_year: Optional[Any] = None,  # 🌟 這裡：把類型改成 Any，接收 LLM 的任何亂寫
+        event_year: Optional[Any] = None,
         **kwargs  # 🌟 防弹参数：吸收 LLM 幻觉产生的多余参数
     ) -> str:
         """写入实体关系"""
+        
+        # ==================================================
+        # 🌟 第 2 層防護：Python 邏輯層過濾 (防止 LLM 繞過 Schema)
+        # ==================================================
+        allowed_relations = {
+            "executive_of", "subsidiary_of", "acquired_by", 
+            "partnered_with", "competitor_of", "invested_in", 
+            "supplier_of", "customer_of"
+        }
+        
+        if relation_type not in allowed_relations:
+            logger.warning(f"⚠️ LLM 試圖寫入非法的關係類型: {relation_type}，已拒絕。")
+            return json.dumps({
+                "success": False,
+                "error": f"STRICT RULE VIOLATION: '{relation_type}' is not allowed. You MUST choose from {list(allowed_relations)}."
+            }, ensure_ascii=False)
+            
+        # 擋下沒有意義的代名詞實體
+        bad_words = ["the group", "the company", "it", "本公司", "本集團"]
+        if source_entity_name.lower() in bad_words or target_entity_name.lower() in bad_words:
+            logger.warning(f"⚠️ LLM 試圖寫入代名詞實體: {source_entity_name} -> {target_entity_name}，已拒絕。")
+            return json.dumps({
+                "success": False,
+                "error": "STRICT RULE VIOLATION: You cannot use pronouns ('The Company', '本集團') as entity names. Please resolve to the actual proper noun."
+            }, ensure_ascii=False)
+        # ==================================================
+        
         from nanobot.ingestion.repository.db_client import DBClient
         
-        # 🌟 這裡：加入防呆轉換機制
         actual_event_year = None
         if event_year is not None:
             try:
@@ -1376,12 +1596,12 @@ class InsertEntityRelationTool(Tool):
                     """,
                     document_id,
                     source_entity_type,
-                    source_entity_name,
+                    source_entity_name.strip(),
                     relation_type,
                     target_entity_type,
-                    target_entity_name,
+                    target_entity_name.strip(),
                     confidence_score,
-                    actual_event_year  # 🌟 這裡：使用轉換後的值
+                    actual_event_year
                 )
             
             logger.info(f"✅ 写入实体关系: {source_entity_name} → {relation_type} → {target_entity_name}")
@@ -1399,7 +1619,6 @@ class InsertEntityRelationTool(Tool):
         finally:
             await db.close()
 
-
 class InsertMarketDataTool(Tool):
     """
     [Tool] 寫入市場數據
@@ -1407,6 +1626,7 @@ class InsertMarketDataTool(Tool):
     功能：
     - 寫入 market_data 表
     - 支援 PE Ratio, Market Cap, 股價等市場指標
+    - 🌟 支持通过公司名称写入（Method A）
     
     Schema v2.3 實際結構：
     - company_id, data_date (必填)
@@ -1423,7 +1643,8 @@ class InsertMarketDataTool(Tool):
             "Insert market data (PE ratio, market cap, stock price) into market_data table. "
             "Use this when you find market-related figures on the first page of annual reports. "
             "⚠️ This is different from financial_metrics (which are for revenue/profit/assets). "
-            "Required: company_id, data_date. Optional: pe_ratio, market_cap, close_price, volume, etc."
+            "Required: company_id OR company_name, data_date. Optional: pe_ratio, market_cap, close_price, volume, etc. "
+            "🌟 Supports company_name for subsidiary data (Method A)."
         )
     
     @property
@@ -1431,7 +1652,14 @@ class InsertMarketDataTool(Tool):
         return {
             "type": "object",
             "properties": {
-                "company_id": {"type": "integer", "description": "Company ID"},
+                "company_id": {
+                    "type": ["integer", "null"], 
+                    "description": "母公司的 ID（如果是母公司数据，请填此项）"
+                },
+                "company_name": {
+                    "type": ["string", "null"], 
+                    "description": "🌟 如果数据属于子公司、关联公司或竞争对手，请填写他们的公司名称，系统会自动查找或创建对应的 ID"
+                },
                 "data_date": {"type": "string", "description": "Data date (YYYY-MM-DD format, e.g., '2023-12-31')"},
                 "period_type": {"type": ["string", "null"], "description": "Period type (e.g., 'daily', 'yearly')"},
                 "pe_ratio": {"type": ["number", "null"], "description": "Price-to-Earnings ratio"},
@@ -1446,25 +1674,44 @@ class InsertMarketDataTool(Tool):
                 "dividend_yield": {"type": ["number", "null"], "description": "Dividend yield (%)"},
                 "source": {"type": ["string", "null"], "description": "Data source"}
             },
-            "required": ["company_id", "data_date"]
+            "required": ["data_date"]
         }
     
     @property
     def read_only(self) -> bool:
         return False
     
-    async def execute(self, company_id: int, data_date: str, **kwargs) -> str:
+    async def execute(self, data_date: str, company_id: int = None, company_name: str = None, **kwargs) -> str:
         """寫入市場數據
         
+        🌟 Method A: 支持 company_name 参数
         🌟 防彈參數：**kwargs 吸收 LLM 幻覺產生的多餘參數
         """
         from nanobot.ingestion.repository.db_client import DBClient
         from datetime import datetime, date as date_type
         
+        context = kwargs.get("context", {})
         db = DBClient()
         await db.connect()
         
         try:
+            # 🌟 Method A: 名称转 ID
+            actual_company_id, error = await _resolve_company_id(
+                db_client=db,
+                company_id=company_id,
+                company_name=company_name,
+                context=context
+            )
+            
+            if error:
+                return json.dumps({"success": False, "error": error}, indent=2)
+            
+            if not actual_company_id:
+                return json.dumps({
+                    "success": False, 
+                    "error": "必须提供 company_id 或 company_name"
+                }, indent=2)
+            
             # 🌟 將字串日期轉換為 date 物件
             if isinstance(data_date, str):
                 data_date_obj = datetime.strptime(data_date, "%Y-%m-%d").date()
@@ -1482,7 +1729,7 @@ class InsertMarketDataTool(Tool):
                      dividend_yield, source)
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
                     """,
-                    company_id,
+                    actual_company_id,  # 🌟 使用转换后的 ID
                     data_date_obj,  # 🌟 使用 date 物件
                     kwargs.get("period_type"),
                     kwargs.get("pe_ratio"),
@@ -1498,13 +1745,14 @@ class InsertMarketDataTool(Tool):
                     kwargs.get("source")
                 )
             
-            logger.info(f"✅ 寫入市場數據: company_id={company_id}, date={data_date}")
+            logger.info(f"✅ 寫入市場數據: company_id={actual_company_id}, date={data_date}")
             
             return json.dumps({
                 "success": True,
-                "company_id": company_id,
+                "company_id": actual_company_id,
+                "company_name": company_name,
                 "data_date": data_date,
-                "message": f"✅ 成功寫入市場數據"
+                "message": f"✅ 成功寫入市場數據 (公司: {company_name or f'ID={actual_company_id}'})"
             }, indent=2, ensure_ascii=False)
             
         except Exception as e:

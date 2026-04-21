@@ -30,6 +30,7 @@ from nanobot.ingestion.stages import (
     Stage2Enrichment,
     Stage3Router,
     Stage4AgenticExtractor,
+    Stage4_5_KGExtractor,
     Stage5VannaTraining,
     Stage6Validator,
     Stage7VectorIndexer,
@@ -333,7 +334,26 @@ class DocumentPipeline(BaseIngestionPipeline):
                 context_result=context_result  # 🌟 v4.10: 传入 Stage 3.5 結構化上下文
             )
             result["stages"]["stage4"] = stage4_result
+            # =================================================================
+            # 🌟 新增：Stage 4.5: KG Extractor (獨立的知識圖譜抽取)
+            # =================================================================
+            if progress_callback:
+                progress_callback(70.0, "Stage 4.5: Knowledge Graph Extractor")
             
+            # 取得公司全名，幫助 LLM 解決「本公司」等代名詞問題
+            company_name_full = stage0_result.get("name_en") or stage0_result.get("name_zh") or "The Company"
+            
+            try:
+                stage4_5_result = await Stage4_5_KGExtractor.run(
+                    artifacts=artifacts,
+                    document_id=document_id,
+                    company_name_full=company_name_full,
+                    db_client=self.db
+                )
+                result["stages"]["stage4_5"] = stage4_5_result
+            except Exception as e:
+                logger.warning(f"⚠️ Stage 4.5 KG 抽取失敗: {e}")
+                result["stages"]["stage4_5"] = {"status": "failed", "error": str(e)}
             # ===== Stage 4.5: Fallback Check 🌟 終極包底 =====
             if progress_callback:
                 progress_callback(75.0, "Stage 4.5: Fallback Check")
@@ -450,6 +470,16 @@ class DocumentPipeline(BaseIngestionPipeline):
                     message=f"Agentic 提取完成",
                     artifacts_count=extracted_count
                 )
+                # 🌟 新增：Stage 4.5 History
+                if result["stages"].get("stage4_5") and result["stages"]["stage4_5"].get("status") == "success":
+                    kg_relations_count = result["stages"]["stage4_5"].get("extracted_relations_count", 0)
+                    await self.db.insert_processing_history(
+                        document_id=document_id,
+                        stage="stage4_5",
+                        status="success",
+                        message=f"知識圖譜實體關係提取完成",
+                        artifacts_count=kg_relations_count
+                    )
                 # Stage 7
                 if result["stages"].get("stage7"):
                     await self.db.insert_processing_history(

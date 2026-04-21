@@ -736,15 +736,19 @@ class VannaQueryTool(Tool):
     
     @property
     def description(self) -> str:
+        # 🌟 換成這個強烈約束版本的 Description
         return (
-            "🎯 當用戶詢問具體的財務數據、公司指標、排名或需要從資料庫查詢精確數字時調用。"
-            "自動將自然語言轉化為精準的 SQL 並返回數據。"
-            "支持 Schema v2.3 的 JSONB 動態屬性查詢。"
-            "\n\n示例問題："
+            "🔥 CRITICAL: ALWAYS USE THIS TOOL FIRST when the user asks about "
+            "financial data, revenue, profit, margins, shareholding, key personnel, "
+            "or ANY company-specific numerical data. "
+            "Use this tool to search the local PostgreSQL database ACROSS ALL DOCUMENTS, "
+            "EVEN IF the user does NOT specify a document name or year. "
+            "DO NOT use web_search until this tool returns no results or fails! "
+            "\n\nExample questions that MUST use this tool:"
+            "\n- 'What is the shareholding percentage of Li Ka-Shing?'"
             "\n- 'Show Tencent revenue for 2023'"
             "\n- 'Top 5 companies by profit'"
             "\n- 'Average revenue for Biotech companies in 2022'"
-            "\n- '哪些公司的營收超過 100 億？'"
         )
     
     @property

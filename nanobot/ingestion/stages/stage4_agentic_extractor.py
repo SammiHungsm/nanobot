@@ -200,8 +200,21 @@ Step 3: 动态写入 🌟 关键！（选择正确的 Tool）
 🌟 【动态写入指引 (Tool Usage Guide)】
 ========================================
 
-⚠️ 选择正确的 Tool 是关键！不同数据用不同 Tool：
+⚠️ 多公司数据处理规则 (非常重要！Method A)：
 
+如果数据属于当前 PDF 的「母公司」：
+   → 请传入 company_id 参数
+
+如果你发现数据属于「子公司」、「联营公司」、「合资企业」或「竞争对手」：
+   → 【不要】填写 company_id
+   → 将该公司的名称填入 `company_name` 参数！
+   → 系统会自动为 `company_name` 寻找或建立正确的数据库 ID
+   
+例如：如果母公司是「长和」，但你发现了「腾讯」的利润数据：
+   ❌ 错误：company_id=1 (长和的 ID)，但数据是腾讯的
+   ✅ 正确：company_name="腾讯"，系统会自动查找或创建腾讯的 ID
+
+⚠️ 选择正确的 Tool 是关键！不同数据用不同 Tool：n
 1️⃣ 财务指标（利润、资产、负债）
    → 使用 insert_financial_metrics
    → 例如：净利润 123亿、总资产 500亿
@@ -267,6 +280,7 @@ Step 5: 完成
 - 发现新字段时，先注册关键词，再写入 JSONB
 - 不确定时，创建审核记录
 - 选择正确的 Tool！（revenue_breakdown ≠ financial_metrics）
+- 🌟 使用 company_name 而不是猜测 ID！（Method A）
 
 开始执行！
 """

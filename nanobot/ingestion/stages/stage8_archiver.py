@@ -215,6 +215,7 @@ class Stage8Archiver:
     @staticmethod
     async def generate_processing_report(
         doc_id: str,
+        document_id: int,  # 🌟 v1.2: 新增参数 - 整数 document_id
         stages_result: Dict[str, Any],
         db_client: Any = None
     ) -> Dict[str, Any]:
@@ -223,6 +224,7 @@ class Stage8Archiver:
         
         Args:
             doc_id: 文档 ID
+            document_id: 文档内部 ID（整数）
             stages_result: 各 Stage 的结果
             db_client: DB 客户端
             
@@ -231,6 +233,7 @@ class Stage8Archiver:
         """
         report = {
             "doc_id": doc_id,
+            "document_id": document_id,  # 🌟 v1.2: 记录整数 ID
             "generated_at": datetime.now().isoformat(),
             "stages_summary": {},
             "overall_status": "success",
@@ -261,12 +264,13 @@ class Stage8Archiver:
         if db_client:
             try:
                 await db_client.insert_raw_artifact(
-                    artifact_id=f"report_{doc_id}",  # 🌟 v1.1: 添加 artifact_id
-                    document_id=stages_result.get("document_id"),  # 🌟 v1.1: 使用整数 document_id
+                    artifact_id=f"report_{doc_id}",
+                    document_id=document_id,  # 🌟 v1.2: 直接使用传入的 document_id
+                    doc_id=doc_id,  # 🌟 v1.2: 双重保险 - 同时传入 doc_id
                     artifact_type="processing_report",
-                    page_num=-1,  # 🌟 v1.1: 修正参数名 - page_number -> page_num
+                    page_num=-1,
                     content_json=report,
-                    content=json.dumps(report, indent=2)  # 🌟 v1.1: 修正参数名 - raw_text -> content
+                    content=json.dumps(report, indent=2)
                 )
             except Exception as e:
                 logger.warning(f"   ⚠️ 保存报告失败: {e}")
@@ -340,6 +344,7 @@ class Stage8Archiver:
         # 4. 生成处理报告
         report = await Stage8Archiver.generate_processing_report(
             doc_id=doc_id,
+            document_id=document_id,  # 🌟 v1.2: 传递 document_id 给报告生成器
             stages_result=stages_result,
             db_client=db_client
         )
