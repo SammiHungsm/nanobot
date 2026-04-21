@@ -26,3 +26,7 @@ sentence-transformers>=2.2.0
 
 # Logging
 loguru>=0.7.0
+
+# 🌟 vanna 移至獨立的 vanna-service 容器
+# WebUI 透過 HTTP API 調用 vanna-service:8082
+# 無需本地安裝 vanna 依賴

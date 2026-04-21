@@ -10,6 +10,7 @@ Stage Handlers for Document Pipeline (v4.0 Enterprise-grade - 极简版)
 - Stage 2: Enrichment (保存 Artifacts + RAGAnything Vision 分析)
 - Stage 3: Router (关键字扫描与目标页面路由)
 - Stage 4: Agentic Extractor (Tool Calling 提取与动态写入) 🌟 唯一的提取入口
+- Stage 4.5: KG Extractor (知识图谱实体关系抽取) 🆕
 - Stage 5: Vanna Training (Text-to-SQL 训练)
 - Stage 6: Validator (数据验证、单位换算、实体对齐)
 - Stage 7: Vector Indexer (文本切块、Embedding、向量入库)
@@ -24,6 +25,7 @@ from .stage1_parser import Stage1Parser
 from .stage2_enrichment import Stage2Enrichment
 from .stage3_router import Stage3Router
 from .stage4_agentic_extractor import Stage4AgenticExtractor
+from .stage4_5_kg_extractor import Stage4_5_KGExtractor  # 🌟 1. 新增這個 import
 from .stage5_vanna_training import Stage5VannaTraining
 from .stage6_validator import Stage6Validator
 from .stage7_vector_indexer import Stage7VectorIndexer
@@ -36,6 +38,7 @@ __all__ = [
     "Stage2Enrichment",
     "Stage3Router",
     "Stage4AgenticExtractor",
+    "Stage4_5_KGExtractor",  # 🌟 2. 把它加進對外暴露的清單
     "Stage5VannaTraining",
     "Stage6Validator",
     "Stage7VectorIndexer",

@@ -16,6 +16,7 @@ Features:
 """
 
 import os
+import re
 
 # 🔧 禁用 ChromaDB telemetry（必须在导入 chromadb/vanna 之前设置）
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
@@ -159,6 +160,28 @@ def get_db_connection():
     return psycopg2.connect(db_url, connect_timeout=10)
 
 
+def expand_env_vars(value: str) -> str:
+    """
+    展開環境變量，支援 ${VAR:-default} 語法
+    
+    Examples:
+        ${DASHSCOPE_API_KEY} -> 環境變量的值
+        ${DASHSCOPE_API_BASE:-https://default.com} -> 環境變量值或默認值
+    """
+    if not isinstance(value, str):
+        return value
+    
+    # 匹配 ${VAR} 或 ${VAR:-default}
+    pattern = r'\$\{([^}:-]+)(?::-([^}]*))?\}'
+    
+    def replace(match):
+        var_name = match.group(1)
+        default = match.group(2) if match.group(2) is not None else ''
+        return os.getenv(var_name, default)
+    
+    return re.sub(pattern, replace, value)
+
+
 def load_openai_api_key() -> tuple:
     """
     Load API key, base URL, and model from config file or environment variable
@@ -187,8 +210,8 @@ def load_openai_api_key() -> tuple:
                 # Check for custom OpenAI-compatible API (like Qwen, DeepSeek, etc.)
                 # This has priority - agents.provider = 'custom' means use custom endpoint
                 if 'providers' in config and 'custom' in config['providers']:
-                    api_key = config['providers']['custom'].get('api_key')
-                    api_base = config['providers']['custom'].get('api_base')
+                    api_key = expand_env_vars(config['providers']['custom'].get('api_key'))
+                    api_base = expand_env_vars(config['providers']['custom'].get('api_base'))
                     if api_base and api_key and not api_key.startswith("sk-YOUR-"):
                         logger.info(f"✅ Loaded custom API from config: {config_path}")
                         logger.debug(f"   API base: {api_base}")
@@ -202,7 +225,7 @@ def load_openai_api_key() -> tuple:
                 
                 # Check for OpenAI key in providers.openai.api_key (fallback)
                 if 'providers' in config and 'openai' in config['providers']:
-                    api_key = config['providers']['openai'].get('api_key')
+                    api_key = expand_env_vars(config['providers']['openai'].get('api_key'))
                     # Skip placeholder keys
                     if api_key and not api_key.startswith("sk-YOUR-") and api_key != "YOUR_OPENAI_KEY":
                         logger.info(f"✅ Loaded OpenAI key from config: {config_path}")
@@ -813,6 +836,239 @@ async def generate_embeddings(request: EmbedRequest):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+
+# ============================================================
+# 🌟 Dynamic Schema Injection Endpoints (原本在 vanna_tool.py)
+# ============================================================
+
+@app.get("/api/discover_dynamic_keys")
+async def discover_dynamic_keys():
+    """
+    Discover all dynamic keys stored in JSONB columns (Schema v2.3)
+    
+    🌟 原本在 vanna_tool.py 的 VannaSQL.discover_dynamic_keys()
+    
+    Returns:
+        Dictionary with discovered keys, sample values, and frequency
+    """
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # 🌟 Schema v2.3: 从 companies.extra_data 获取 Keys
+        cursor.execute("""
+            SELECT DISTINCT jsonb_object_keys(extra_data) AS key
+            FROM companies
+            WHERE extra_data IS NOT NULL 
+            AND extra_data != '{}'::jsonb
+            ORDER BY key
+        """)
+        
+        keys_rows = cursor.fetchall()
+        discovered_keys = [row["key"] for row in keys_rows]
+        
+        # 获取样本值
+        sample_values = {}
+        for key in discovered_keys[:10]:
+            cursor.execute(f"""
+                SELECT extra_data->>'{key}' AS sample_value
+                FROM companies
+                WHERE extra_data->>'{key}' IS NOT NULL
+                LIMIT 1
+            """)
+            sample = cursor.fetchone()
+            if sample:
+                sample_values[key] = sample["sample_value"]
+        
+        # Get frequency count
+        cursor.execute("""
+            SELECT jsonb_object_keys(extra_data) AS key, COUNT(*) as count
+            FROM companies
+            WHERE extra_data IS NOT NULL
+            GROUP BY jsonb_object_keys(extra_data)
+            ORDER BY count DESC
+            LIMIT 20
+        """)
+        
+        frequency_rows = cursor.fetchall()
+        key_frequency = {row["key"]: row["count"] for row in frequency_rows}
+        
+        # 🌟 Schema v2.3: 从 document_companies.extracted_industries 获取行业
+        cursor.execute("""
+            SELECT DISTINCT jsonb_array_elements_text(extracted_industries) AS industry
+            FROM document_companies
+            WHERE extracted_industries IS NOT NULL
+            LIMIT 20
+        """)
+        
+        industry_rows = cursor.fetchall()
+        discovered_industries = [row["industry"] for row in industry_rows]
+        
+        cursor.close()
+        conn.close()
+        
+        result = {
+            "discovered_keys": discovered_keys,
+            "total_keys": len(discovered_keys),
+            "sample_values": sample_values,
+            "key_frequency": key_frequency,
+            "discovered_industries": discovered_industries,
+            "status": "success"
+        }
+        
+        logger.info(f"🔍 Discovered {len(discovered_keys)} dynamic keys from companies.extra_data")
+        return result
+        
+    except Exception as e:
+        logger.error(f"❌ Dynamic key discovery failed: {e}")
+        return {
+            "discovered_keys": [],
+            "status": "error",
+            "error": str(e)
+        }
+
+
+class AskWithDynamicSchemaRequest(BaseModel):
+    """Request model for ask with dynamic schema injection"""
+    question: str
+    include_summary: bool = False
+
+
+@app.post("/api/ask_with_dynamic_schema", response_model=AskResponse)
+async def ask_with_dynamic_schema(request: AskWithDynamicSchemaRequest):
+    """
+    Ask Vanna with Just-in-Time Schema Injection
+    
+    🌟 原本在 vanna_tool.py 的 VannaSQL.generate_sql_with_dynamic_schema()
+    
+    This method:
+    1. First discovers all dynamic keys in the database
+    2. Builds an enhanced prompt with JSONB query hints
+    3. Passes the enhanced prompt to Vanna
+    
+    Args:
+        request.question: User's natural language question
+        request.include_summary: Return summary (default: false)
+        
+    Returns:
+        Query result with SQL, data, and dynamic keys discovered
+    """
+    if vn is None:
+        raise HTTPException(status_code=503, detail="Vanna not initialized")
+    
+    try:
+        logger.info(f"🔍 Asking with dynamic schema: {request.question}")
+        
+        # Step 1: Discover dynamic keys
+        dynamic_info = await discover_dynamic_keys()
+        
+        # Step 2: Build enhanced prompt
+        discovered_keys = dynamic_info.get("discovered_keys", [])
+        sample_values = dynamic_info.get("sample_values", {})
+        discovered_industries = dynamic_info.get("discovered_industries", [])
+        
+        if discovered_keys:
+            enhanced_question = f"""
+{COLUMN_CHANGE_HINTS}
+
+用戶問題: {request.question}
+
+📌 重要提示：資料庫 v2.3 包含以下動態屬性 (存儲在 JSONB 欄位中):
+
+**companies.extra_data 可用的 Keys:**
+{json.dumps(discovered_keys, indent=2, ensure_ascii=False)}
+
+**樣本值:**
+{json.dumps(sample_values, indent=2, ensure_ascii=False)}
+
+**已發現的 AI 提取行業 (在 document_companies.extracted_industries):**
+{json.dumps(discovered_industries, indent=2, ensure_ascii=False)}
+
+**PostgreSQL JSONB 查詢語法 (必須使用 Schema v2.3):**
+```sql
+-- 提取單一值 (返回 text)
+SELECT extra_data->>'key_name' FROM companies;
+
+-- 結合文檔與公司屬性查詢
+SELECT d.filename, c.name_en, c.extra_data->>'index_theme' 
+FROM documents d JOIN companies c ON d.owner_company_id = c.id
+WHERE c.extra_data->>'index_quarter' = 'Q3';
+
+-- 檢查 Key 是否存在
+SELECT * FROM companies WHERE extra_data ? 'key_name';
+
+-- 查詢 JSON 數組中的行業 (document_companies)
+SELECT dc.document_id, c.name_en, dc.extraction_source
+FROM document_companies dc
+JOIN companies c ON dc.company_id = c.id
+WHERE dc.extracted_industries ? 'Biotech';
+```
+
+請根據以上信息生成正確的 SQL 查詢。
+"""
+            logger.debug(f"Enhanced prompt built with {len(discovered_keys)} dynamic keys")
+        else:
+            enhanced_question = f"""
+{COLUMN_CHANGE_HINTS}
+
+用戶問題：{request.question}
+
+請根據 v2.3 Schema 生成 SQL 查詢。
+"""
+            logger.info("No dynamic keys found, using standard prompt")
+        
+        # Step 3: Generate SQL
+        sql = vn.generate_sql(enhanced_question)
+        
+        if sql:
+            logger.debug(f"📝 Generated SQL: {sql}")
+            
+            # Run SQL
+            try:
+                df = vn.run_sql(sql)
+                
+                # Generate explanation if requested
+                answer = None
+                if request.include_summary and df is not None:
+                    answer = vn.generate_summary(request.question, df)
+                
+                # Convert DataFrame to list of dicts
+                data = None
+                if df is not None:
+                    data = df.to_dict('records')
+                
+                return AskResponse(
+                    question=request.question,
+                    sql=sql,
+                    answer=answer,
+                    data=data,
+                    status="ready"
+                )
+            except Exception as sql_error:
+                logger.warning(f"SQL execution error: {sql_error}")
+                return AskResponse(
+                    question=request.question,
+                    sql=sql,
+                    error=str(sql_error),
+                    status="error"
+                )
+        else:
+            return AskResponse(
+                question=request.question,
+                error="無法生成 SQL，請嘗試重新表述問題",
+                status="failed"
+            )
+        
+    except Exception as e:
+        logger.error(f"❌ Query with dynamic schema failed: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================
+# Training Endpoints
+# ============================================================
 
 @app.post("/api/train_ddl")
 async def train_with_ddl(ddl: str):

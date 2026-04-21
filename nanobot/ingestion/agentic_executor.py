@@ -120,6 +120,46 @@ class AgenticExecutor:
         
         tool_obj = self.tools_registry[tool_name]
         
+        # =================================================================
+        # 🌟 系統級優化：Auto Type Casting (根據 Tool 的 Schema 自動轉型)
+        # =================================================================
+        # LLM 經常會傳遞錯誤的資料型態（例如 "1" 而不是 1），
+        # 這裡根據 Tool 的 JSON Schema 自動進行類型轉換
+        # =================================================================
+        if hasattr(tool_obj, 'parameters'):
+            properties = tool_obj.parameters.get("properties", {})
+            
+            for key, val in tool_args.items():
+                if key in properties and val is not None:
+                    # 獲取 Schema 中定義的預期類型
+                    expected_type = properties[key].get("type")
+                    
+                    try:
+                        if expected_type == "integer":
+                            # 如果預期是整數，但 LLM 傳了字串 "1" 或浮點數 1.0
+                            if isinstance(val, str):
+                                tool_args[key] = int(float(val))
+                            elif isinstance(val, float):
+                                tool_args[key] = int(val)
+                        elif expected_type == "number":
+                            # 如果預期是浮點數，但 LLM 傳了字串 "123.45"
+                            if isinstance(val, str):
+                                tool_args[key] = float(val)
+                        elif expected_type == "boolean":
+                            # 處理 "true", "False", "1" 等各種布林字串
+                            if isinstance(val, str):
+                                tool_args[key] = val.lower() in ("true", "1", "yes", "t")
+                            elif isinstance(val, (int, float)):
+                                tool_args[key] = bool(val)
+                        elif expected_type == "string":
+                            # 強制轉字串
+                            tool_args[key] = str(val)
+                    except (ValueError, TypeError) as e:
+                        # 如果 LLM 傳了完全無法轉換的東西 (例如 "abc" 轉 int)，
+                        # 這裡放行保留原值，讓 Tool 執行時自己報錯
+                        logger.warning(f"⚠️ 自動轉型失敗: {key}={val} (預期: {expected_type}), error: {e}")
+                        pass
+        
         try:
             # 🌟 v3.20: 获取 execute 方法
             if hasattr(tool_obj, 'execute'):
@@ -144,7 +184,7 @@ class AgenticExecutor:
             
         except Exception as e:
             logger.warning(f"   ⚠️ Tool 执行失败: {e}")
-            return json.dumps({"error": str(e)})
+            return json.dumps({"error": str(e)}))
     
     async def run(
         self,

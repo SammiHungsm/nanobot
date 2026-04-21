@@ -61,6 +61,8 @@ services:
       # 🌟 LlamaParse API Key
       - LLAMA_CLOUD_API_KEY=${LLAMA_CLOUD_API_KEY}
       - LLAMAPARSE_TIER=${LLAMAPARSE_TIER:-agentic}
+      # 🌟 Vanna Service URL (HTTP Client)
+      - VANNA_SERVICE_URL=http://vanna-service:8082
     volumes:
       - ./config:/app/config
       - ~/.nanobot:/root/.nanobot
@@ -69,6 +71,8 @@ services:
     depends_on:
       postgres-financial:
         condition: service_healthy
+      vanna-service:
+        condition: service_started
     deploy:
       resources:
         limits:
@@ -105,9 +109,13 @@ services:
       # 🌟 LlamaParse API Key
       - LLAMA_CLOUD_API_KEY=${LLAMA_CLOUD_API_KEY}
       - LLAMAPARSE_TIER=${LLAMAPARSE_TIER:-agentic}
+      # 🌟 Vanna Service URL (HTTP Client)
+      - VANNA_SERVICE_URL=http://vanna-service:8082
     depends_on:
       postgres-financial:
         condition: service_healthy
+      vanna-service:
+        condition: service_started
     restart: unless-stopped
     deploy:
       resources:
@@ -140,6 +148,8 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANONYMIZED_TELEMETRY=False
       - CHROMA_TELEMETRY=False
+    # ports:  # 🌟 不對外暴露，只使用內部網絡
+    #   - "8082:8082"
     depends_on:
       postgres-financial:
         condition: service_healthy

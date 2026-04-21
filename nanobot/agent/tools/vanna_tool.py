@@ -1,530 +1,114 @@
 """
-Vanna AI Text-to-SQL Integration
+Vanna AI Text-to-SQL Integration (Microservice Client)
 
-Provides RAG-powered text-to-SQL generation with schema training.
-Replaces manual SQL generation with AI-powered accurate queries.
+Architecture: Gateway (HTTP Client) → vanna-service:8082 (Vanna AI)
+
+This module is a PURE HTTP CLIENT.
+- No local vanna/chromadb imports
+- All Vanna operations go through HTTP API calls
+- Decouples Gateway from heavy ML dependencies
 
 Key Features:
-- Just-in-Time Schema Injection for JSONB attributes
-- Dynamic key discovery before query generation
-- PostgreSQL JSONB query syntax support
+- Text-to-SQL via HTTP
+- Dynamic Schema Injection for JSONB attributes
+- PostgreSQL JSONB query syntax support (Schema v2.3)
 
 Usage:
-    from nanobot.agent.tools.vanna_tool import VannaSQL
+    from nanobot.agent.tools.vanna_tool import VannaQueryTool
     
-    vanna = VannaSQL()
-    vanna.train_schema()
-    
-    sql = vanna.generate_sql("Show Tencent's revenue for 2020-2023")
-    result = vanna.execute(sql)
-    
-    # With dynamic schema injection
-    sql = vanna.generate_sql_with_dynamic_schema("Find Q3 biotech reports")
+    tool = VannaQueryTool()
+    result = await tool.execute(question="Show Tencent's revenue for 2020-2023")
 """
 
-from typing import Optional, List, Dict, Any
+from typing import Optional, Dict, Any, List
 from loguru import logger
 import os
 import json
+import httpx
 from pathlib import Path
 
+# Import base Tool class
+from nanobot.agent.tools.base import Tool
 
-class VannaSQL:
+
+class VannaServiceClient:
     """
-    Vanna AI Text-to-SQL generator with RAG training.
+    HTTP Client for Vanna Service
     
-    Example:
-        vanna = VannaSQL()
-        vanna.train_schema()
-        
-        # Generate SQL from natural language
-        sql = vanna.generate_sql("What was Tencent's revenue in 2023?")
-        
-        # Execute query
-        results = vanna.execute(sql)
+    All Vanna operations go through HTTP API calls to vanna-service:8082
     """
     
-    def __init__(self, 
-                 database_url: Optional[str] = None,
-                 model_name: str = "financial-sql",
-                 api_key: Optional[str] = None,
-                 persist_dir: Optional[str] = None):
+    def __init__(self, base_url: Optional[str] = None):
         """
-        Initialize Vanna AI.
+        Initialize Vanna Service Client
         
         Args:
-            database_url: PostgreSQL connection URL (uses env vars if not provided)
-            model_name: Vanna model name
-            api_key: Vanna API key (optional, uses default if not provided)
-            persist_dir: Directory to persist training state
+            base_url: Vanna service URL (default: http://vanna-service:8082)
         """
-        # Fix #1: Use environment variables for database connection (unified with ingestion module)
-        self.database_url = database_url or os.getenv(
-            "DATABASE_URL",
-            "postgresql://${POSTGRES_USER:postgres}:${POSTGRES_PASSWORD:postgres_password_change_me}@${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB:annual_reports}"
+        self.base_url = base_url or os.getenv(
+            "VANNA_SERVICE_URL", 
+            "http://vanna-service:8082"
         )
-        # Resolve environment variable references
-        self.database_url = self._resolve_env_vars(self.database_url)
-        
-        self.model_name = model_name
-        self.api_key = api_key
-        self.persist_dir = Path(persist_dir or os.getenv("VANNA_PERSIST_DIR", "/app/data/vanna_db"))
-        
-        self._vn = None
-        self._trained = False
-        self._training_state_file = self.persist_dir / "training_state.json"
-        
-        # Fix #4: Load training state from disk
-        self._load_training_state()
-        
-        logger.info(f"VannaSQL initialized (model={model_name}, database={self.database_url.split('@')[1] if '@' in self.database_url else 'unknown'})")
+        self.timeout = httpx.Timeout(120.0, connect=10.0)  # 🌟 增加到 120 秒
+        logger.info(f"🌐 VannaServiceClient initialized: {self.base_url}")
     
-    def _resolve_env_vars(self, url: str) -> str:
-        """Resolve ${VAR} or ${VAR:default} patterns in URL"""
-        from nanobot.utils.helpers import resolve_env_vars
-        return resolve_env_vars(url)
-    
-    def _load_training_state(self):
-        """Load training state from disk (Fix #4: Persist training state)"""
-        if self._training_state_file.exists():
-            try:
-                with open(self._training_state_file, 'r', encoding='utf-8') as f:
-                    state = json.load(f)
-                self._trained = state.get('trained', False)
-                logger.info(f"📚 Loaded Vanna training state: trained={self._trained}")
-            except Exception as e:
-                logger.warning(f"Failed to load training state: {e}")
-                self._trained = False
-        else:
-            logger.info("📖 No existing training state found, will train on first use")
-    
-    def _save_training_state(self):
-        """Save training state to disk (Fix #4: Persist training state)"""
+    async def health_check(self) -> Dict[str, Any]:
+        """Check Vanna service health"""
         try:
-            self.persist_dir.mkdir(parents=True, exist_ok=True)
-            with open(self._training_state_file, 'w', encoding='utf-8') as f:
-                json.dump({
-                    'trained': self._trained,
-                    'model_name': self.model_name,
-                    'updated_at': Path(self._training_state_file).stat().st_mtime
-                }, f, indent=2)
-            logger.info(f"💾 Saved Vanna training state to {self._training_state_file}")
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.get(f"{self.base_url}/health")
+                response.raise_for_status()
+                return response.json()
         except Exception as e:
-            logger.error(f"Failed to save training state: {e}")
+            logger.error(f"❌ Vanna health check failed: {e}")
+            return {"status": "error", "error": str(e)}
     
-    @property
-    def vn(self):
-        """Lazy load Vanna instance"""
-        if not self._vn:
-            try:
-                from vanna.remote import VannaDefault
-                
-                # Use Vanna's default model (free tier)
-                # For production, configure with your own API key
-                if self.api_key:
-                    self._vn = VannaDefault(model=self.model_name, api_key=self.api_key)
-                else:
-                    # Use ChromaDB-backed local instance with persistence
-                    from vanna.chromadb import ChromaDB_VectorStore
-                    import chromadb
-                    from pathlib import Path
-                    
-                    # 指定 ChromaDB 持久化路徑 (Docker 容器內為 /app/data/vanna_db)
-                    persist_dir = os.getenv("VANNA_PERSIST_DIR", "/app/data/vanna_db")
-                    Path(persist_dir).mkdir(parents=True, exist_ok=True)
-                    
-                    # 初始化帶有持久化的 ChromaDB
-                    chroma_client = chromadb.PersistentClient(path=persist_dir)
-                    self._vn = ChromaDB_VectorStore(chroma_client=chroma_client)
-                    
-                    # 連接 PostgreSQL
-                    self._vn.connect_to_postgres(
-                        host=os.getenv("POSTGRES_HOST", "localhost"),
-                        port=os.getenv("POSTGRES_PORT", "5432"),
-                        dbname=os.getenv("POSTGRES_DB", "annual_reports"),
-                        user=os.getenv("POSTGRES_USER", "postgres"),
-                        password=os.getenv("POSTGRES_PASSWORD", "postgres_password_change_me")
-                    )
-                
-                logger.info(f"Vanna instance created with ChromaDB persistence at {persist_dir}")
-            except Exception as e:
-                logger.error(f"Failed to create Vanna instance: {e}")
-                raise
-        
-        return self._vn
-    
-    def train_schema(self, force: bool = False) -> Dict[str, int]:
+    async def ask(
+        self, 
+        question: str, 
+        include_sql: bool = True,
+        include_summary: bool = False
+    ) -> Dict[str, Any]:
         """
-        Train Vanna on database schema and documentation.
+        Ask Vanna a question (generate SQL and execute)
         
         Args:
-            force: If True, retrain even if already trained
-        
+            question: Natural language question
+            include_sql: Return SQL (default: true)
+            include_summary: Return summary (default: false)
+            
         Returns:
-            Training statistics
+            Dict with question, sql, answer, data, status
         """
-        if self._trained and not force:
-            logger.info("Already trained, skipping")
-            return {'status': 'skipped', 'reason': 'already_trained'}
-        
         try:
-            stats = {
-                'ddl_statements': 0,
-                'documentation': 0,
-                'sql_queries': 0
-            }
-            
-            # Train on DDL statements
-            ddl_statements = self._get_table_ddl()
-            for ddl in ddl_statements:
-                self.vn.train(ddl=ddl)
-                stats['ddl_statements'] += 1
-            
-            logger.info(f"Trained on {stats['ddl_statements']} DDL statements")
-            
-            # Train on documentation
-            docs = self._get_schema_docs()
-            for doc in docs:
-                self.vn.train(documentation=doc)
-                stats['documentation'] += 1
-            
-            logger.info(f"Trained on {stats['documentation']} documentation items")
-            
-            # Train on example queries
-            examples = self._get_example_queries()
-            for sql, question in examples:
-                self.vn.train(question=question, sql=sql)
-                stats['sql_queries'] += 1
-            
-            logger.info(f"Trained on {stats['sql_queries']} example queries")
-            
-            self._trained = True
-            logger.info("Vanna training complete")
-            
-            # Fix #4: Save training state to disk
-            self._save_training_state()
-            
-            return {'status': 'trained', **stats}
-            
-        except Exception as e:
-            logger.error(f"Training failed: {e}")
-            return {'status': 'failed', 'error': str(e)}
-    
-    def _get_table_ddl(self) -> List[str]:
-        """Get DDL statements for all tables (Schema v2.3 适配)"""
-        # Use training_data.py for comprehensive DDL
-        try:
-            from vanna_backend.training_data import ddl_statements
-            return ddl_statements
-        except ImportError:
-            # 🌟 Fallback: Schema v2.3 基础结构
-            return [
-                """
-                -- 🌟 Schema v2.3: documents 表
-                CREATE TABLE documents (
-                    id SERIAL PRIMARY KEY,
-                    doc_id VARCHAR(255) UNIQUE,
-                    filename VARCHAR(500) NOT NULL,
-                    report_type VARCHAR(50) DEFAULT 'annual_report',
-                    owner_company_id INTEGER REFERENCES companies(id),
-                    year INTEGER,
-                    processing_status VARCHAR(50) DEFAULT 'pending',
-                    uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                );
-                """,
-                """
-                -- 🌟 Schema v2.3: companies 表
-                CREATE TABLE companies (
-                    id SERIAL PRIMARY KEY,
-                    stock_code VARCHAR(50) UNIQUE,
-                    name_en VARCHAR(255),
-                    name_zh VARCHAR(255),
-                    confirmed_industry VARCHAR(100),
-                    is_industry_confirmed BOOLEAN DEFAULT FALSE,
-                    ai_extracted_industries JSONB,
-                    sector VARCHAR(100),
-                    extra_data JSONB DEFAULT '{}'::jsonb
-                );
-                CREATE INDEX idx_companies_extra_data ON companies USING GIN (extra_data);
-                """,
-                """
-                -- 🌟 Schema v2.3: document_companies 多對多關聯表
-                CREATE TABLE document_companies (
-                    id SERIAL PRIMARY KEY,
-                    document_id INTEGER NOT NULL REFERENCES documents(id),
-                    company_id INTEGER NOT NULL REFERENCES companies(id),
-                    relation_type VARCHAR(50) DEFAULT 'mentioned',
-                    extracted_industries JSONB,
-                    extraction_source VARCHAR(50) DEFAULT 'ai_predict',
-                    UNIQUE(document_id, company_id)
-                );
-                """,
-                """
-                -- 🌟 Schema v2.3: financial_metrics 表
-                CREATE TABLE financial_metrics (
-                    id SERIAL PRIMARY KEY,
-                    company_id INTEGER NOT NULL REFERENCES companies(id),
-                    year INTEGER NOT NULL,
-                    metric_name VARCHAR(100) NOT NULL,
-                    metric_name_zh VARCHAR(100),
-                    value NUMERIC(20, 2),
-                    standardized_value NUMERIC(20, 2),
-                    standardized_currency VARCHAR(10) DEFAULT 'HKD',
-                    CONSTRAINT unique_metric UNIQUE (company_id, year, metric_name)
-                );
-                """,
-            ]
-    
-    def _get_schema_docs(self) -> List[str]:
-        """Get schema documentation (Schema v2.3 适配)"""
-        try:
-            from vanna_backend.training_data import get_all_documentation
-            return get_all_documentation()
-        except ImportError:
-            # 🌟 Fallback: Schema v2.3 文档
-            return [
-                """
-                🌟 CRITICAL: Schema v2.3 变更
-                - documents.dynamic_attributes → 已删除，改为 companies.extra_data
-                - documents.ai_extracted_industries → 已删除，改为 document_companies.extracted_industries
-                
-                To query JSONB values in v2.3:
-                - SELECT extra_data->>'key_name' FROM companies;
-                - WHERE c.extra_data->>'index_quarter' = 'Q3';
-                - WHERE dc.extracted_industries ? 'Biotech';
-                """,
-                """
-                Industry Assignment Rules (Schema v2.3):
-                - Rule A (Index Reports): companies.is_industry_confirmed = TRUE, 使用 confirmed_industry
-                - Rule B (Annual Reports): companies.is_industry_confirmed = FALSE, 使用 ai_extracted_industries
-                
-                多對多關聯查詢需要 JOIN document_companies:
-                SELECT d.filename, c.name_en FROM documents d
-                JOIN document_companies dc ON dc.document_id = d.id
-                JOIN companies c ON dc.company_id = c.id;
-                """
-            ]
-    
-    def _get_example_queries(self) -> List[tuple]:
-        """Get example SQL queries for training (Schema v2.3 适配)"""
-        try:
-            from vanna_backend.training_data import get_all_question_sql_pairs
-            return get_all_question_sql_pairs()
-        except ImportError:
-            # 🌟 Fallback: Schema v2.3 示例查询
-            return [
-                # 基础查询
-                (
-                    "SELECT id, doc_id, filename, report_type FROM documents ORDER BY uploaded_at DESC",
-                    "List all documents in the database"
-                ),
-                # 指数报告查询 (v2.3)
-                (
-                    "SELECT d.filename, c.name_en, c.confirmed_industry FROM documents d JOIN companies c ON d.owner_company_id = c.id WHERE d.report_type = 'index_report'",
-                    "Show all index reports with their companies"
-                ),
-                # JSONB 查询 (v2.3: companies.extra_data)
-                (
-                    "SELECT name_en, stock_code, extra_data->>'index_quarter' AS quarter FROM companies WHERE extra_data->>'index_quarter' = 'Q3'",
-                    "Find all companies with Q3 quarter data"
-                ),
-                (
-                    "SELECT name_en, extra_data->>'is_audited' FROM companies WHERE extra_data->>'is_audited' = 'true'",
-                    "Find all audited companies"
-                ),
-                # 多对多关联查询 (v2.3)
-                (
-                    "SELECT d.filename, c.name_en, c.stock_code, dc.extraction_source FROM documents d JOIN document_companies dc ON dc.document_id = d.id JOIN companies c ON dc.company_id = c.id WHERE c.confirmed_industry = 'Biotech'",
-                    "List all documents mentioning Biotech companies"
-                ),
-                # 行业查询 (v2.3: document_companies.extracted_industries)
-                (
-                    "SELECT c.name_en, dc.extracted_industries FROM document_companies dc JOIN companies c ON dc.company_id = c.id WHERE dc.extracted_industries ? 'Biotech'",
-                    "Find companies where AI extracted 'Biotech' as a potential industry"
-                ),
-                # 确认行业查询 (v2.3)
-                (
-                    "SELECT name_en, stock_code, confirmed_industry FROM companies WHERE is_industry_confirmed = TRUE",
-                    "Find companies with confirmed industry (Rule A)"
-                ),
-                # 财务数据查询 (v2.3)
-                (
-                    "SELECT c.name_en, fm.year, fm.metric_name, fm.standardized_value FROM financial_metrics fm JOIN companies c ON fm.company_id = c.id WHERE fm.metric_name = 'Total Revenue' ORDER BY fm.standardized_value DESC LIMIT 10",
-                    "Show top 10 companies by revenue"
-                ),
-            ]
-    
-    # ============================================================
-    # Dynamic Schema Injection Methods
-    # ============================================================
-    
-    async def discover_dynamic_keys(self) -> Dict[str, Any]:
-        """
-        Discover all dynamic keys stored in JSONB columns.
-        
-        🌟 Schema v2.3 适配:
-        - documents.dynamic_attributes → 已删除，改为 companies.extra_data
-        - documents.ai_extracted_industries → 已删除，改为 document_companies.extracted_industries
-        
-        This is the "Just-in-Time Schema Injection" step:
-        - Scan companies.extra_data for all keys
-        - Scan document_companies.extracted_industries for values
-        - Return discovered keys for prompt enhancement
-        
-        Returns:
-            Dictionary with discovered keys, sample values, and frequency
-        """
-        import asyncpg
-        
-        try:
-            # Connect to PostgreSQL
-            conn = await asyncpg.connect(self.database_url)
-            
-            # 🌟 修正 1: 从 companies.extra_data 获取 Keys (Schema v2.3)
-            keys_rows = await conn.fetch(
-                """
-                SELECT DISTINCT jsonb_object_keys(extra_data) AS key
-                FROM companies
-                WHERE extra_data IS NOT NULL 
-                AND extra_data != '{}'::jsonb
-                ORDER BY key
-                """
-            )
-            
-            discovered_keys = [row["key"] for row in keys_rows]
-            
-            # 🌟 修正 2: 从 companies 获取样本值 (Schema v2.3)
-            sample_values = {}
-            for key in discovered_keys[:10]:
-                sample = await conn.fetchrow(
-                    f"""
-                    SELECT extra_data->>'{key}' AS sample_value
-                    FROM companies
-                    WHERE extra_data->>'{key}' IS NOT NULL
-                    LIMIT 1
-                    """
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(
+                    f"{self.base_url}/api/ask",
+                    json={
+                        "question": question,
+                        "include_sql": include_sql,
+                        "include_summary": include_summary
+                    }
                 )
-                if sample:
-                    sample_values[key] = sample["sample_value"]
-            
-            # Get frequency count (companies.extra_data)
-            frequency_rows = await conn.fetch(
-                """
-                SELECT jsonb_object_keys(extra_data) AS key, COUNT(*) as count
-                FROM companies
-                WHERE extra_data IS NOT NULL
-                GROUP BY jsonb_object_keys(extra_data)
-                ORDER BY count DESC
-                LIMIT 20
-                """
-            )
-            
-            key_frequency = {row["key"]: row["count"] for row in frequency_rows}
-            
-            # 🌟 修正 3: 从 document_companies.extracted_industries 获取行业 (Schema v2.3)
-            industry_rows = await conn.fetch(
-                """
-                SELECT DISTINCT jsonb_array_elements_text(extracted_industries) AS industry
-                FROM document_companies
-                WHERE extracted_industries IS NOT NULL
-                LIMIT 20
-                """
-            )
-            
-            discovered_industries = [row["industry"] for row in industry_rows]
-            
-            await conn.close()
-            
-            result = {
-                "discovered_keys": discovered_keys,
-                "total_keys": len(discovered_keys),
-                "sample_values": sample_values,
-                "key_frequency": key_frequency,
-                "discovered_industries": discovered_industries,
-                "status": "success"
-            }
-            
-            logger.info(f"🔍 Discovered {len(discovered_keys)} dynamic keys from companies.extra_data")
-            return result
-            
+                response.raise_for_status()
+                return response.json()
         except Exception as e:
-            logger.error(f"❌ Dynamic key discovery failed: {e}")
+            logger.error(f"❌ Vanna ask failed: {e}")
             return {
-                "discovered_keys": [],
-                "status": "error",
-                "error": str(e)
+                "question": question,
+                "error": str(e),
+                "status": "error"
             }
     
-    def build_enhanced_prompt(self, question: str, dynamic_info: Dict[str, Any]) -> str:
+    async def ask_with_dynamic_schema(
+        self, 
+        question: str,
+        include_summary: bool = False
+    ) -> Dict[str, Any]:
         """
-        Build enhanced prompt with dynamic schema information.
+        Ask Vanna with Just-in-Time Schema Injection
         
-        🌟 Schema v2.3 适配:
-        - SQL 示例使用 companies.extra_data 替代 documents.dynamic_attributes
-        - 行业查询使用 document_companies.extracted_industries
-        
-        Args:
-            question: User's natural language question
-            dynamic_info: Discovered keys and values
-            
-        Returns:
-            Enhanced prompt for Vanna
-        """
-        discovered_keys = dynamic_info.get("discovered_keys", [])
-        sample_values = dynamic_info.get("sample_values", {})
-        discovered_industries = dynamic_info.get("discovered_industries", [])
-        
-        prompt = f"""
-用戶問題: {question}
-
-📌 重要提示：資料庫 v2.3 包含以下動態屬性 (存儲在 JSONB 欄位中):
-
-**companies.extra_data 可用的 Keys:**
-{json.dumps(discovered_keys, indent=2, ensure_ascii=False)}
-
-**樣本值:**
-{json.dumps(sample_values, indent=2, ensure_ascii=False)}
-
-**已發現的 AI 提取行業 (在 document_companies.extracted_industries):**
-{json.dumps(discovered_industries, indent=2, ensure_ascii=False)}
-
-**PostgreSQL JSONB 查詢語法 (必須使用 Schema v2.3):**
-```sql
--- 提取單一值 (返回 text)
-SELECT extra_data->>'key_name' FROM companies;
-
--- 結合文檔與公司屬性查詢
-SELECT d.filename, c.name_en, c.extra_data->>'index_theme' 
-FROM documents d JOIN companies c ON d.owner_company_id = c.id
-WHERE c.extra_data->>'index_quarter' = 'Q3';
-
--- 檢查 Key 是否存在
-SELECT * FROM companies WHERE extra_data ? 'key_name';
-
--- 查詢 JSON 數組中的行業 (document_companies)
-SELECT dc.document_id, c.name_en, dc.extraction_source
-FROM document_companies dc
-JOIN companies c ON dc.company_id = c.id
-WHERE dc.extracted_industries ? 'Biotech';
-
--- 查詢確認行業 (companies.confirmed_industry)
-SELECT c.name_en, c.stock_code, c.confirmed_industry
-FROM companies c
-WHERE c.is_industry_confirmed = TRUE;
-```
-
-請根據以上信息生成正確的 SQL 查詢。如果問題涉及動態屬性，務必使用 JSONB 語法。
-"""
-        
-        return prompt
-    
-    async def generate_sql_with_dynamic_schema(self, question: str) -> Optional[str]:
-        """
-        Generate SQL with Just-in-Time Schema Injection.
-        
-        🌟 Schema v2.3 适配:
-        - 动态属性存储在 companies.extra_data
-        - 行业存储在 document_companies.extracted_industries
+        🌟 原本在本地 VannaSQL.generate_sql_with_dynamic_schema()
         
         This method:
         1. First discovers all dynamic keys in the database
@@ -532,202 +116,161 @@ WHERE c.is_industry_confirmed = TRUE;
         3. Passes the enhanced prompt to Vanna
         
         Args:
-            question: User's natural language question
+            question: Natural language question
+            include_summary: Return summary (default: false)
             
         Returns:
-            SQL query string or None if generation fails
+            Dict with question, sql, answer, data, status, dynamic_keys_discovered
         """
         try:
-            # Step 1: Discover dynamic keys (v2.3: companies.extra_data)
-            dynamic_info = await self.discover_dynamic_keys()
-            
-            # Step 2: Build enhanced prompt
-            if dynamic_info.get("discovered_keys"):
-                enhanced_question = self.build_enhanced_prompt(question, dynamic_info)
-                logger.debug(f"Enhanced prompt built with {len(dynamic_info['discovered_keys'])} dynamic keys")
-            else:
-                enhanced_question = question
-                logger.info("No dynamic keys found, using original question")
-            
-            # Step 3: Generate SQL with enhanced prompt
-            if not self._trained:
-                self.train_schema()
-            
-            sql = self.vn.generate_sql(question=enhanced_question)
-            
-            # 🌟 Validate JSONB syntax for v2.3 (companies.extra_data)
-            if "extra_data" in str(dynamic_info.get("discovered_keys", [])) or \
-               "confirmed_industry" in question.lower() or \
-               "extracted_industries" in question.lower():
-                if "->>" not in sql and "?" not in sql and "JOIN" not in sql:
-                    logger.warning("Generated SQL may not have correct JSONB syntax for Schema v2.3")
-            
-            logger.info(f"Generated SQL with dynamic schema: {sql[:200]}...")
-            return sql
-            
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(
+                    f"{self.base_url}/api/ask_with_dynamic_schema",
+                    json={
+                        "question": question,
+                        "include_summary": include_summary
+                    }
+                )
+                response.raise_for_status()
+                return response.json()
         except Exception as e:
-            logger.error(f"SQL generation with dynamic schema failed: {e}")
-            # Fallback to regular generation
-            return self.generate_sql(question)
-    
-    async def query_with_dynamic_schema(self, question: str) -> Dict[str, Any]:
-        """
-        Complete pipeline with dynamic schema injection.
-        
-        Args:
-            question: Natural language query
-            
-        Returns:
-            Dictionary with SQL, results, dynamic keys, and metadata
-        """
-        # Discover dynamic keys first
-        dynamic_info = await self.discover_dynamic_keys()
-        
-        # Generate SQL with enhanced prompt
-        sql = await self.generate_sql_with_dynamic_schema(question)
-        
-        if not sql:
+            logger.error(f"❌ Vanna ask_with_dynamic_schema failed: {e}")
             return {
-                'success': False,
-                'error': 'Failed to generate SQL',
-                'question': question,
-                'dynamic_keys': dynamic_info.get('discovered_keys', [])
+                "question": question,
+                "error": str(e),
+                "status": "error"
             }
-        
-        # Execute SQL
-        results = self.execute(sql)
-        
-        return {
-            'success': True,
-            'question': question,
-            'sql': sql,
-            'results': results,
-            'row_count': len(results),
-            'dynamic_keys_discovered': dynamic_info.get('discovered_keys', []),
-            'dynamic_keys_count': dynamic_info.get('total_keys', 0)
-        }
     
-    def generate_sql(self, question: str) -> Optional[str]:
+    async def discover_dynamic_keys(self) -> Dict[str, Any]:
         """
-        Generate SQL from natural language question.
-        
-        Args:
-            question: Natural language query
+        Discover all dynamic keys stored in JSONB columns
         
         Returns:
-            SQL query string or None if generation fails
+            Dict with discovered_keys, sample_values, key_frequency, discovered_industries
         """
         try:
-            # Auto-train if not trained
-            if not self._trained:
-                self.train_schema()
-            
-            sql = self.vn.generate_sql(question=question)
-            logger.info(f"Generated SQL: {sql[:200]}...")
-            return sql
-            
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.get(
+                    f"{self.base_url}/api/discover_dynamic_keys"
+                )
+                response.raise_for_status()
+                return response.json()
         except Exception as e:
-            logger.error(f"SQL generation failed: {e}")
-            return None
-    
-    def execute(self, sql: str) -> List[Dict[str, Any]]:
-        """
-        Execute SQL query and return results.
-        Uses financial_storage.py for parameterized queries to prevent SQL injection.
-        
-        Args:
-            sql: SQL query string
-        
-        Returns:
-            List of result dictionaries
-        """
-        try:
-            # Import financial_storage for safer execution
-            from nanobot.storage.financial_storage import PostgresStorage
-            
-            storage = PostgresStorage(self.database_url)
-            storage.connect()
-            
-            # Execute via storage layer (uses SQLAlchemy text() with proper handling)
-            rows = storage.query(sql)
-            
-            logger.debug(f"Query returned {len(rows)} rows")
-            return rows
-            
-        except Exception as e:
-            logger.error(f"Query execution failed: {e}")
-            return []
-    
-    def query(self, question: str) -> Dict[str, Any]:
-        """
-        Complete pipeline: question → SQL → results.
-        
-        Args:
-            question: Natural language query
-        
-        Returns:
-            Dictionary with SQL, results, and metadata
-        """
-        # Generate SQL
-        sql = self.generate_sql(question)
-        if not sql:
+            logger.error(f"❌ Discover dynamic keys failed: {e}")
             return {
-                'success': False,
-                'error': 'Failed to generate SQL',
-                'question': question
+                "discovered_keys": [],
+                "status": "error",
+                "error": str(e)
             }
+    
+    async def train(self, train_type: str = "schema", doc_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Trigger Vanna training
         
-        # Execute SQL
-        results = self.execute(sql)
-        
-        return {
-            'success': True,
-            'question': question,
-            'sql': sql,
-            'results': results,
-            'row_count': len(results)
-        }
+        Args:
+            train_type: "schema" | "ddl" | "sql"
+            doc_id: Optional document ID for document-specific training
+            
+        Returns:
+            Training status
+        """
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(
+                    f"{self.base_url}/api/train",
+                    json={
+                        "train_type": train_type,
+                        "doc_id": doc_id
+                    }
+                )
+                response.raise_for_status()
+                return response.json()
+        except Exception as e:
+            logger.error(f"❌ Vanna train failed: {e}")
+            return {"status": "error", "error": str(e)}
+    
+    async def train_ddl(self, ddl: str) -> Dict[str, Any]:
+        """Train Vanna with DDL statement"""
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(
+                    f"{self.base_url}/api/train_ddl",
+                    params={"ddl": ddl}
+                )
+                response.raise_for_status()
+                return response.json()
+        except Exception as e:
+            logger.error(f"❌ DDL training failed: {e}")
+            return {"status": "error", "error": str(e)}
+    
+    async def train_sql(self, question: str, sql: str) -> Dict[str, Any]:
+        """Train Vanna with question + SQL example"""
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(
+                    f"{self.base_url}/api/train_sql",
+                    params={"question": question, "sql": sql}
+                )
+                response.raise_for_status()
+                return response.json()
+        except Exception as e:
+            logger.error(f"❌ SQL training failed: {e}")
+            return {"status": "error", "error": str(e)}
+    
+    async def get_column_changes(self) -> Dict[str, Any]:
+        """Get Schema v2.3 column name changes"""
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.get(f"{self.base_url}/api/column_changes")
+                response.raise_for_status()
+                return response.json()
+        except Exception as e:
+            logger.error(f"❌ Get column changes failed: {e}")
+            return {"status": "error", "error": str(e)}
+    
+    async def get_status(self) -> Dict[str, Any]:
+        """Get Vanna service status"""
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.get(f"{self.base_url}/status")
+                response.raise_for_status()
+                return response.json()
+        except Exception as e:
+            logger.error(f"❌ Get status failed: {e}")
+            return {"status": "error", "error": str(e)}
 
 
-# Global instance
-_vanna: Optional[VannaSQL] = None
+# Global client instance
+_vanna_client: Optional[VannaServiceClient] = None
 
 
-def get_vanna() -> VannaSQL:
-    """Get global Vanna instance"""
-    global _vanna
-    if not _vanna:
-        _vanna = VannaSQL()
-    return _vanna
-
-
-# Convenience function
-def ask(question: str) -> Dict:
-    """Ask a question in natural language"""
-    vanna = get_vanna()
-    return vanna.query(question)
+def get_vanna_client() -> VannaServiceClient:
+    """Get global Vanna service client"""
+    global _vanna_client
+    if not _vanna_client:
+        _vanna_client = VannaServiceClient()
+    return _vanna_client
 
 
 # ============================================================
-# Agent Tool Wrapper (讓 Agent 能呼叫 Vanna)
+# Agent Tool Wrapper
 # ============================================================
-
-from nanobot.agent.tools.base import Tool
-
 
 class VannaQueryTool(Tool):
     """
-    🌟 Agent 用來呼叫 Vanna 查詢數據的標準接口
+    🌟 Agent Tool for querying financial data via Vanna AI
     
-    功能：
-    - 將自然語言轉換為 SQL
-    - 支持 Schema v2.3 (JSONB 動態屬性)
-    - 自動進行 Just-in-Time Schema Injection
+    Architecture: Gateway → HTTP → vanna-service:8082
     
-    使用場景：
-    - 用戶問「2023年各區營收是多少？」
-    - Agent 調用此工具生成 SQL 並執行
-    - 返回 100% 精準的數據，絕無幻覺
+    This tool is a PURE HTTP CLIENT.
+    - No local vanna/chromadb imports
+    - All SQL generation happens in vanna-service
+    - Supports Schema v2.3 (JSONB dynamic attributes)
+    
+    Usage:
+        Agent calls: vanna_query(question="Show Tencent revenue for 2023")
+        Tool → HTTP POST to vanna-service:8082/api/ask
+        Returns: SQL + Query Results
     """
     
     @property
@@ -736,7 +279,6 @@ class VannaQueryTool(Tool):
     
     @property
     def description(self) -> str:
-        # 🌟 換成這個強烈約束版本的 Description
         return (
             "🔥 CRITICAL: ALWAYS USE THIS TOOL FIRST when the user asks about "
             "financial data, revenue, profit, margins, shareholding, key personnel, "
@@ -760,6 +302,11 @@ class VannaQueryTool(Tool):
                     "type": "string",
                     "description": "用戶的自然語言查詢，例如 'Show Tencent revenue for 2023'"
                 },
+                "include_summary": {
+                    "type": "boolean",
+                    "description": "是否生成結果摘要 (默認: false)",
+                    "default": False
+                },
                 "use_dynamic_schema": {
                     "type": "boolean",
                     "description": "是否使用 Just-in-Time Schema Injection (默認: true)",
@@ -776,90 +323,168 @@ class VannaQueryTool(Tool):
     async def execute(
         self,
         question: str,
+        include_summary: bool = False,
         use_dynamic_schema: bool = True,
         **kwargs
     ) -> str:
-        """執行 Text-to-SQL 查詢"""
-        import json
+        """
+        Execute Text-to-SQL query via Vanna Service
         
-        vanna = get_vanna()
+        Args:
+            question: Natural language question
+            include_summary: Generate result summary (default: false)
+            use_dynamic_schema: Use Just-in-Time Schema Injection (default: true)
+            
+        Returns:
+            Formatted response with SQL and results
+        """
+        logger.info(f"🔍 VannaQueryTool: {question}")
+        
+        client = get_vanna_client()
         
         try:
+            # 🌟 Choose API based on use_dynamic_schema
             if use_dynamic_schema:
-                # 🌟 使用動態 Schema 注入（支持 Schema v2.3）
-                result = await vanna.query_with_dynamic_schema(question)
-                
-                if result['success']:
-                    # 格式化返回結果
-                    response_parts = [
-                        f"✅ 查詢成功！",
-                        f"",
-                        f"**使用的 SQL:**",
-                        f"```sql",
-                        result['sql'],
-                        f"```",
-                        f"",
-                        f"**結果數據** ({result['row_count']} 行):",
-                    ]
-                    
-                    # 顯示前 10 行數據
-                    if result['results']:
-                        for i, row in enumerate(result['results'][:10], 1):
-                            response_parts.append(f"{i}. {row}")
-                    
-                    # 如果發現了動態 Keys，顯示它們
-                    if result.get('dynamic_keys_discovered'):
-                        response_parts.extend([
-                            f"",
-                            f"**發現的動態屬性 Keys:** {', '.join(result['dynamic_keys_discovered'][:5])}"
-                        ])
-                    
-                    return "\n".join(response_parts)
-                else:
-                    return f"❌ 查詢失敗: {result.get('error')}"
+                result = await client.ask_with_dynamic_schema(
+                    question=question,
+                    include_summary=include_summary
+                )
             else:
-                # 普通查詢
-                result = vanna.query(question)
+                result = await client.ask(
+                    question=question,
+                    include_sql=True,
+                    include_summary=include_summary
+                )
+            
+            # Check if Vanna service returned success
+            if result.get("status") == "error":
+                return f"❌ 查詢失敗: {result.get('error', 'Unknown error')}"
+            
+            if result.get("status") == "failed":
+                return f"❌ 無法生成 SQL: {result.get('error', 'Please rephrase your question')}"
+            
+            # Format successful response
+            response_parts = [
+                f"✅ 查詢成功！",
+                f"",
+                f"**使用的 SQL:**",
+                f"```sql",
+                result.get("sql", ""),
+                f"```",
+                f"",
+            ]
+            
+            # Show data if available
+            data = result.get("data")
+            if data:
+                response_parts.append(f"**結果數據** ({len(data)} 行):")
                 
-                if result['success']:
-                    return f"✅ 查詢成功！\n\nSQL: {result['sql']}\n\n結果: {result['results'][:10]}"
-                else:
-                    return f"❌ 查詢失敗: {result.get('error')}"
-                    
+                # Show first 10 rows
+                for i, row in enumerate(data[:10], 1):
+                    response_parts.append(f"{i}. {row}")
+                
+                if len(data) > 10:
+                    response_parts.append(f"... 還有 {len(data) - 10} 行")
+            else:
+                response_parts.append("**結果數據**: 無數據返回")
+            
+            # Show summary if requested
+            answer = result.get("answer")
+            if answer:
+                response_parts.extend([
+                    f"",
+                    f"**摘要:**",
+                    answer
+                ])
+            
+            return "\n".join(response_parts)
+            
         except Exception as e:
             logger.error(f"❌ VannaQueryTool 執行失敗: {e}")
             return f"❌ 查詢執行錯誤: {str(e)}"
 
 
-if __name__ == "__main__":
-    # Test Vanna integration
-    print("Testing Vanna AI Integration...\n")
+# ============================================================
+# Convenience Functions for Legacy Compatibility
+# ============================================================
+
+async def ask(question: str, use_dynamic_schema: bool = True) -> Dict:
+    """
+    Ask Vanna a question (legacy compatibility)
     
-    vanna = VannaSQL()
-    
-    # Train schema
-    print("1. Training schema...")
-    stats = vanna.train_schema()
-    print(f"   {stats}\n")
-    
-    # Test queries
-    test_questions = [
-        "Show Tencent's revenue for the most recent years",
-        "What are the top 5 companies by revenue?",
-        "What is the average net margin for technology companies?"
-    ]
-    
-    for question in test_questions:
-        print(f"2. Question: {question}")
-        result = vanna.query(question)
+    Args:
+        question: Natural language question
+        use_dynamic_schema: Use Just-in-Time Schema Injection (default: true)
         
-        if result['success']:
-            print(f"   ✓ SQL: {result['sql'][:100]}...")
-            print(f"   ✓ Results: {result['row_count']} rows")
-            if result['results']:
-                print(f"   ✓ First row: {result['results'][0]}")
-        else:
-            print(f"   ✗ Failed: {result.get('error')}")
-        print()
+    Returns:
+        Query result with SQL and data
+    """
+    client = get_vanna_client()
+    if use_dynamic_schema:
+        return await client.ask_with_dynamic_schema(question)
+    else:
+        return await client.ask(question)
+
+
+async def train_schema() -> Dict:
+    """
+    Trigger schema training (legacy compatibility)
     
-    print("✅ Vanna test complete!")
+    Returns:
+        Training status
+    """
+    client = get_vanna_client()
+    return await client.train(train_type="schema")
+
+
+async def discover_dynamic_keys() -> Dict:
+    """
+    Discover all dynamic keys in JSONB columns (legacy compatibility)
+    
+    Returns:
+        Dict with discovered_keys, sample_values, key_frequency
+    """
+    client = get_vanna_client()
+    return await client.discover_dynamic_keys()
+
+
+# ============================================================
+# For Testing
+# ============================================================
+
+if __name__ == "__main__":
+    import asyncio
+    
+    async def test_vanna_client():
+        print("Testing Vanna Service Client...\n")
+        
+        client = VannaServiceClient()
+        
+        # Test health check
+        print("1. Health Check...")
+        health = await client.health_check()
+        print(f"   Status: {health}")
+        print()
+        
+        # Test query
+        print("2. Testing Query...")
+        test_questions = [
+            "Show me the top 5 companies by revenue",
+            "What was Tencent's revenue in 2023?"
+        ]
+        
+        for question in test_questions:
+            print(f"\n   Question: {question}")
+            result = await client.ask(question)
+            
+            if result.get("status") == "ready":
+                print(f"   ✓ SQL: {result.get('sql', 'N/A')[:100]}...")
+                data = result.get("data")
+                if data:
+                    print(f"   ✓ Rows: {len(data)}")
+            else:
+                print(f"   ✗ Error: {result.get('error')}")
+        
+        print("\n✅ Vanna Service Client test complete!")
+    
+    asyncio.run(test_vanna_client())

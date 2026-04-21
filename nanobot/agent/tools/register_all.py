@@ -37,9 +37,9 @@ def register_all_tools(registry) -> None:
     
     # 3. 註冊 Vanna 工具 (Text-to-SQL)
     try:
-        from nanobot.agent.tools.vanna_tool import VannaSQLTool
-        registry.register(VannaSQLTool())
-        logger.info("✅ Registered VannaSQLTool")
+        from nanobot.agent.tools.vanna_tool import VannaQueryTool
+        registry.register(VannaQueryTool())
+        logger.info("✅ Registered VannaQueryTool")
     except ImportError as e:
         logger.warning(f"⚠️ Failed to import vanna_tool: {e}")
     

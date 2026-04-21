@@ -31,8 +31,9 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     readability-lxml rich croniter dingtalk-stream python-telegram-bot \
     lark-oapi socksio python-socketio msgpack slack-sdk slackify-markdown \
     qq-botpy python-socks prompt-toolkit questionary mcp json-repair \
-    chardet openai tiktoken psycopg2-binary vanna[postgres] aiohttp \
+    chardet openai tiktoken psycopg2-binary aiohttp \
     fastapi uvicorn asyncpg
+# 🌟 vanna 移至獨立的 vanna-service 容器，Gateway 不再需要此依賴
 
 # 🚀 Install CPU-only PyTorch with cache (用于本地 embedding)
 # 🌟 如果没有 embedding API（OpenAI/DashScope），需要本地 torch

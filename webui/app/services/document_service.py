@@ -182,19 +182,27 @@ class DocumentService:
             return False
         
         doc = self.documents_db[doc_id]
-        file_path = Path(doc["path"])
         
+        # 🌟 Fix: 检查 path 是否存在且不为 None
+        file_path = doc.get("path")
+        if file_path:
+            try:
+                path_obj = Path(file_path)
+                if path_obj.exists():
+                    path_obj.unlink()
+            except Exception as e:
+                logger.error(f"Error deleting file {file_path}: {e}")
+        
+        # Delete output directory
         try:
-            if file_path.exists():
-                file_path.unlink()
-            
             doc_output_dir = self.output_dir / doc_id
             if doc_output_dir.exists():
                 import shutil
                 shutil.rmtree(doc_output_dir)
         except Exception as e:
-            logger.error(f"Error deleting files for {doc_id}: {e}")
+            logger.error(f"Error deleting output dir for {doc_id}: {e}")
         
+        # Delete from database
         try:
             await self._ensure_pipeline_connected()
             if self.pipeline and self.pipeline.db:
@@ -204,7 +212,7 @@ class DocumentService:
             logger.error(f"清除数据库数据失败 {doc_id}: {e}")
         
         del self.documents_db[doc_id]
-        self.add_processing_log(f"🗑️ Deleted document: {doc['filename']}", "info")
+        self.add_processing_log(f"🗑️ Deleted document: {doc.get('filename', doc_id)}", "info")
         
         return True
     
