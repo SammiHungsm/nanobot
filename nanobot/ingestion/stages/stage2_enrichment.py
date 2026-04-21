@@ -1,5 +1,5 @@
 """
-Stage 2: 多模態富文本擴充 (v4.2 語意+結構完美組合)
+Stage 2: 多模態富文本擴充 (v4.3 統一 Vision 分析)
 
 職責：
 - 從 LlamaParse Cloud 下載圖片
@@ -11,13 +11,12 @@ Stage 2: 多模態富文本擴充 (v4.2 語意+結構完美組合)
 ✅ LlamaParse 可靠的：純文字、格式良好的 Markdown 表格
 ⚠️ 需要 Vision 補強的：圖片 (image)、圖表 (chart)、混亂表格 (messy table)
 
-🌟 v4.2 完美組合 (Best Practice)：
-- 圖表 content = 「語意描述 + 結構化表格」混合體
-- 靠描述命中 Vector Search（語意關鍵詞）
-- 靠表格讓 LLM 精準提取數據（Key-Value 明確）
-- 解決「過度丟失語意上下文」問題
+🌟 v4.3 重大優化：
+- 合併兩次 Vision 調用為一次，節省 50% API cost
+- 一次輸出：type, title, markdown_representation, key_entities, semantic_description
+- 語意描述 + 結構化表格完美組合
 
-🌟 v4.1: 圖表 Vision 分析輸出明確的 Markdown 表格格式
+🌟 v4.2: 圖表 content = 語意描述 + 結構化表格
 """
 
 import os
@@ -32,13 +31,12 @@ from nanobot.core.llm_core import llm_core
 
 
 class Stage2Enrichment:
-    """Stage 2: 多模態富文本擴充 (v4.2 語意+結構完美組合) 🌟
+    """Stage 2: 多模態富文本擴充 (v4.3 統一 Vision 分析) 🌟
     
-    v4.2 核心改進 (Best Practice)：
-    - 圖表 content = 「語意描述 + 結構化表格」混合體
-    - 靠描述命中 Vector Search（如「2023年營收分佈」）
-    - 靠表格讓 LLM 精準提取（如 | Canada | 1% |）
-    - 解決「過度丟失語意上下文」問題
+    v4.3 核心優化 (Cost 優化)：
+    - 合併兩次 Vision 調用為一次，節省 50% API cost
+    - 一次輸出：type, title, markdown_representation, key_entities, semantic_description
+    - 語意描述 + 結構化表格完美組合
     """
 
     @staticmethod
@@ -498,34 +496,29 @@ class Stage2Enrichment:
                         # 🌟 獲取精準層級上下文 (RAG-Anything 核心)
                         precise_context = Stage2Enrichment._get_precise_context(artifacts, i)
 
-                        vision_result = await Stage2Enrichment._analyze_image_with_precise_context(
+                        # 🌟 v4.3: 統一 Vision 分析 - 一次調用輸出所有內容
+                        # 合併原本兩次調用，節省 50% API cost
+                        vision_result = await Stage2Enrichment._analyze_image_unified(
                             image_base64=image_base64,
                             context_data=precise_context,
                             vision_model=vision_model or llm_core.vision_model
                         )
 
-                        # 🌟 v4.0: 生成 AI Summary (Image-to-Text 預處理)
-                        ai_summary = await Stage2Enrichment._generate_chart_summary(
-                            image_base64=image_base64,
-                            vision_model=vision_model or llm_core.vision_model
-                        )
-
                         if db_client:
-                            # 🌟 v4.2: 完美組合 - 語意描述 + 結構化數據
-                            # 解決「過度丟失語意上下文」問題
+                            # 🌟 v4.3: 從統一結果中提取
                             md_repr = vision_result.get("markdown_representation", "")
+                            semantic_desc = vision_result.get("semantic_description", "")
                             
-                            if md_repr and ai_summary:
-                                # 黃金組合：靠描述命中 + 靠表格提取
+                            # 完美組合：語意描述 + 結構化表格
+                            if md_repr and semantic_desc:
                                 primary_content = f"""[圖表語意描述]
-{ai_summary}
+{semantic_desc}
 
 [結構化數據 - 可直接查詢]
 {md_repr}
 """
                             else:
-                                # Fallback: 優先用表格，無則用描述
-                                primary_content = md_repr or ai_summary or ""
+                                primary_content = md_repr or semantic_desc or ""
                             
                             content_json = {
                                 "filename": filename,
@@ -533,8 +526,8 @@ class Stage2Enrichment:
                                 "url": url,
                                 "analysis": vision_result,
                                 "structural_context": precise_context,
-                                "ai_summary": ai_summary,
-                                "markdown_representation": md_repr  # 🆕 明確存儲
+                                "semantic_description": semantic_desc,
+                                "markdown_representation": md_repr
                             }
                             
                             await db_client.insert_raw_artifact(
@@ -543,17 +536,17 @@ class Stage2Enrichment:
                                 artifact_type="vision_analysis",
                                 page_num=page_num,
                                 content_json=content_json,
-                                content=primary_content  # 🌟 v4.2: 完美組合
+                                content=primary_content
                             )
 
                         stats["vision_analyzed"] += 1
                         stats["images_saved"] += 1
                         stats["charts_saved"] = stats.get("charts_saved", 0) + (1 if art_type == "chart" else 0)
 
-                        # 🌟 v4.0: 打印 AI Summary 日誌
-                        if ai_summary:
-                            logger.info(f"   ✅ {art_type.upper()} AI Summary 生成: {filename}")
-                            logger.debug(f"      Summary: {ai_summary[:100]}...")
+                        # 🌟 v4.3: 打印日誌
+                        if semantic_desc:
+                            logger.info(f"   ✅ {art_type.upper()} Vision 分析完成: {filename}")
+                            logger.debug(f"      Summary: {semantic_desc[:100]}...")
 
                     except Exception as e:
                         logger.warning(f" ⚠️ Vision 分析失敗: {e}")
@@ -584,13 +577,21 @@ class Stage2Enrichment:
         return stats
 
     @staticmethod
-    async def _analyze_image_with_precise_context(
+    async def _analyze_image_unified(
         image_base64: str,
         context_data: Dict[str, str],
         vision_model: str
     ) -> Dict[str, Any]:
         """
-        🌟 RAG-Anything 高階 Vision 提取：結合層級結構化上下文
+        🌟 v4.3: 統一 Vision 分析 - 一次調用輸出所有內容
+        
+        合併原本兩次調用：
+        1. _analyze_image_with_precise_context() → 結構化 JSON
+        2. _generate_chart_summary() → 語意描述
+        
+        現在一次過輸出：
+        - type, title, markdown_representation, key_entities
+        - semantic_description (語意描述，用於 Vector Search)
         """
         prompt = f"""
 你是一個專業的數據分析 Agent，負責將文件中的圖片/圖表轉換為高質量的 RAG 向量資料庫 Raw Data。
@@ -601,25 +602,34 @@ class Stage2Enrichment:
 - 圖表前的引言：{context_data['previous_text']}
 - 圖表後的分析：{context_data['next_text']}
 
-請仔細觀察圖片，並結合上述邏輯上下文，過濾幻覺，輸出一個高精度的 JSON：
+請仔細觀察圖片，並結合上述邏輯上下文，輸出一個高精度的 JSON：
+
 1. "type": 判斷這是 chart(圖表), table(表格掃描件), diagram(架構圖), 還是 photo(普通照片)。
+
 2. "title": 綜合上下文給這張圖表一個精確的標題。
+
 3. "markdown_representation": 🌟 最重要！必須是可直接查詢的結構化格式：
-   - **如果是 Table**: 輸出標準 Markdown 表格：| 列名 | 列名 |\n|---|---|\n| 值 | 值 |
-   - **如果是 Chart (圓餅圖/柱狀圖)**: 輸出 Markdown 表格：| 類別 | 數值 |\n|---|---|\n| Canada | 1% |\n| Asia | 15% |
-   - **如果是折線圖**: 輸出時間序列表格：| 年份 | 數值 |\n|---|---|\n| 2023 | 45% |
-   - **如果是 Diagram**: 用條列式描述結構
+   - **Table**: | 列名 | 列名 |\n|---|---|\n| 值 | 值 |
+   - **Chart (圓餅圖/柱狀圖)**: | 類別 | 數值 |\n|---|---|\n| Canada | 1% |
+   - **折線圖**: | 年份 | 數值 |\n|---|---|\n| 2023 | 45% |
+   - **Diagram**: 用條列式描述結構
    
-   ⚠️ **關鍵**: 每個數據點必須有明確的 Key（如 "Canada"）和 Value（如 "1%"），不要用模糊的「指標1：數值1」格式！
-   
+   ⚠️ 每個數據點必須有明確的 Key 和 Value！
+
 4. "key_entities": 提取圖表中提及的重要實體 (如公司、地區、指標)。
 
-輸出格式必須是純 JSON，不要包含 ```json 標籤：
+5. "semantic_description": 🌟 語意描述，用於 Vector Search 檢索：
+   - 包含年份、數據類型、趨勢關鍵詞
+   - 例如：「這是 2023 年全球營收分佈的圓餅圖，顯示 Canada 佔 1%，Asia 佔 15%...」
+   - 讓用戶可以用「2023年營收」、「Canada percentage」等查詢找到此圖
+
+輸出格式必須是純 JSON：
 {{
  "type": "chart",
  "title": "2023年各區域收入分佈",
  "markdown_representation": "| 地區 | 百分比 |\\n|---|---|\\n| Canada | 1% |\\n| Asia | 15% |",
- "key_entities": ["Canada", "Asia", "收入"]
+ "key_entities": ["Canada", "Asia", "收入"],
+ "semantic_description": "這是 2023 年全球營收分佈的圓餅圖，顯示 Asia 佔比最高達 15%，Canada 佔 1%..."
 }}
 """
         try:
@@ -632,13 +642,28 @@ class Stage2Enrichment:
             import re
             json_match = re.search(r'\{[\s\S]*\}', response)
             if json_match:
-                return json.loads(json_match.group())
+                result = json.loads(json_match.group())
+                # 🌟 確保有 semantic_description
+                if "semantic_description" not in result:
+                    result["semantic_description"] = f"{result.get('title', '未命名圖表')}: {result.get('type', 'unknown')} 類型"
+                return result
 
-            return {"markdown_representation": response, "title": "未命名"}
+            return {"markdown_representation": response, "title": "未命名", "semantic_description": response[:200]}
 
         except Exception as e:
             logger.warning(f"Vision call error: {e}")
-            return {"markdown_representation": "", "error": str(e)}
+            return {"markdown_representation": "", "error": str(e), "semantic_description": ""}
+
+    @staticmethod
+    async def _analyze_image_with_precise_context(
+        image_base64: str,
+        context_data: Dict[str, str],
+        vision_model: str
+    ) -> Dict[str, Any]:
+        """
+        🌟 v4.3: 向後兼容包裝器 - 調用統一方法
+        """
+        return await Stage2Enrichment._analyze_image_unified(image_base64, context_data, vision_model)
 
     @staticmethod
     async def _generate_chart_summary(
@@ -646,56 +671,9 @@ class Stage2Enrichment:
         vision_model: str
     ) -> str:
         """
-        🌟 v4.0: 將圖表自動轉換為 Markdown Summary
+        🌟 v4.3: 已廢棄 - 不再需要單獨調用
         
-        核心目的：
-        - 讓 Vector Search 可以語意搵圖（"Canada Revenue"、"淨利潤趨勢"）
-        - 即使沒有 "Figure X" 也能被發現
-        - 投資回報率高（只需改幾行代碼）
-        
-        Args:
-            image_base64: 圖片的 Base64 編碼
-            vision_model: Vision 模型名稱
-            
-        Returns:
-            str: 圖表的 Markdown 摘要
+        語意描述已整合到 _analyze_image_unified() 的 semantic_description 字段
         """
-        prompt = """
-請將這張圖表轉換為以下格式，用於向量資料庫檢索：
-
-## 圖表總結
-**類型**：[折線圖/柱狀圖/圓餅圖/表格等]
-**標題**：[如果有的話]
-**關鍵數據**：
-- 指標1：數值1
-- 指標2：數值2
-- 指標3：數值3
-
-**趨勢分析**：[3-5句話描述趨勢、對比、異常]
-
-**單位**：[貨幣/百分比/數量等]
-
-⚠️ 注意事項：
-1. 如果數字模糊或不清楚，請標註 ⚠️
-2. 盡可能提取所有可見的數據點
-3. 使用中文回答
-4. 只返回 Markdown 內容，不要包含 ``` 標籤
-"""
-        
-        try:
-            response = await llm_core.vision(
-                image_base64=image_base64,
-                prompt=prompt,
-                model=vision_model
-            )
-            
-            # 清理 Markdown 標籤
-            import re
-            cleaned = re.sub(r'^```\w*\n?', '', response)
-            cleaned = re.sub(r'\n?```$', '', cleaned)
-            
-            return cleaned.strip()
-            
-        except Exception as e:
-            logger.warning(f"⚠️ AI Summary 生成失敗: {e}")
-            return ""
+        logger.warning("⚠️ _generate_chart_summary 已廢棄，請使用 _analyze_image_unified")
+        return ""
