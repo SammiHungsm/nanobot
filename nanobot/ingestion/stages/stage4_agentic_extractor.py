@@ -481,7 +481,8 @@ PDF 内容：
                 "year": year,
                 "document_id": document_id,
                 "is_index_report": is_index_report,
-                "confirmed_doc_industry": confirmed_doc_industry
+                "confirmed_doc_industry": confirmed_doc_industry,
+                "db_client": db_client,  # 🌟 v4.3: 修復 - 必須傳入 db_client
             },
             on_tool_call=lambda name, args: logger.info(f"   📞 Tool Call: {name}")
         )

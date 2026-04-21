@@ -1,236 +1,403 @@
-﻿<div align="center">
-  <img src="nanobot_logo.png" alt="nanobot" width="500">
-  <h1>nanobot: Financial Report Analysis Agent</h1>
-  <p>
-    <img src="https://img.shields.io/badge/python-≥3.11-blue" alt="Python">
-    <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
-    <img src="https://img.shields.io/badge/LlamaParse-Cloud_API-orange" alt="LlamaParse">
-  </p>
+﻿# nanobot: Financial Report Analysis Agent
+
+<div align="center">
+<img src="nanobot_logo.png" alt="nanobot" width="500">
+<h1>財務年報分析 AI 代理系統</h1>
+<p>
+<img src="https://img.shields.io/badge/python-≥3.11-blue" alt="Python">
+<img src="https://img.shields.io/badge/license-MIT-green" alt="License">
+<img src="https://img.shields.io/badge/LlamaParse-Cloud_API-orange" alt="LlamaParse">
+</p>
 </div>
 
-**nanobot** 是一个专注于金融年报/财务报告 PDF 解析与结构化数据提取的 AI Agent 系统。
+**nanobot** 是一個專注於金融年報/財務報告 PDF 解析與結構化數據提取的 AI Agent 系統。
 
-基于 [nanobot-ai](https://github.com/HKUDS/nanobot) 核心框架，结合 **LlamaParse** (Cloud API) 和 **Vanna AI** (Text-to-SQL)，实现从 PDF 到结构化数据库的完整自动化流程。
+基於 [nanobot-ai](https://github.com/HKUDS/nanobot) 核心框架，結合 **LlamaParse** (Cloud API) 和 **Vanna AI** (Text-to-SQL)，實現從 PDF 到結構化數據庫的完整自動化流程。
 
 ---
 
-## 📁 项目结构
+## 目錄
+
+- [系統架構](#-系統架構)
+- [專案結構](#-專案結構)
+- [處理管道](#-處理管道)
+- [Tools 與 Skills](#-tools-與-skills)
+- [資料庫設計](#-資料庫設計)
+- [設計優缺點分析](#-設計優缺點分析)
+- [優化建議](#-優化建議)
+- [快速啟動](#-快速啟動)
+
+---
+
+## 🏛️ 系統架構
+
+### 整體架構圖
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                        表現層 (Presentation)                         │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐  │
+│  │  WebUI   │ │WhatsApp  │ │Telegram  │ │  Slack   │ │ Discord  │  │
+│  │ (React)  │ │  Bridge  │ │          │ │          │ │          │  │
+│  └──────────┘ └──────────┘ └──────────┘ └──────────┘ └──────────┘  │
+└─────────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                        API 層 (API Layer)                            │
+│              nanobot/api/server.py (OpenAI 相容 API)                 │
+└─────────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                        代理層 (Agent Layer)                          │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐               │
+│  │   Loop   │ │  Runner  │ │ Context  │ │  Memory  │               │
+│  │ (1075行) │ │ (1028行) │ │ (209行)  │ │ (868行)  │               │
+│  └──────────┘ └──────────┘ └──────────┘ └──────────┘               │
+│                                                                      │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │                    Tool Registry (25+ 工具)                   │   │
+│  │  pdf_parser  │  vanna_tool  │  financial  │  filesystem  │ ... │   │
+│  └──────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                     攝入管道層 (Ingestion Pipeline)                   │
+│  ┌────────┐  ┌────────┐  ┌────────┐  ┌────────┐  ┌────────┐        │
+│  │Stage 0 │→│Stage 1 │→│Stage 2 │→│Stage 3 │→│Stage 4 │→...      │
+│  │ 預處理 │  │ 解析   │  │ 豐富化 │  │ 路由   │  │ 提取   │        │
+│  └────────┘  └────────┘  └────────┘  └────────┘  └────────┘        │
+└─────────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                      基礎設施層 (Infrastructure)                      │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐              │
+│  │  pdf_core    │  │  llm_core    │  │  db_client   │              │
+│  │  (1300+行)   │  │   (584行)    │  │  (2018行)    │              │
+│  └──────────────┘  └──────────────┘  └──────────────┘              │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 核心代理邏輯
+
+**檔案：`nanobot/agent/loop.py`（1075 行）**
+
+代理循環是系統的核心處理引擎，運作流程如下：
+
+```
+接收訊息 → Message Bus 收到使用者查詢
+    │
+    ▼
+構建上下文 → ContextBuilder 整合身份、歷史、技能
+    │
+    ▼
+LLM 推理 → AgentRunner 呼叫 LLM Provider
+    │
+    ▼
+工具執行 → ToolRegistry 解析並執行工具調用
+    │
+    ▼
+返回結果 → 回合制對話直到完成
+```
+
+**關鍵類別互動：**
+- `AgentLoop` - 主循環協調器
+- `AgentRunner` - 工具調用執行引擎，支援迭代式 tool calling
+- `Context` - 提示詞構建器，組裝系統提示、歷史、技能
+
+---
+
+## 📁 專案結構
 
 ```
 nanobot/
-├── nanobot/                     # 🧠 核心 Python 模块
-│   ├── agent/                   #    Agent 逻辑层
-│   │   ├── loop.py              #    主循环 (LLM ↔ Tool 执行)
-│   │   ├── context.py           #    Prompt 构建
-│   │   ├── memory.py            #    持久化记忆
-│   │   └── tools/               #    🛠️ Agent Tools (Python 实现)
-│   │       ├── pdf_parser.py    #       PDF 解析工具入口 (LlamaParse)
-│   │       ├── financial.py     #       财务数据查询工具
-│   │       ├── vanna_tool.py    #       Text-to-SQL 工具
-│   │       ├── db_ingestion_tools.py  #  数据入库工具
-│   │       └── multimodal_rag.py      #  图文关联 RAG
+├── nanobot/                    # 🧠 核心 Python 模組
+│   ├── agent/                  # Agent 邏輯層
+│   │   ├── loop.py             # 主循環 (LLM ↔ Tool 執行) (1075行)
+│   │   ├── runner.py           # 工具執行引擎 (1028行)
+│   │   ├── context.py          # Prompt 構建 (209行)
+│   │   ├── memory.py           # 持久化記憶 (868行)
+│   │   ├── skills.py           # Skills 載入器
+│   │   ├── subagent.py         # 子代理管理
+│   │   ├── hook.py             # Agent Hook 系統
+│   │   ├── autocompact.py      # 自動上下文壓縮
+│   │   └── tools/              # 🛠️ Agent Tools (25+ 工具)
+│   │       ├── base.py         # Tool 基類
+│   │       ├── registry.py     # Tool 註冊表
+│   │       ├── pdf_parser.py   # PDF 解析工具 (LlamaParse)
+│   │       ├── vanna_tool.py   # Text-to-SQL 工具 (490行)
+│   │       ├── financial.py    # 財務數據查詢工具
+│   │       ├── filesystem.py   # 檔案操作工具
+│   │       ├── search.py       # Glob/Grep 搜尋工具
+│   │       ├── web.py          # 網頁搜尋/獲取工具
+│   │       ├── message.py      # 訊息工具
+│   │       ├── shell.py        # Shell 執行工具
+│   │       ├── spawn.py        # 子代理生成
+│   │       ├── mcp.py          # MCP 服務連接
+│   │       └── cron.py         # 定時任務工具
 │   │
-│   ├── core/                    #    📄 PDF 核心处理层
-│   │   └ pdf_core.py            #    LlamaParse 统一封装
-│   │   └ llm_core.py            #    LLM 统一封装
+│   ├── ingestion/              # 🔄 數據攝入 Pipeline
+│   │   ├── pipeline.py         # 主 Pipeline 協調器 (583行)
+│   │   ├── base_pipeline.py    # 基類 (模板方法模式) (242行)
+│   │   ├── agentic_pipeline.py # Agent-driven Pipeline
+│   │   ├── batch_processor.py  # 批次處理器
+│   │   ├── agentic_executor.py # Agent 執行器
+│   │   ├── stages/             # ⚡ 9-Stage 處理流程
+│   │   │   ├── stage0_preprocessor.py      # PDF 預處理 (Vision)
+│   │   │   ├── stage0_5_registrar.py       # 文件/公司註冊
+│   │   │   ├── stage1_parser.py            # LlamaParse 解析
+│   │   │   ├── stage2_enrichment.py        # 圖文關聯/元數據增強
+│   │   │   ├── stage3_router.py            # 關鍵字路由
+│   │   │   ├── stage3_5_context_builder.py # 結構化上下文建立
+│   │   │   ├── stage4_agentic_extractor.py # LLM 結構化提取
+│   │   │   ├── stage4_5_kg_extractor.py    # 知識圖譜提取
+│   │   │   ├── stage5_vanna_training.py    # Vanna 訓練
+│   │   │   ├── stage6_validator.py         # 數據校驗
+│   │   │   ├── stage7_vector_indexer.py    # 向量索引
+│   │   │   └── stage8_archiver.py          # 歸檔和清理
+│   │   ├── extractors/           # 提取器
+│   │   │   ├── financial_agent.py
+│   │   │   ├── entity_resolver.py
+│   │   │   ├── page_classifier.py
+│   │   │   └── value_normalizer.py
+│   │   ├── parsers/              # 解析器實現
+│   │   └── repository/           # 數據庫 Repository
+│   │       └── db_client.py      # PostgreSQL 客戶端 (2018行)
 │   │
-│   ├── ingestion/               #    🔄 数据摄入 Pipeline (Python)
-│   │   ├── pipeline.py          #    主 Pipeline 协调器
-│   │   ├── agentic_pipeline.py  #    Agent-driven Pipeline
-│   │   ├── base_pipeline.py     #    基类 (模板方法模式)
-│   │   ├── stages/              #    ⚡ 5-Stage 处理流程
-│   │   │   ├── stage0_preprocessor.py   #  PDF 预处理
-│   │   │   ├── stage1_parser.py         #  LlamaParse 解析
-│   │   │   ├── stage2_enrichment.py     #  图文关联/元数据增强
-│   │   │   ├── stage3_router.py         #  关键字路由
-│   │   │      └── stage4_extractor.py   #  LLM 结构化提取
-│   │   ├── extractors/          #    提取器 (Revenue, Personnel...)
-│   │   └ repository/            #    数据库 Repository
-│   │   └ validators/            #    数据校验器
+│   ├── core/                    # 📄 核心處理層
+│   │   ├── pdf_core.py          # LlamaParse 統一封裝 (1300+行)
+│   │   └── llm_core.py          # LLM 統一封裝 (584行)
 │   │
-│   ├── skills/                  #    🎯 Skills (Agent 行为定义)
-│   │   ├── financial-analysis/  #       财务分析 Skill
-│   │   ├── ingestion/           #       摄入 Skill
-│   │   └ memory/                #       记忆管理 Skill
-│   │   └ github/                #       GitHub Skill
-│   │   └── ...                  #       其他 Skills
+│   ├── providers/               # 🤖 LLM Providers
+│   │   ├── base.py              # Provider 基類
+│   │   ├── registry.py          # Provider 註冊表
+│   │   ├── openai_compat_provider.py
+│   │   ├── anthropic_provider.py
+│   │   ├── azure_openai_provider.py
+│   │   ├── github_copilot_provider.py
+│   │   └── openai_codex_provider.py
 │   │
-│   ├── providers/               #    🤖 LLM Providers
-│   ├── channels/                #    📱 Chat Channel 集成
-│   ├── cron/                    #    ⏰ 定时任务
-│   ├── heartbeat/               #    💓 周期唤醒
-│   ├── session/                 #    💬 会话管理
-│   └ config/                    #    ⚙️ 配置 Schema
-│   └ cli/                       #    🖥️ CLI 命令
-│   └ utils/                     #    工具函数
-│   └ templates/                 #    Jinja2 模板
+│   ├── channels/                # 📱 多通道適配器
+│   │   ├── base.py              # 通道基類
+│   │   ├── manager.py           # 通道管理器
+│   │   ├── registry.py          # 通道註冊表
+│   │   ├── websocket.py         # WebSocket 通道
+│   │   ├── webapi.py            # Web API 通道
+│   │   ├── telegram.py
+│   │   ├── slack.py
+│   │   ├── discord.py
+│   │   ├── whatsapp.py
+│   │   ├── weixin.py
+│   │   ├── feishu.py
+│   │   ├── dingtalk.py
+│   │   └── msteams.py
+│   │
+│   ├── session/                 # 💬 對話會話管理
+│   │   └── manager.py           # 會話管理器 (390行)
+│   │
+│   ├── skills/                  # 🎯 Skills (Agent 行為定義)
+│   │   ├── financial-analysis/  # 財務分析 Skill
+│   │   ├── ingestion/           # 攝入 Skill
+│   │   ├── document_indexer/    # 導航地圖 Skill
+│   │   ├── memory/              # 記憶管理 Skill
+│   │   ├── github/
+│   │   ├── summarize/
+│   │   └── cron/
+│   │
+│   ├── config/                  # ⚙️ 配置系統
+│   │   ├── schema.py            # Config Schema (Pydantic)
+│   │   ├── loader.py            # Config 檔案載入器
+│   │   └── paths.py             # 路徑工具
+│   │
+│   ├── api/                     # HTTP API 服務器
+│   │   └── server.py            # OpenAI 相容 API (397行)
+│   │
+│   ├── utils/                   # 工具函數
+│   │   ├── helpers.py
+│   │   ├── prompt_templates.py  # Jinja2 提示模板
+│   │   ├── document.py
+│   │   ├── gitstore.py          # Git 儲存
+│   │   └── evaluator.py
+│   │
+│   └── ...                      # 其他模組 (cli, bus, cron, etc.)
 │
-├── webui/                       # 🌐 Web UI (FastAPI + React)
-│   ├── app/
-│   │   ├── api/                 #    REST API 端点
-│   │   ├── core/                #    核心配置
-│   │   ├── services/            #    业务服务
-│   │   └ schemas/               #    Pydantic Schema
-│   ├── static/                  #    前端静态文件
-│   ├── Dockerfile.gpu           #    GPU 版 Dockerfile
-│   └ entrypoint_delayed.sh      #    启动脚本 (等待 Hybrid)
+├── webui/                       # 🌐 Web UI (React + TypeScript)
+│   ├── src/
+│   │   ├── components/          # UI 組件
+│   │   ├── hooks/               # React Hooks
+│   │   ├── providers/           # Context Providers
+│   │   ├── lib/
+│   │   └── i18n/                # 國際化
+│   └── static/
 │
 ├── vanna-service/               # 🧠 Vanna AI (Text-to-SQL)
-│   ├── start.py                 #    启动入口
-│   ├── vanna_training.py        #    训练脚本
-│   ├── ddl.json                 #    DDL 知识库
-│   ├── sql_pairs.json           #    SQL 示例知识库
-│   ├── documentation.json       #    文档知识库
-│   └ Dockerfile
+│   ├── start.py                 # FastAPI 服務器 (1256行)
+│   ├── vanna_training.py        # 訓練數據生成
+│   ├── ddl.json                 # DDL 知識庫
+│   ├── sql_pairs.json           # SQL 示例知識庫
+│   └── documentation.json       # 文檔知識庫
 │
-├── bridge/                      # 🔗 WhatsApp 等桥接
-├── config/                      # ⚙️ 运行时配置
-├── data/                        # 📂 数据目录
-│   ├── raw/                     #    原始 PDF / 搜索关键词
-│   ├── uploads/                 #    上传文件
-│   ├── output/                  #    输出结果
-│   ├── vanna/                   #    ChromaDB 存储
+├── bridge/                      # 🔗 WhatsApp 等橋接 (TypeScript)
 │
-├── storage/                     # 💾 数据库初始化 SQL
-├── scripts/                     # 🛠️ 辅助脚本
-├── tests/                       # 🧪 测试
-├── docs/                        # 📚 文档
+├── config/                      # ⚙️ 運行時配置
+├── data/                        # 📂 數據目錄
+│   ├── raw/                     # 原始 PDF / 搜尋關鍵詞
+│   ├── uploads/                 # 上傳檔案
+│   ├── output/                  # 輸出結果
+│   └── vanna/                   # ChromaDB 儲存
+│
+├── tests/                       # 🧪 測試
+├── scripts/                     # 🛠️ 輔助腳本
+├── docs/                        # 📚 文檔
 │
 ├── docker-compose.gpu.yml       # 🐳 GPU 版 Compose
-├── Dockerfile                   # 🐳 CPU 版 Dockerfile
-└── Dockerfile.gpu               # 🐳 GPU 版 Dockerfile
+├── Dockerfile
+├── Dockerfile.gpu
+└── pyproject.toml
 ```
 
 ---
 
-## 🔄 完整工作流程
+## 🔄 處理管道（9-Stage Pipeline）
 
-### PDF 处理 Pipeline (5-Stage)
+### Stage 流程圖
 
 ```
-PDF 上传
+PDF 上傳
     │
     ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  Stage 0: Preprocessor (Python)                             │
-│  ├─ PDF 预处理                                               │
-│  ├─ 大文件分批 (>100页 → 每批10页)                           │
-│  ├─ 页码范围检测                                             │
-│  └─ 输入验证                                                 │
+│ Stage 0: 預處理器 (Preprocessor)                            │
+│ ├─ 使用 Vision API 從封面提取公司資訊                        │
+│ ├─ 大檔案分批 (>100頁 → 每批10頁)                           │
+│ └─ 頁碼範圍檢測                                              │
 └─────────────────────────────────────────────────────────────┘
     │
     ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  Stage 1: Parser (Python + LlamaParse Cloud)           │
-│  ├─ 调用 PDFParser                                │
-│  ├─ Agentic OCR: LlamaParse (CUDA)                         │
-│  ├─ 输出: Markdown + JSON Artifacts                          │
-│  ├─ 提取: Tables, Images, Text Chunks                       │
-│  └─ 跨页表格合并                                             │
+│ Stage 0.5: 註冊器 (Registrar)                               │
+│ ├─ 文件/公司註冊                                             │
+│ ├─ 行業規則判斷 (Rule A: 指數報告 / Rule B: 年報)           │
+│ └─ 寫入 companies 表                                         │
 └─────────────────────────────────────────────────────────────┘
     │
     ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  Stage 2: Enrichment (Python)                               │
-│  ├─ 图文关联映射                                             │
-│  ├─ 元数据增强                                               │
-│  ├─ OCR 文字补充                                             │
-│  └─ 保存所有页面到兜底表 (Zone 2)                            │
+│ Stage 1: 解析器 (Parser) - LlamaParse Cloud                │
+│ ├─ Agentic OCR: LlamaParse (CUDA)                          │
+│ ├─ 輸出: Markdown + JSON Artifacts                          │
+│ ├─ 提取: Tables, Images, Text Chunks                        │
+│ └─ 跨頁表格合併                                              │
 └─────────────────────────────────────────────────────────────┘
     │
     ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  Stage 3: Router (Python + LLM)                             │
-│  ├─ 关键字扫描                                               │
-│  ├─ 定位目标页面                                             │
-│  ├─ 使用 search_keywords.json                                │
-│  └─ 输出: 候选页面列表                                       │
+│ Stage 2: 豐富化 (Enrichment)                                │
+│ ├─ 圖文關聯映射                                              │
+│ ├─ 元數據增強                                                │
+│ ├─ OCR 文字補充                                              │
+│ └─ 保存所有頁面到兜底表 (Zone 2)                             │
 └─────────────────────────────────────────────────────────────┘
     │
     ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  Stage 4: Extractor (Python + LLM)                          │
-│  ├─ LLM 结构化提取                                           │
-│  ├─ Revenue Breakdown (收入分解)                             │
-│  ├─ Key Personnel (关键人员)                                 │
-│  ├─ Financial Metrics (财务指标)                             │
-│  ├─ 写入 structured_extraction 表 (Zone 1)                   │
-│  └─ 保存 output.json                                         │
+│ Stage 3: 路由器 (Router) - Python + LLM                    │
+│ ├─ 關鍵字掃描                                               │
+│ ├─ 定位目標頁面                                              │
+│ ├─ 使用 search_keywords.json                                │
+│ └─ 輸出: 候選頁面列表                                        │
 └─────────────────────────────────────────────────────────────┘
     │
     ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  Step 8-10: Post-Processing                                  │
-│  ├─ 图文关联映射 (跨模态 Magic)                              │
-│  ├─ 触发 Vanna 训练                                          │
-│  └─ 更新文档状态                                             │
+│ Stage 3.5: 上下文構建器 (Context Builder)                   │
+│ ├─ 結構化上下文建立                                          │
+│ └─ 為 Stage 4 準備輸入                                      │
 └─────────────────────────────────────────────────────────────┘
     │
     ▼
-数据库 (PostgreSQL + pgvector)
+┌─────────────────────────────────────────────────────────────┐
+│ Stage 4: 代理提取器 (Agentic Extractor) - Python + LLM     │
+│ ├─ LLM 結構化提取                                            │
+│ ├─ Revenue Breakdown (收入分解)                             │
+│ ├─ Key Personnel (關鍵人員)                                 │
+│ ├─ Financial Metrics (財務指標)                             │
+│ └─ 寫入 structured_extraction 表 (Zone 1)                   │
+└─────────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Stage 4.5: 知識圖譜提取器 (KG Extractor)                    │
+│ ├─ 實體關係提取                                              │
+│ └─ 構建知識圖譜                                              │
+└─────────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Stage 5: Vanna 訓練 (Training)                              │
+│ ├─ Text-to-SQL 訓練                                         │
+│ └─ 更新 ChromaDB 向量存儲                                    │
+└─────────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Stage 6: 驗證器 (Validator)                                 │
+│ ├─ 數據校驗                                                  │
+│ └─ 品質檢查                                                  │
+└─────────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Stage 7: 向量索引器 (Vector Indexer)                        │
+│ ├─ ChromaDB 索引                                            │
+│ └─ 語義搜尋準備                                              │
+└─────────────────────────────────────────────────────────────┘
+    │
+    ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Stage 8: 歸檔器 (Archiver)                                  │
+│ ├─ 歸檔和清理                                               │
+│ └─ 保存 output.json                                         │
+└─────────────────────────────────────────────────────────────┘
+    │
+    ▼
+數據庫 (PostgreSQL + pgvector)
 ```
 
 ---
 
-## 🛠️ 处理层次: Agent Tool vs Python
+## 🛠️ Tools 與 Skills
 
-| 处理层 | 实现方式 | 说明 |
-|--------|----------|------|
-| **PDF 解析** | Python (`OpenDataLoaderCore`) | 调用 LlamaParse 模型，不经过 LLM |
-| **表格提取** | Python (PDFParser) | 端到端表格识别，不经过 LLM |
-| **图片提取** | Python (PDFParser) | 端到端图片识别 + OCR，不经过 LLM |
-| **跨页表格合并** | Python (`table_merger`) | 算法合并，不经过 LLM |
-| **关键字路由** | Python + LLM (`Stage3Router`) | LLM 判断页面相关性 |
-| **结构化提取** | Python + LLM (`Stage4Extractor`) | LLM 从表格/文字提取结构化数据 |
-| **SQL 生成** | Vanna AI (Python + LLM) | Text-to-SQL，LLM 生成 SQL |
-| **数据入库** | Python (`Repository`) | SQLAlchemy 写入数据库 |
-| **用户交互** | Agent Tool (`pdf_parser`) | LLM 调用 tool 触发 pipeline |
-| **财务查询** | Agent Tool (`vanna_tool`) | LLM 调用 Vanna 生成 SQL |
+### 架構對比
 
-### 详细说明
+| 類型 | 位置 | 定義方式 | 作用 |
+|------|------|----------|------|
+| **Tool** | `nanobot/agent/tools/*.py` | Python 函數 | 執行具體操作 |
+| **Skill** | `nanobot/skills/*/SKILL.md` | Markdown 指令 | 定義 Agent 行為模式 |
 
-#### 🐍 Python 直接处理 (不经过 LLM)
+### Tool 註冊表模式
 
-这些任务由 Python 代码直接执行，无需 LLM 参与，**速度快、成本低**：
+```
+ToolRegistry
+├── pdf_parser.py     # PDF 解析 (LlamaParse)
+├── vanna_tool.py     # Text-to-SQL 查詢 (490行)
+├── financial.py      # 財務數據查詢
+├── filesystem.py     # 檔案操作 (read/write/edit)
+├── search.py         # Glob/Grep 搜尋
+├── web.py            # 網頁搜尋/獲取
+├── message.py        # 訊息工具
+├── shell.py          # Shell 執行
+├── spawn.py          # 子代理生成
+├── mcp.py            # MCP 服務連接
+└── cron.py           # 定時任務
+```
 
-1. **PDF 解析 (Stage 1)**: LlamaParse Cloud 模式调用 Docling 模型
-2. **表格/图片识别**: LlamaParse 模型端到端识别
-3. **跨页表格合并**: 算法检测相邻表格并合并
-4. **图片 Base64 编码**: 自动转换临时目录图片为 Base64
-5. **数据入库**: Repository 层直接写入 PostgreSQL
-6. **Vanna 训练**: 自动学习 DDL 和 SQL 示例
+### Skill 示例
 
-#### 🧠 LLM 增强 (Python + LLM)
-
-这些任务需要 LLM 的语义理解能力：
-
-1. **关键字路由 (Stage 3)**: LLM 判断页面是否包含目标信息
-2. **结构化提取 (Stage 4)**: LLM 从表格/文字中提取结构化字段
-3. **SQL 生成 (Vanna)**: Text-to-SQL，根据自然语言生成 SQL
-4. **财务分析问答**: Agent 对话式查询
-
-#### 🛠️ Agent Tool 入口
-
-Agent 通过 Tool 调用触发底层 Python 处理：
-
-| Tool | 底层 Python | 功能 |
-|------|-------------|------|
-| `parse_pdf` | `pipeline.process_pdf_full()` | 触发完整 5-Stage 流程 |
-| `query_financial` | `vanna.generate_sql()` | 财务数据查询 |
-| `search_documents` | `multimodal_rag.search()` | 图文关联搜索 |
-| `ingest_document` | `db_ingestion_tools` | 文档入库 |
-
----
-
-## 🎯 Skills vs Tools
-
-| 类型 | 位置 | 定义 | 作用 |
-|------|------|------|------|
-| **Tool** | `nanobot/agent/tools/*.py` | Python 函数 | 执行具体操作 |
-| **Skill** | `nanobot/skills/*/SKILL.md` | Markdown 指令 | 定义 Agent 行为模式 |
-
-**Skill 示例** (`financial-analysis/SKILL.md`):
-
+**`financial-analysis/SKILL.md`:**
 ```markdown
 # Financial Analysis Skill
 
@@ -240,774 +407,330 @@ When user asks about financial reports:
 3. Present results in markdown tables
 ```
 
-**Tool 示例** (`tools/pdf_parser.py`):
-
-```python
-@tool
-async def parse_pdf(pdf_path: str) -> dict:
-    """Parse PDF and extract structured data."""
-    result = await pipeline.process_pdf_full(pdf_path)
-    return result
-```
-
 ---
 
-## 🚀 快速启动
+## 📊 資料庫設計
 
-### Docker GPU 版 (推荐)
-
-```bash
-# 1. 配置环境变量
-cp .env.example .env
-# 编辑 .env 设置 DASHSCOPE_API_KEY
-
-# 2. 启动所有服务
-docker compose -f docker-compose.gpu.yml up -d
-
-# 3. 查看状态
-docker compose -f docker-compose.gpu.yml ps
-
-# 4. 访问 Web UI
-open http://localhost:3000
-```
-
-### 服务列表
-
-| 服务 | 端口 | 说明 |
-|------|------|------|
-| `nanobot-webui` | 3000 | Web UI + LlamaParse |
-| `nanobot-gateway` | 8081, 18790 | Agent Gateway |
-| `postgres-financial` | 5433 | PostgreSQL + pgvector |
-| `vanna-service` | 8082 | Vanna AI (内部) |
-
----
-
-## 🎯 年报 Agent Skills 详解
-
-Agent 通过 **Skills** 定义行为模式，通过 **Tools** 执行具体操作。年报处理涉及以下核心 Skills：
-
-### Skills 概览
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  年报 Agent Skills 架构                                      │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  📊 financial-analysis       财务分析核心 Skill             │
-│     ├─ parse_financial_pdf     PDF 解析                     │
-│     ├─ query_financial_database 数据库查询                  │
-│     ├─ search_documents        文档语义搜索                  │
-│     ├─ analyze_chart           图表分析                      │
-│     └─ resolve_entity          公司名解析                    │
-│                                                             │
-│  📄 ingestion               文档摄入 Skill                   │
-│     ├─ Rule A: 行业确认规则     (指数报告)                   │
-│     ├─ Rule B: AI 行业提取规则  (年报)                       │
-│     ├─ smart_insert_document   智能入库                      │
-│     └─ update_document_status  状态更新                      │
-│                                                             │
-│  📑 document-indexer         导航地图 Skill                  │
-│     ├─ 建立索引地图             TOC + Metadata               │
-│     ├─ 精确页码定位             战略分析                      │
-│     ├─ 多文件对比               YoY / 跨公司                  │
-│     └─ Sub-agent 精准提取      Map & Strike 模式             │
-│                                                             │
-│  🧠 memory                  记忆管理 Skill                   │
-│  📋 summarize               文档摘要 Skill                   │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
-
----
-
-### 📊 Financial Analysis Skill
-
-**用途**: 分析年报和财务文档，100% 数值准确。
-
-#### 5 个核心 Tools
-
-| Tool | 用途 | 输入 | 输出 |
-|------|------|------|------|
-| `parse_financial_pdf` | PDF 解析 | `pdf_path`, `extract_tables` | Markdown + Tables + Charts |
-| `query_financial_database` | 数据库查询 | `query` (自然语言或 SQL) | 结构化数据 + Citations |
-| `search_documents` | 文档搜索 | `query`, `company`, `year` | 文本 chunks + Sources |
-| `analyze_chart` | 图表分析 | `page`, `chart_index` | 图表类型 + 数据点 |
-| `resolve_entity` | 公司名解析 | `name` (任意变体) | 标准名 + Stock Code |
-
-#### 意图路由 (选择正确工具)
-
-```
-用户问题
-    │
-    ▼
-┌─────────────────────────────────────────────────────────────┐
-│  意图分析                                                    │
-│                                                             │
-│  需要精确数字？                                              │
-│  ├─ Yes → query_financial_database (Text-to-SQL)            │
-│  │         ├─ 营收、利润、增长率                            │
-│  │         ├─ 排行榜、趋势分析                              │
-│  │         └─ 跨年比较                                      │
-│  │                                                          │
-│  ├─ 需要解释/策略？                                          │
-│  │  └ search_documents (语义检索)                           │
-│  │     ├─ 业务描述、战略分析                                │
-│  │     ├─ 风险因素、管理层讨论                              │
-│  │     └─ 非结构化文本                                      │
-│  │                                                          │
-│  ├─ 需要精确页码/表格？                                      │
-│  │  └ document-indexer (导航地图)                           │
-│  │     ├─ 原始表格验证                                      │
-│  │     ├─ 图表提取                                          │
-│  │     └─ Citation 溯源                                     │
-│  │                                                          │
-│  └─ 提到图表？                                               │
-│     └ analyze_chart (VLM 分析)                              │
-│        ├─ 图表类型识别                                      │
-│        ├─ 数据点提取                                        │
-│        └─ 洞察解读                                          │
-└─────────────────────────────────────────────────────────────┘
-```
-
-#### Tool 使用示例
-
-**1. PDF 解析**:
-```python
-result = parse_financial_pdf("tencent_2023_ar.pdf", extract_tables=True)
-# Returns:
-# {
-#   markdown: "...",
-#   tables: [{headers, rows, page}],
-#   charts: [{type, description, page}],
-#   citations: [{source_file, page}]
-# }
-```
-
-**2. 数据库查询** (自然语言 → SQL):
-```python
-# 自然语言查询
-result = query_financial_database("Show Tencent's revenue for 2020-2023")
-
-# 或直接 SQL
-result = query_financial_database(
-    sql="SELECT year, standardized_value FROM financial_metrics 
-         WHERE company_id = 1 AND metric_name = 'Revenue'"
-)
-```
-
-**3. 公司名解析**:
-```python
-resolve_entity("腾讯")
-# Returns: {en: "Tencent Holdings", zh: "腾讯控股", code: "00700"}
-
-resolve_entity("阿里巴巴")
-# Returns: {en: "Alibaba Group", zh: "阿里巴巴集团", code: "09988"}
-```
-
----
-
-### 📄 Ingestion Skill
-
-**用途**: 智能文档摄入，自动判断行业规则。
-
-#### 行业双轨制规则
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  Rule A: 指数报告 - 行业确认                                  │
-│                                                             │
-│  触发条件:                                                   │
-│  ├─ 报告标题包含 "Index", "恒生指数", "HSI"                  │
-│  ├─ 报告明确定义单一行业主题                                  │
-│  │                                                          │
-│  行为:                                                       │
-│  ├─ confirmed_industry = "Biotech" (从标题提取)             │
-│  ├─ is_industry_confirmed = TRUE                            │
-│  ├─ 所有成分股 → 强制同一行业                                 │
-│  └─ industry_source = "confirmed"                           │
-│                                                             │
-│  示例:                                                       │
-│  "恒生生物科技指数 Q3 2024"                                  │
-│  → 所有公司: confirmed_industry = "Biotech"                  │
-│                                                             │
-├─────────────────────────────────────────────────────────────┤
-│  Rule B: 年报 - AI 行业提取                                   │
-│                                                             │
-│  触发条件:                                                   │
-│  ├─ 年度报告 (Annual Report)                                 │
-│  ├─ 无单一行业主题                                           │
-│  │                                                          │
-│  行为:                                                       │
-│  ├─ confirmed_industry = NULL                               │
-│  ├─ is_industry_confirmed = FALSE                           │
-│  ├─ AI 提取多个可能行业                                       │
-│  ├─ 存入 ai_extracted_industries (JSONB Array)              │
-│  └─ industry_source = "ai_predict"                          │
-│                                                             │
-│  示例:                                                       │
-│  "腾讯控股 2023 年报"                                        │
-│  → ai_extracted_industries = ["Technology", "Gaming", ...]   │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
-
-#### Ingestion Tools
-
-| Tool | 用途 | 输入 |
-|------|------|------|
-| `smart_insert_document` | 智能入库 | `filename`, `report_type`, `confirmed_doc_industry`, `sub_companies` |
-| `get_db_schema` | 查看 Schema | - |
-| `update_document_status` | 更新状态 | `document_id`, `status` |
-
-#### 数据库写入示例
-
-```json
-// Rule A: 指数报告
-{
-  "filename": "hsi_biotech_q3_2024.pdf",
-  "report_type": "index_report",
-  "confirmed_doc_industry": "Biotech",
-  "industry_assignment_rule": "A",
-  "sub_companies": [
-    {"name": "Sino Biopharmaceutical", "stock_code": "01177"},
-    {"name": "Wuxi Biologics", "stock_code": "02269"}
-  ]
-}
-
-// Rule B: 年报
-{
-  "filename": "tencent_2023_ar.pdf",
-  "report_type": "annual_report",
-  "parent_company": "Tencent Holdings",
-  "industry_assignment_rule": "B",
-  "sub_companies": [
-    {
-      "name": "Tencent Music",
-      "ai_industries": ["Technology", "Entertainment"]
-    }
-  ]
-}
-```
-
----
-
-### 📑 Document Indexer Skill
-
-**用途**: 长篇年报的「导航地图」系统，Map & Strike 模式。
-
-#### 工作流程
-
-```
-用户请求: [Doc: /path/to/report.pdf] "找出营收数据"
-    │
-    ▼
-┌─────────────────────────────────────────────────────────────┐
-│  Phase 1: 建立地图 (Map Discovery)                          │
-│                                                             │
-│  ├─ 检查索引是否存在                                         │
-│  │  workspace/indexes/<doc_name>/                           │
-│  │                                                          │
-│  ├─ 若不存在，执行:                                          │
-│  │  build_indexes.py "<pdf_path>"                           │
-│  │                                                          │
-│  ├─ 生成:                                                    │
-│  │  ├─ metadata.md      (公司名、年份、Stock Code)           │
-│  │  ├─ toc.md           (目录结构)                           │
-│  │  └─ navigation_context.md (前 5 页摘要)                  │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-    │
-    ▼
-┌─────────────────────────────────────────────────────────────┐
-│  Phase 2: 战略分析 (Strategic Planning)                     │
-│                                                             │
-│  ├─ 读取 metadata.md                                        │
-│  │  → 确认公司: "Tencent Holdings"                          │
-│  │  → 确认年份: 2023                                         │
-│  │                                                          │
-│  ├─ 读取 toc.md                                             │
-│  │  → 搜索 "Revenue", "收入", "财务报表"                     │
-│  │  → 定位: "财务报表" → Physical Page: 45                   │
-│  │                                                          │
-│  ├─ 输出:                                                    │
-│  │  "营收数据极可能在第 45 页"                               │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-    │
-    ▼
-┌─────────────────────────────────────────────────────────────┐
-│  Phase 3: Sub-agent 精准提取 (Strike)                       │
-│                                                             │
-│  ├─ 主 Agent 指派 Sub-agent                                  │
-│  │                                                          │
-│  ├─ Sub-agent 执行:                                          │
-│  │  "读取第 45 页，提取营收表格"                             │
-│  │                                                          │
-│  ├─ 使用 PyMuPDF 直接读取                                     │
-│  │                                                          │
-│  ├─ 返回:                                                    │
-│  │  Markdown 表格 + Citation                                │
-│  │  "(Data from Physical Page: 45)"                         │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
-
-#### 生成的索引文件
-
-```
-workspace/indexes/tencent_2023_ar/
-├── metadata.md              # 公司全称、Stock Code、年份
-│   ---
-│   Company: Tencent Holdings Limited
-│   Stock Code: 00700.HK
-│   Year: 2023
-│   ---
-│
-├── toc.md                   # 目录结构 + 物理页码
-│   1. 主席报告 ─────────── Physical Page: 12
-│   2. 业务回顾 ─────────── Physical Page: 20
-│   3. 财务报表 ─────────── Physical Page: 45
-│   4. ESG 报告 ──────────── Physical Page: 80
-│
-└── navigation_context.md    # 前 5 页摘要
-    结构概述、关键章节位置
-```
-
----
-
-### 🛠️ Agent Tools vs Pipeline 关系
-
-| 层级 | Tool | 调用 Pipeline | 说明 |
-|------|------|---------------|------|
-| **用户交互** | `parse_financial_pdf` | `pipeline.process_pdf_full()` | 触发完整 5-Stage |
-| **数据查询** | `query_financial_database` | `vanna_tool.generate_sql()` | Text-to-SQL |
-| **语义搜索** | `search_documents` | `multimodal_rag.search()` | 图文关联 |
-| **入库操作** | `smart_insert_document` | `db_ingestion_tools` | Schema v2.3 写入 |
-| **实体解析** | `resolve_entity` | `entity_resolver` | CN/EN 名称映射 |
-
-#### Tool → Pipeline 调用链
-
-```
-Agent Tool
-    │
-    ▼
-┌─────────────────────────────────────────────────────────────┐
-│  parse_financial_pdf(pdf_path)                              │
-│                                                             │
-│  → 调用: pipeline.process_pdf_full(pdf_path)                │
-│                                                             │
-│  → 执行:                                                     │
-│     Stage 0: Preprocessor                                   │
-│     Stage 1: Parser (Hybrid)                                │
-│     Stage 2: Enrichment                                     │
-│     Stage 3: Router                                         │
-│     Stage 4: Extractor                                      │
-│     Step 8-10: Post-Processing                              │
-│                                                             │
-│  → 返回:                                                     │
-│     {markdown, tables, charts, structured_data, doc_id}     │
-└─────────────────────────────────────────────────────────────┘
-```
-
----
-
-### 🎯 年报处理完整流程
-
-```
-用户上传年报 PDF
-    │
-    ▼
-┌─────────────────────────────────────────────────────────────┐
-│  1. Agent 接收请求                                           │
-│     ├─ 识别意图: "解析年报"                                   │
-│     ├─ 选择 Skill: financial-analysis                        │
-│     └─ 选择 Tool: parse_financial_pdf                        │
-└─────────────────────────────────────────────────────────────┘
-    │
-    ▼
-┌─────────────────────────────────────────────────────────────┐
-│  2. Pipeline 5-Stage 处理                                    │
-│     ├─ Stage 0: 验证 + 分批                                  │
-│     ├─ Stage 1: LlamaParse 解析                             │
-│     ├─ Stage 2: 图文关联 + 兜底写入                          │
-│     ├─ Stage 3: 关键字路由                                   │
-│     └─ Stage 4: LLM 结构化提取                               │
-└─────────────────────────────────────────────────────────────┘
-    │
-    ▼
-┌─────────────────────────────────────────────────────────────┐
-│  3. 数据入库                                                 │
-│     ├─ Zone 1: financial_metrics (EAV)                      │
-│     ├─ Zone 2: document_pages (兜底)                         │
-│     ├─ JSONB: companies.extra_data                          │
-│     └─ Vanna Training 自动触发                               │
-└─────────────────────────────────────────────────────────────┘
-    │
-    ▼
-┌─────────────────────────────────────────────────────────────┐
-│  4. 用户查询                                                 │
-│     ├─ Agent 选择 Tool: query_financial_database             │
-│     ├─ Vanna 生成 SQL                                        │
-│     ├─ 执行查询                                               │
-│     └─ 返回结果 + Citation                                   │
-└─────────────────────────────────────────────────────────────┘
-    │
-    ▼
-返回给用户: 数值表格 + 溯源信息
-```
-
----
-
-## 🤖 Agent Query 功能详解
-
-Agent 通过 `vanna_tool.py` 实现自然语言到 SQL 的转换，支持以下功能：
-
-### 1. Text-to-SQL 查询 (核心功能)
-
-```python
-# 用户问问题
-question = "CK Hutchison 2023 年收入是多少？"
-
-# Vanna 自动生成 SQL
-sql = vanna.generate_sql(question)
-# → SELECT standardized_value FROM financial_metrics 
-#    WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') 
-#    AND metric_name = 'Revenue' AND year = 2023
-
-# 执行查询
-results = vanna.execute(sql)
-```
-
-### 2. Dynamic Schema Injection (智能 JSONB 查询)
-
-**特色功能**：自动发现 JSONB 动态属性并注入提示
-
-```python
-# 自动发现 companies.extra_data 中的 Keys
-dynamic_info = await vanna.discover_dynamic_keys()
-# → {"discovered_keys": ["index_quarter", "index_theme", "is_audited", ...]}
-
-# 构建增强提示
-enhanced_prompt = vanna.build_enhanced_prompt(question, dynamic_info)
-
-# 生成正确的 JSONB 查询语法
-sql = await vanna.generate_sql_with_dynamic_schema("找 Q3 指数报告")
-# → SELECT * FROM documents WHERE dynamic_attributes->>'index_quarter' = 'Q3'
-```
-
-### 3. 支持的查询类型
-
-| 查询类型 | 示例问题 | 查询表 |
-|----------|----------|--------|
-| **公司信息** | "列出所有生物科技公司" | `companies`, `v_companies_for_vanna` |
-| **财务指标** | "腾讯 2023 年收入" | `financial_metrics` |
-| **关键人员** | "审计委员会成员" | `key_personnel` (JSONB `committee_membership`) |
-| **股东结构** | "控股股东是谁" | `shareholding_structure` |
-| **收入分解** | "按地区收入分布" | `revenue_breakdown` |
-| **市场数据** | "股价走势" | `market_data` |
-| **文档搜索** | "ESG 相关内容" | `document_pages` (Fallback) |
-
-### 4. 完整 Query 流程
-
-```
-用户问题: "CK Hutchison 2023 年收入是多少？"
-    │
-    ▼
-┌─────────────────────────────────────────────────────────────┐
-│  1. Dynamic Key Discovery                                   │
-│     ├─ 扫描 companies.extra_data 发现动态 Keys              │
-│     ├─ 扫描 document_companies.extracted_industries         │
-│     └─ 返回: {"index_quarter", "index_theme", ...}          │
-└─────────────────────────────────────────────────────────────┘
-    │
-    ▼
-┌─────────────────────────────────────────────────────────────┐
-│  2. Enhanced Prompt Build                                   │
-│     ├─ 注入 JSONB 查询语法提示                               │
-│     ├─ 注入 v2.3 Schema 变更提醒                            │
-│     └─ 添加 SQL 范例参考                                     │
-└─────────────────────────────────────────────────────────────┘
-    │
-    ▼
-┌─────────────────────────────────────────────────────────────┐
-│  3. RAG Retrieval (ChromaDB)                                │
-│     ├─ 搜索相似 DDL (表结构)                                 │
-│     ├─ 搜索相似 SQL 范例                                     │
-│     └─ 搜索 Documentation (语义说明)                        │
-│     → 返回 Top-K 相关上下文                                  │
-└─────────────────────────────────────────────────────────────┘
-    │
-    ▼
-┌─────────────────────────────────────────────────────────────┐
-│  4. LLM SQL Generation                                      │
-│     ├─ 接收: 问题 + RAG 上下文 + JSONB 提示                  │
-│     ├─ 生成: PostgreSQL 兼容 SQL                            │
-│     └─ 确保: v2.3 Schema 适配                               │
-└─────────────────────────────────────────────────────────────┘
-    │
-    ▼
-┌─────────────────────────────────────────────────────────────┐
-│  5. SQL Execution                                           │
-│     ├─ 执行 SQL 查询                                         │
-│     ├─ 返回结果 DataFrame                                    │
-│     └─ 可选: LLM 总结结果                                    │
-└─────────────────────────────────────────────────────────────┘
-    │
-    ▼
-返回给用户: [{"year": 2023, "standardized_value": 3456.78}]
-```
-
----
-
-## 🧠 Vanna Training 详解
-
-Vanna 通过三层数据学习如何生成正确的 SQL：
-
-### 训练三要素
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  1. DDL (表结构定义)                                         │
-│     ├─ CREATE TABLE 语句                                     │
-│     ├─ 字段名称、类型、约束                                   │
-│     ├─ JSONB 字段说明                                        │
-│     └─ 17 张表 + 3 个视图                                    │
-│                                                             │
-│  2. Documentation (语义说明)                                 │
-│     ├─ 表用途说明                                             │
-│     ├─ 字段含义解释                                          │
-│     ├─ 查询最佳实践                                          │
-│     └─ ⚠️ v2.3 字段变更提醒                                  │
-│                                                             │
-│  3. SQL Examples (问答范例)                                  │
-│     ├─ question: 自然语言问题                                │
-│     ├─ sql: 正确的 SQL                                       │
-│     └─ 20+ 常用查询场景                                      │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### 训练时机
-
-| 场景 | 触发 | 说明 |
-|------|------|------|
-| **启动时** | `vanna-service` 启动 | 自动训练 Schema + Enhanced Data |
-| **新文档入库后** | `pipeline.process_pdf_full()` Step 9 | 调用 `/api/train?doc_id=xxx` |
-| **手动触发** | API `/api/train` | 后台异步训练 |
-
-### 训练数据来源
-
-```
-vanna-service/
-├── vanna_training.py           # 训练数据生成器
-│   ├── _get_enhanced_ddl()             # 17 张表 DDL
-│   ├── _get_enhanced_documentation()   # 每张表语义说明
-│   └── _get_enhanced_sql_examples()    # 20+ 问答范例
-│
-├── ddl.json                    # DDL JSON 文件
-├── documentation.json          # Documentation JSON 文件
-├── sql_pairs.json              # SQL 范例 JSON 文件
-│
-└── data/chromadb/              # ChromaDB 持久化存储
-    ├── 训练向量 embeddings
-    └── 问题 → SQL 映射
-```
-
-### 训练示例代码
-
-```python
-# DDL 训练
-vn.train(ddl="CREATE TABLE companies (stock_code VARCHAR(50), name_en VARCHAR(255), ...)")
-
-# Documentation 训练
-vn.train(documentation="companies 表存上市公司信息。stock_code 格式如 00001 (港股)。双轨制行业系统：is_industry_confirmed=TRUE 时使用 confirmed_industry")
-
-# SQL 范例训练
-vn.train(
-    question="CK Hutchison 2023 年收入是多少？",
-    sql="SELECT standardized_value FROM financial_metrics WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND metric_name = 'Revenue' AND year = 2023"
-)
-
-# 针对特定文档训练
-train_vanna_on_document(doc_id="stock_00001_2023")
-```
-
-### v2.3 Schema 变更处理
-
-训练时自动注入字段变更提醒，确保生成的 SQL 使用正确字段名：
+### Zone 1: 結構化數據表
 
 ```sql
--- ❌ 旧版 (v2.2) 错误查询
-SELECT * FROM document_pages WHERE company_id = 1
-
--- ✅ 新版 (v2.3) 正确查询
-SELECT dp.* FROM document_pages dp
-JOIN documents d ON dp.document_id = d.id
-WHERE d.owner_company_id = 1
-```
-
-**字段变更映射**：
-
-| 表 | 旧字段 | 新字段 |
-|----|--------|--------|
-| `market_data` | `trade_date` | `data_date` |
-| `market_data` | `closing_price` | `close_price` |
-| `market_data` | `trading_volume` | `volume` |
-| `revenue_breakdown` | `category` | `segment_name` |
-| `revenue_breakdown` | `amount` | `revenue_amount` |
-| `key_personnel` | `person_name` | `name_en` |
-| `key_personnel` | `committee` | `committee_membership` (JSONB) |
-| `document_pages` | `company_id` | **已删除** (需 JOIN documents) |
-
----
-
-## 🔌 Vanna API Endpoints
-
-| Endpoint | 功能 | 参数 |
-|----------|------|------|
-| `POST /api/ask` | 自然语言查询 | `question`, `include_sql`, `include_summary` |
-| `POST /api/train` | 触发训练 | `train_type` (schema/ddl/sql), `doc_id` |
-| `POST /api/train_ddl` | 训练 DDL | `ddl` 字符串 |
-| `POST /api/train_sql` | 训练 SQL 范例 | `question`, `sql` |
-| `POST /api/extract` | LLM 信息提取 | `text`, `extract_type` |
-| `GET /api/column_changes` | v2.3 字段变更说明 | — |
-| `GET /health` | 健康检查 | — |
-| `GET /status` | 服务状态 | — |
-
-### API 使用示例
-
-```bash
-# 自然语言查询
-curl -X POST http://localhost:8082/api/ask \
-  -H "Content-Type: application/json" \
-  -d '{"question": "CK Hutchison 2023 年收入", "include_sql": true}'
-
-# 返回结果
-{
-  "question": "CK Hutchison 2023 年收入",
-  "sql": "SELECT standardized_value FROM financial_metrics WHERE...",
-  "data": [{"standardized_value": 3456.78}],
-  "status": "ready"
-}
-
-# 触发训练
-curl -X POST http://localhost:8082/api/train \
-  -H "Content-Type: application/json" \
-  -d '{"train_type": "schema"}'
-
-# 查看字段变更
-curl http://localhost:8082/api/column_changes
-```
-
----
-
-## 📊 数据库 Schema
-
-### Zone 1: 结构化数据表
-
-```sql
--- 结构化提取结果
+-- 結構化提取結果
 structured_extraction (
-    id, document_id, company_id, year,
-    extraction_type,  -- revenue_breakdown, key_personnel, financial_metrics
-    extracted_data,   -- JSON 结构化数据
-    source_pages,     -- 来源页码
-    confidence_score
+  id, document_id, company_id, year,
+  extraction_type, -- revenue_breakdown, key_personnel, financial_metrics
+  extracted_data, -- JSON 結構化數據
+  source_pages, -- 來源頁碼
+  confidence_score
 )
 
--- 财务指标表
+-- 財務指標表
 financial_metrics (
-    id, company_id, year,
-    revenue, net_income, total_assets,
-    roe, roa, debt_ratio, ...
+  id, company_id, year,
+  revenue, net_income, total_assets,
+  roe, roa, debt_ratio, ...
+)
+
+-- 關鍵人員
+key_personnel (
+  id, company_id, year,
+  name_en, name_zh,
+  position, committee_membership -- JSONB
+)
+
+-- 收入分解
+revenue_breakdown (
+  id, company_id, year,
+  segment_name, -- 原 category
+  revenue_amount, -- 原 amount
+  percentage
 )
 ```
 
-### Zone 2: 兜底表 (所有页面)
+### Zone 2: 兜底表（所有頁面）
 
 ```sql
--- 页面内容兜底表
+-- 頁面內容兜底表
 document_pages (
-    id, document_id, page_num,
-    markdown_content,
-    tables_json,
-    images_json,
-    artifacts_json
+  id, document_id, page_num,
+  markdown_content,
+  tables_json,
+  images_json,
+  artifacts_json
 )
 
 -- 原始 Artifacts
 artifacts (
-    id, document_id, type,  -- table, image, text_chunk
-    content_json,
-    page_num,
-    bbox
+  id, document_id, type, -- table, image, text_chunk
+  content_json,
+  page_num,
+  bbox
 )
 ```
 
----
+### 雙軌制行業系統
 
-## 🔧 配置文件
-
-### `config/config.json`
-
-```json
-{
-  "providers": {
-    "dashscope": {
-      "apiKey": "${DASHSCOPE_API_KEY}",
-      "apiBase": "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    }
-  },
-  "agents": {
-    "defaults": {
-      "model": "qwen-plus",
-      "provider": "dashscope"
-    }
-  },
-  "tools": {
-    "restrictToWorkspace": true
-  }
-}
-```
-
-### `data/raw/search_keywords.json`
-
-Stage 3 关键字路由使用的搜索关键词：
-
-```json
-{
-  "revenue_breakdown": ["营业收入", "主营业务收入", "营收构成"],
-  "key_personnel": ["董事", "高管", "核心技术人员"],
-  "financial_metrics": ["财务指标", "毛利率", "净利润"]
-}
-```
+| 規則 | 觸發條件 | 行業來源 | 行為 |
+|------|----------|----------|------|
+| **Rule A** | 指數報告（標題含 Index、恒生指數、HSI） | `confirmed_industry` | `is_industry_confirmed = TRUE` |
+| **Rule B** | 年度報告，無單一行業主題 | `ai_extracted_industries` (JSONB) | `is_industry_confirmed = FALSE` |
 
 ---
 
-## 🧪 测试
+## ⚖️ 設計優缺點分析
+
+### 優點（Strengths）
+
+#### ✅ 模組化架構
+- **清晰的關注點分離**：代理、管道、工具、通道各自獨立
+- **高度內聚、低耦合**：每個模組職責明確
+- **易於擴展**：新增工具/通道只需實現註冊
+
+#### ✅ 多通道支援
+- 支援 Web、WhatsApp、Telegram、Slack、Discord、Feishu、DingTalk、Line 等
+- 使用**配接器模式**統一接口
+
+#### ✅ 強大的 PDF 處理能力
+- LlamaParse 雲端解析（高準確度）
+- 9 階段處理管道，分工明確
+- Vision API 輔助封面識別
+
+#### ✅ 靈活的 LLM 支援
+- 支援 OpenAI、Anthropic、Azure OpenAI、GitHub Copilot、DashScope、Ollama 等
+- **Provider 註冊表模式**便於擴展
+
+#### ✅ 技能系統
+- Markdown 定義行為，易於編寫和維護
+- 熱重載支援，無需重啟
+
+#### ✅ Text-to-SQL 能力
+- Vanna AI 集成，自然語言轉 SQL
+- 支援複雜財務分析查詢
+
+#### ✅ 記憶系統
+- 基於檔案的對話歷史（JSONL）
+- Consolidator 進行 token 優化
+- AutoCompact 自動上下文壓縮
+- Dream 背景記憶處理
+
+### 缺點（Weaknesses）
+
+#### ❌ 過於複雜的架構
+- **過度工程化**：大量抽象層和間接引用
+- 檔案行數過大（`loop.py` 1075 行、`db_client.py` 2018 行）
+- 新進開發者學習曲線陡峭
+
+#### ❌ 錯誤處理不一致
+- 不同模組的錯誤處理方式各異
+- 缺乏統一的異常層級體系
+
+#### ❌ 測試覆蓋不足
+- 從目錄結構看，測試相對薄弱
+- 關鍵邏輯缺乏單元測試
+
+#### ❌ 性能考量
+- 同步檔案 I/O 在高併發下可能成為瓶頸
+- Pipeline 每個階段都是順序執行，沒有並行優化
+- LLM 調用缺乏批次處理優化
+
+#### ❌ 配置管理混亂
+- 多處配置（YAML、ENV、程式碼常量）
+- 缺乏集中的配置驗證
+
+#### ❌ 文檔不足
+- 缺乏 API 文檔和架構圖
+- SKILL.md 描述有限
+
+#### ❌ 單點故障風險
+- Vanna 服務與主系統耦合
+- Pipeline 某階段失敗會影響整個流程
+
+---
+
+## 🚀 優化建議
+
+### 準確性提升
+
+#### 1. 增加驗證層級
+
+```python
+# 在 stage4_agentic_extractor.py 中增加交叉驗證
+class CrossValidator:
+    def validate_extraction(self, extracted: dict, raw_text: str) -> ValidationResult:
+        # 使用多個 LLM 進行獨立的結構化提取
+        # 比較結果並標記不一致之處
+        pass
+```
+
+#### 2. 改善 PDF 解析品質
+
+```python
+# 在 pdf_core.py 中增加表格結構恢復
+class TableStructureRecovery:
+    def recover_table(self, raw_elements: list) -> List[List[str]]:
+        # 使用視覺模型識別表格邊界
+        # 還原行列結構
+        pass
+```
+
+#### 3. 增強知識圖譜提取
+
+```python
+# 在 stage4_5_kg_extractor.py 中
+class RelationExtractor:
+    def extract_with_confidence(self, text: str) -> List[Triple]:
+        # 使用鏈式思考提示
+        # 輸出每個三元組的置信度
+        pass
+
+    def filter_low_confidence(self, triples: List[Triple], threshold: float = 0.8):
+        # 過濾低置信度關係
+        pass
+```
+
+### 效能提升
+
+#### 1. Pipeline 並行化
+
+```python
+# 在 pipeline.py 中使用並行階段
+class ParallelPipeline:
+    async def process(self, pdf_path: str):
+        # Stage 0 和 Stage 0.5 可以並行
+        stage_0_task = self.stage_0.process(pdf_path)
+        stage_0_5_task = self.stage_0_5.process(pdf_path)
+        results = await asyncio.gather(stage_0_task, stage_0_5_task)
+
+        # Stage 1 完成後，2、3、4 可以並行
+        # ...
+```
+
+#### 2. 批次處理優化
+
+```python
+# 在 llm_core.py 中增加批次處理
+class BatchLLMCaller:
+    async def batch_complete(self, prompts: List[str], batch_size: int = 10):
+        # 批次發送請求減少 API 延遲
+        # 使用 async 並發控制
+        pass
+```
+
+#### 3. 快取優化
+
+```python
+# 在 pdf_core.py 中增強快取
+class SemanticCache:
+    def get_with_fingerprint(self, pdf_path: str, content_hash: str):
+        # 不僅基於路徑，還基於內容指紋
+        # 檢測 PDF 文字/結構變化
+        pass
+```
+
+#### 4. 非同步資料庫操作
+
+```python
+# 在 db_client.py 中全面使用 asyncpg
+class AsyncDBClient:
+    async def batch_insert(self, records: List[dict]):
+        # 使用 asyncpg 的 copy_records_to_table
+        # 批次插入提升效能
+        pass
+```
+
+#### 5. 記憶體優化
+
+```python
+# 在 pdf_core.py 中使用流式處理
+class StreamingPDFParser:
+    def parse_streaming(self, pdf_path: str, page_handler: Callable):
+        # 流式處理頁面，避免一次性載入
+        # 分頁提交給 LLM
+        pass
+```
+
+### 架構簡化建議
+
+| 問題 | 建議 |
+|------|------|
+| 過大的單一檔案 | 拆分 `loop.py`、`db_client.py` 為協作者模式 |
+| 過多抽象層 | 減少繼承深度，使用組合而非繼承 |
+| 複雜的階段流程 | 引入工作流引擎（如 Prefect）管理複雜依賴 |
+
+### 監控與可觀測性
+
+```python
+# 新增監控層
+class PipelineMonitor:
+    def track_latency(self, stage: str, duration: float):
+        # 追蹤每個階段延遲
+        pass
+
+    def track_accuracy(self, stage: str, accuracy: float):
+        # 追蹤提取準確度
+        pass
+
+    def alert_on_failure(self, stage: str, error: Exception):
+        # 失敗告警
+        pass
+```
+
+---
+
+## 🚀 快速啟動
+
+### Docker GPU 版（推薦）
 
 ```bash
-# 运行单元测试
+# 1. 配置環境變量
+cp .env.example .env
+# 編輯 .env 設置 DASHSCOPE_API_KEY
+
+# 2. 啟動所有服務
+docker compose -f docker-compose.gpu.yml up -d
+
+# 3. 查看狀態
+docker compose -f docker-compose.gpu.yml ps
+
+# 4. 訪問 Web UI
+open http://localhost:3000
+```
+
+### 服務列表
+
+| 服務 | 端口 | 說明 |
+|------|------|------|
+| `nanobot-webui` | 3000 | Web UI + LlamaParse |
+| `nanobot-gateway` | 8081, 18790 | Agent Gateway |
+| `postgres-financial` | 5433 | PostgreSQL + pgvector |
+| `vanna-service` | 8082 | Vanna AI (內部) |
+
+---
+
+## 🧪 測試
+
+```bash
+# 運行單元測試
 pytest tests/
 
-# 测试 PDF 解析
+# 測試 PDF 解析
 python -m nanobot.ingestion.pipeline test.pdf
 
-# 测试 LlamaParse
+# 測試 LlamaParse
 curl http://localhost:5002/health
 ```
 
 ---
 
-## 📚 相关文档
+## 📚 相關文檔
 
-### 项目文档
+### 專案文檔
 
-- [Pipeline Architecture](docs/pipeline_architecture.md) - Stage 职责详解
-- [Code Review 2026-04-18](docs/CODE_REVIEW_2026-04-18.md) - 代码审查报告
-- [Schema ERD](docs/schema_erd.md) - 数据库关系图 (Coming Soon)
-- [Changelog](CHANGELOG.md) - 版本变更日志 (Coming Soon)
+- [Pipeline Architecture](docs/pipeline_architecture.md) - Stage 職責詳解
+- [Code Review 2026-04-18](docs/CODE_REVIEW_2026-04-18.md) - 程式碼審查報告
+- [Schema ERD](docs/schema_erd.md) - 資料庫關係圖
+- [Changelog](CHANGELOG.md) - 版本變更日誌
 
-### 外部资源
+### 外部資源
 
 - [OpenDataLoader-PDF](https://github.com/opendataloader/opendataloader-pdf) - Hybrid PDF Parser
 - [Vanna AI](https://vanna.ai/) - Text-to-SQL
@@ -1017,5 +740,5 @@ curl http://localhost:5002/health
 ---
 
 <p align="center">
-  <em>Financial Report Analysis with AI Agent 📊</em>
+<em>Financial Report Analysis with AI Agent 📊</em>
 </p>

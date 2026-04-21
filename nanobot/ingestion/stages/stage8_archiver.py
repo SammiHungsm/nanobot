@@ -68,16 +68,17 @@ class Stage8Archiver:
             
             try:
                 # 检查是否有表格/图片/图表 🌟 恢复 has_charts 逻辑
+                # 🌟 v1.3: 修正过滤条件 - 从 "type" 改为 "artifact_type"（与 Stage 2 保持一致）
                 has_tables = any(
-                    a is not None and a.get("type") == "table" and a.get("page") == page_num
+                    a is not None and a.get("artifact_type") == "table" and a.get("page") == page_num
                     for a in artifacts
                 )
                 has_images = any(
-                    a is not None and a.get("type") == "image" and a.get("page") == page_num
+                    a is not None and a.get("artifact_type") == "image" and a.get("page") == page_num
                     for a in artifacts
                 )
                 has_charts = any(
-                    a is not None and a.get("type") == "chart" and a.get("page") == page_num
+                    a is not None and a.get("artifact_type") == "chart" and a.get("page") == page_num
                     for a in artifacts
                 )
                 
@@ -95,7 +96,8 @@ class Stage8Archiver:
                 logger.warning(f"   ⚠️ 页面 {page_num} 保存失败: {e}")
         
         # 保存表格元数据
-        table_artifacts = [a for a in artifacts if a is not None and a.get("type") == "table"]
+        # 🌟 v1.3: 修正过滤条件 - 从 "type" 改为 "artifact_type"（与 Stage 2 保持一致）
+        table_artifacts = [a for a in artifacts if a is not None and a.get("artifact_type") == "table"]
         
         for artifact in table_artifacts:
             page_num = artifact.get("page", 0)

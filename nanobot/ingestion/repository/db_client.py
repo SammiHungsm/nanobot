@@ -206,6 +206,35 @@ class DBClient:
             )
             return dict(row) if row else None
     
+    async def search_companies_by_name(self, company_name: str) -> Optional[Dict[str, Any]]:
+        """
+        🌟 v1.4: 根據公司名稱搜尋公司（英文或中文名稱）
+        
+        Args:
+            company_name: 公司名稱（英文或中文）
+            
+        Returns:
+            Dict: 第一個匹配的公司信息，或 None
+        """
+        if not company_name or str(company_name).lower() in ["", "none", "null"]:
+            return None
+        
+        try:
+            async with self.connection() as conn:
+                # 搜尋 name_en 或 name_zh 中完全匹配的公司
+                row = await conn.fetchrow(
+                    """
+                    SELECT * FROM companies 
+                    WHERE LOWER(name_en) = LOWER($1) OR LOWER(name_zh) = LOWER($1)
+                    LIMIT 1
+                    """,
+                    company_name.strip()
+                )
+                return dict(row) if row else None
+        except Exception as e:
+            logger.warning(f"⚠️ 搜尋公司 '{company_name}' 失敗: {e}")
+            return None
+    
     async def upsert_company(
         self,
         stock_code: str,

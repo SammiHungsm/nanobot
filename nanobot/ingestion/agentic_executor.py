@@ -1,5 +1,5 @@
 """
-Agentic Workflow Executor - Tool Calling Loop
+Agentic Workflow Executor - Tool Calling Loop (v4.3 Context Fix)
 
 执行真正的 Agentic Workflow：
 1. 把 Tools Schema 传给 LLM
@@ -7,11 +7,15 @@ Agentic Workflow Executor - Tool Calling Loop
 3. 执行 Tool 并返回结果给 LLM
 4. 循环直到 LLM 完成
 
+🌟 v4.3 Critical Fix:
+- Context 現在正確傳入 Tools！
+- Tools 可以訪問 db_client, document_id, company_id 等
+
 Usage:
     from nanobot.ingestion.agentic_executor import AgenticExecutor
     
     executor = AgenticExecutor(llm_core, tools_registry)
-    result = await executor.run(prompt, context)
+    result = await executor.run(prompt, context={"db_client": db, ...})
 """
 
 import json
@@ -47,6 +51,7 @@ class AgenticExecutor:
         self.tools_registry = tools_registry
         self.max_iterations = max_iterations
         self.model = model or llm_core.default_model
+        self.context = {}  # 🌟 v4.3: Store context for tool execution
     
     def _build_tools_schema(self) -> List[Dict[str, Any]]:
         """
@@ -168,10 +173,11 @@ class AgenticExecutor:
                 execute_func = tool_obj
             
             # 🌟 执行 Tool（支持 async 和 sync）
+            # 🌟 v4.3: 將 context 傳入 Tool
             if asyncio.iscoroutinefunction(execute_func):
-                result = await execute_func(**tool_args)
+                result = await execute_func(**tool_args, context=self.context)
             else:
-                result = execute_func(**tool_args)
+                result = execute_func(**tool_args, context=self.context)
             
             # 🌟 确保结果是字符串
             if isinstance(result, dict):
@@ -206,6 +212,9 @@ class AgenticExecutor:
             Dict: 执行结果 {"content": str, "tool_calls": List, "iterations": int}
         """
         logger.info(f"🤖 Agentic Workflow 开始 (tools={len(self.tools_registry)})")
+        
+        # 🌟 v4.3: Store context for tool execution
+        self.context = context or {}
         
         # 🌟 构建初始 messages
         messages = [

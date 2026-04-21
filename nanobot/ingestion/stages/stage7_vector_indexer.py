@@ -1,11 +1,15 @@
 """
-Stage 7: Vector Indexer (v4.2)
+Stage 7: Vector Indexer (v4.3 結構化圖表索引)
 
 职责：
 - 文本切块 (Semantic Chunking)
 - Embedding 生成（通过 Vanna Service API，无需本地模型）
 - 向量入库 (PgVector)
 - 多模态 RAG 准备（图片 + 文本）
+
+🌟 v4.3: 配合 Stage 2 v4.1 的結構化圖表數據
+- 優先讀取 markdown_representation 作為核心數據
+- 添加 [結構化數據 - 可直接查詢] 段落，確保精確匹配
 
 🌟 v4.2: 使用 Vanna Service 的 Embedding API
 - 无需在 nanobot-webui 安装 sentence-transformers
@@ -270,16 +274,26 @@ class Stage7VectorIndexer:
             analysis = artifact.get("analysis", {})
             context = artifact.get("structural_context", {})  # 🌟 取得結構化上下文
             
-            # 🌟 組合 RAG-Anything 的高質量文字塊
+            # 🌟 v4.1: 組合 RAG-Anything 的高質量文字塊
+            # 優先使用 markdown_representation，確保結構化數據完整呈現
+            md_repr = analysis.get('markdown_representation', '')
+            
             vision_text = f"""
 [圖表標題]: {analysis.get('title', '未命名圖表')}
 [數據類型]: {analysis.get('type', 'unknown')}
 [所屬章節]: {context.get('closest_heading', '無明確標題')}
 [圖表標籤]: {context.get('caption', '無')}
 [關聯前文]: {context.get('previous_text', '')[:100]}...
-[核心數據與描述]:
-{analysis.get('markdown_representation', analysis.get('description', ''))}
+[核心數據表格]:
+{md_repr or analysis.get('description', '無數據')}
 [關鍵實體]: {', '.join(analysis.get('key_entities', analysis.get('key_metrics', [])))}
+"""
+            
+            # 🌟 v4.1: 如果有明確的 markdown_representation，額外添加純數據段落
+            # 這樣可以確保「Canada percentage」等精確查詢能匹配到
+            if md_repr and '|' in md_repr:
+                vision_text += f"""\n\n[結構化數據 - 可直接查詢]:
+{md_repr}
 """
             # 清理過多的空行
             vision_text = "\n".join([line for line in vision_text.split('\n') if line.strip()])
@@ -379,13 +393,20 @@ class Stage7VectorIndexer:
                         except:
                             content_json = {}
                     
-                    # 🌟 確保傳遞 structural_context 和 is_table_fix（RAG-Anything 上下文）
+                    # 🌟 v4.1: 確保傳遞所有關鍵字段（RAG-Anything 上下文 + 結構化數據）
+                    analysis = content_json.get("analysis", {})
+                    # 🆕 優先從頂層讀取 markdown_representation（Fix 1 後新增）
+                    md_repr = content_json.get("markdown_representation") or analysis.get("markdown_representation", "")
+                    
                     vision_artifacts.append({
                         "artifact_id": artifact.get("artifact_id"),
                         "page_num": artifact.get("page_num"),
-                        "analysis": content_json.get("analysis", {}),
-                        "structural_context": content_json.get("structural_context", {}),  # 🌟 補上這行
-                        "is_table_fix": content_json.get("is_table_fix", False),  # 🌟 補上這行
+                        "analysis": {
+                            **analysis,
+                            "markdown_representation": md_repr  # 🌟 確保有值
+                        },
+                        "structural_context": content_json.get("structural_context", {}),
+                        "is_table_fix": content_json.get("is_table_fix", False),
                         "filename": content_json.get("filename"),
                         "local_path": content_json.get("local_path")
                     })

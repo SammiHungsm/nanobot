@@ -274,7 +274,6 @@ async def find_chart_by_figure_number(
     try:
         conn = await asyncpg.connect(db_url)
         
-        # 🚀 在 metadata 中查找包含 figure_number 的圖表
         query = """
         SELECT artifact_id
         FROM raw_artifacts
@@ -288,7 +287,11 @@ async def find_chart_by_figure_number(
             OR content ILIKE '%圖 ' || $2 || '%'
             OR content ILIKE '%Table ' || $2 || '%'
             OR content ILIKE '%表 ' || $2 || '%'
+            -- 👇👇 加入這兩行防呆：如果 LLM 傳入的是頁碼，也能命中該頁的第一張圖
+            OR page_num::text = $2
+            OR file_path ILIKE '%page_' || $2 || '.%'
           )
+        ORDER BY id ASC
         LIMIT 1
         """
         

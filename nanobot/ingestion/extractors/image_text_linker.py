@@ -22,6 +22,7 @@ class ImageTextLinker:
                 """, document_id)
 
                 if not images:
+                    logger.info(f"   ℹ️ 文檔 {document_id} 沒有發現圖片/圖表，跳過圖文關聯")
                     return 0
 
                 # 2. 找出這份文件所有的文字 Chunk
@@ -30,6 +31,10 @@ class ImageTextLinker:
                     FROM raw_artifacts
                     WHERE document_id = $1 AND artifact_type IN ('text', 'text_chunk')
                 """, document_id)
+                
+                if not text_chunks:
+                    logger.info(f"   ℹ️ 文檔 {document_id} 沒有發現文字 Chunk，跳過圖文關聯")
+                    return 0
 
                 # 提取圖片的 Figure 編號 (從 metadata 或 OCR content)
                 figure_pattern = re.compile(r'(?i)(?:Figure|圖|Table|表)\s*([\w\.\-]+)')
@@ -62,15 +67,22 @@ class ImageTextLinker:
                         fig_lower = fig.lower()
                         if fig_lower in image_lookup:
                             target_image_id = image_lookup[fig_lower]
+                            logger.debug(f"   🔗 發現關聯: 圖片 {target_image_id} <- 文字 {chunk_id} (提及 {fig})")
                             
                             # 4. 寫入 artifact_relations
-                            await conn.execute("""
-                                INSERT INTO artifact_relations 
-                                (source_artifact_id, target_artifact_id, relation_type, confidence_score, extraction_method)
-                                VALUES ($1, $2, 'explained_by', 0.9, 'regex_linker')
-                                ON CONFLICT DO NOTHING
-                            """, target_image_id, chunk_id)
-                            links_created += 1
+                            # 🌟 v1.3: 補充 document_id（必填字段）
+                            try:
+                                await conn.execute("""
+                                    INSERT INTO artifact_relations 
+                                    (document_id, source_artifact_id, target_artifact_id, relation_type, confidence_score, extraction_method)
+                                    VALUES ($1, $2, $3, 'explained_by', 0.9, 'regex_linker')
+                                    ON CONFLICT (source_artifact_id, target_artifact_id) DO NOTHING
+                                """, document_id, target_image_id, chunk_id)
+                                links_created += 1
+                            except Exception as insert_err:
+                                logger.warning(f"   ⚠️ 插入關聯失敗 {target_image_id} <- {chunk_id}: {insert_err}")
+                
+                logger.info(f"   ✅ 共成功建立 {links_created} 條圖文關聯")
 
                 return links_created
         except Exception as e:

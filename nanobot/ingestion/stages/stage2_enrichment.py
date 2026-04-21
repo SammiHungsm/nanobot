@@ -1,5 +1,5 @@
 """
-Stage 2: 多模態富文本擴充 (v3.6 PyMuPDF Removed)
+Stage 2: 多模態富文本擴充 (v4.2 語意+結構完美組合)
 
 職責：
 - 從 LlamaParse Cloud 下載圖片
@@ -7,7 +7,17 @@ Stage 2: 多模態富文本擴充 (v3.6 PyMuPDF Removed)
 - Vision 分析圖片內容 + 實體關係，輸出完美 Markdown Representation
 - 寫入資料庫 (raw_artifacts, document_pages)
 
-🌟 v3.6: PyMuPDF 已移除，表格防禦性截圖功能已停用
+黃金分工架構：
+✅ LlamaParse 可靠的：純文字、格式良好的 Markdown 表格
+⚠️ 需要 Vision 補強的：圖片 (image)、圖表 (chart)、混亂表格 (messy table)
+
+🌟 v4.2 完美組合 (Best Practice)：
+- 圖表 content = 「語意描述 + 結構化表格」混合體
+- 靠描述命中 Vector Search（語意關鍵詞）
+- 靠表格讓 LLM 精準提取數據（Key-Value 明確）
+- 解決「過度丟失語意上下文」問題
+
+🌟 v4.1: 圖表 Vision 分析輸出明確的 Markdown 表格格式
 """
 
 import os
@@ -22,7 +32,49 @@ from nanobot.core.llm_core import llm_core
 
 
 class Stage2Enrichment:
-    """Stage 2: 多模態富文本擴充 (v3.6 PyMuPDF Removed)"""
+    """Stage 2: 多模態富文本擴充 (v4.2 語意+結構完美組合) 🌟
+    
+    v4.2 核心改進 (Best Practice)：
+    - 圖表 content = 「語意描述 + 結構化表格」混合體
+    - 靠描述命中 Vector Search（如「2023年營收分佈」）
+    - 靠表格讓 LLM 精準提取（如 | Canada | 1% |）
+    - 解決「過度丟失語意上下文」問題
+    """
+
+    @staticmethod
+    def _should_use_vision_enrichment(artifact: Dict[str, Any]) -> tuple[bool, str]:
+        """🌟 v4.0 新增：黃金法則決策樹 - 判斷 artifact 是否需要 Vision 補強
+        
+        規則：
+        ✅ Vision 加強：image, chart, messy table
+        ❌ 直接信任 LlamaParse：text, well-formed table
+        
+        Returns:
+            tuple: (是否需要 Vision, 原因描述)
+        """
+        art_type = artifact.get("type")
+        
+        # ✅ 這些交給 Vision Model（LlamaParse 不靠譜）
+        if art_type == "image":
+            return True, "LlamaParse OCR 不穩定，需要 Vision 重新翻譯"
+        
+        if art_type == "chart":
+            return True, "Chart 圖表數據需要 Vision 提取"
+        
+        # ⚠️ 混亂表格也需要 Vision
+        if art_type == "table":
+            content = artifact.get("content", "")
+            if Stage2Enrichment._is_messy_table(content):
+                return True, "表格解析失敗，需要 Vision 修復"
+        
+        # ❌ 這些直接信 LlamaParse
+        if art_type == "text":
+            return False, "純文字，LlamaParse 精準"
+        
+        if art_type == "table":
+            return False, "表格格式良好，直接使用 LlamaParse"
+        
+        return False, "未知類型，跳過"
 
     @staticmethod
     def _is_messy_table(md_content: str) -> bool:
@@ -160,6 +212,66 @@ class Stage2Enrichment:
         return context
 
     @staticmethod
+    async def _find_nearby_image_for_table(
+        artifacts: List[Dict[str, Any]],
+        table_idx: int,
+        downloaded_images: Dict[str, Dict],
+        images_dir: Path,
+        doc_id: str,
+        page_num: int
+    ) -> Optional[str]:
+        """🌟 v4.0 新增：為混亂表格尋找附近的圖片截圖
+        
+        策略：
+        1. 優先尋找同一頁的 image artifact
+        2. 如果沒有，尋找前後頁的 image artifact
+        3. 返回本地圖片路徑，或 None
+        
+        Args:
+            artifacts: 所有 artifact 列表
+            table_idx: 當前表格 artifact 的索引
+            downloaded_images: 已下載的圖片字典 {filename: info}
+            images_dir: 圖片目錄
+            doc_id: 文檔 ID
+            page_num: 表格所在頁碼
+            
+        Returns:
+            Optional[str]: 圖片的本地路徑，或 None
+        """
+        # 策略 1：同一頁的 image artifact（前後 3 個位置）
+        for offset in range(-3, 4):
+            idx = table_idx + offset
+            if 0 <= idx < len(artifacts):
+                artifact = artifacts[idx]
+                if artifact and artifact.get("type") == "image":
+                    filename = artifact.get("filename") or artifact.get("name")
+                    if filename:
+                        # 優先從 downloaded_images 找
+                        cached = downloaded_images.get(filename, {})
+                        local_path = cached.get("local_path") or artifact.get("local_path")
+                        if local_path and os.path.exists(local_path):
+                            return local_path
+                        # 嘗試在 images_dir 找
+                        img_path = images_dir / filename
+                        if img_path.exists():
+                            return str(img_path)
+        
+        # 策略 2：同一頁的其他 artifact（掃描所有）
+        for artifact in artifacts:
+            if artifact and artifact.get("type") == "image" and artifact.get("page") == page_num:
+                filename = artifact.get("filename") or artifact.get("name")
+                if filename:
+                    cached = downloaded_images.get(filename, {})
+                    local_path = cached.get("local_path") or artifact.get("local_path")
+                    if local_path and os.path.exists(local_path):
+                        return local_path
+                    img_path = images_dir / filename
+                    if img_path.exists():
+                        return str(img_path)
+        
+        return None
+
+    @staticmethod
     async def save_all_artifacts(
         artifacts: List[Dict[str, Any]],
         images: List[Dict[str, Any]] = None,
@@ -189,7 +301,7 @@ class Stage2Enrichment:
         if not images_dir.exists():
             images_dir.mkdir(parents=True, exist_ok=True)
 
-        stats = {"tables_saved": 0, "images_saved": 0, "pages_saved": 0, "vision_analyzed": 0}
+        stats = {"tables_saved": 0, "images_saved": 0, "charts_saved": 0, "pages_saved": 0, "vision_analyzed": 0}
 
         # ===== 1. 預先掃描：找出含有圖片和表格的頁碼 =====
         pages_with_images = set()
@@ -268,11 +380,43 @@ class Stage2Enrichment:
                     final_content = Stage2Enrichment._html_table_to_markdown(table_content_str)
                     logger.info(f" ✅ HTML 表格轉換完成 (Page {page_num})")
 
-                # 🌟 v3.6: 防禦性檢查（PyMuPDF 已移除）
-                # 如果表格解析混亂，記錄警告，但繼續使用原始內容
+                # 🌟 v4.0: 混亂表格 → 嘗試 Vision 自動修復
+                messy_table_repaired = False
                 if Stage2Enrichment._is_messy_table(table_content_str):
-                    logger.warning(f" ⚠️ 發現混亂表格 (Page {page_num})，PyMuPDF 已移除，無法使用 Vision 修復")
-                    logger.warning(f"    建議：檢查 LlamaParse 解析結果或手動修復表格")
+                    logger.warning(f" ⚠️ 發現混亂表格 (Page {page_num})，嘗試 Vision 自動修復...")
+                    # 🌟 嘗試獲取表格圖片（如果在附近有 image artifact）
+                    table_image_path = await Stage2Enrichment._find_nearby_image_for_table(
+                        artifacts, i, downloaded_images, images_dir, doc_id, page_num
+                    )
+                    if table_image_path and os.path.exists(table_image_path):
+                        try:
+                            logger.info(f" 📸 找到表格截圖，開始 Vision 修復: {table_image_path}")
+                            with open(table_image_path, "rb") as f:
+                                image_base64 = base64.b64encode(f.read()).decode("utf-8")
+                            
+                            # 🌟 獲取上下文
+                            precise_context = Stage2Enrichment._get_precise_context(artifacts, i)
+                            
+                            # 🌟 Vision 提取表格結構
+                            vision_result = await Stage2Enrichment._analyze_image_with_precise_context(
+                                image_base64=image_base64,
+                                context_data=precise_context,
+                                vision_model=vision_model or llm_core.vision_model
+                            )
+                            
+                            # 🌟 從 Vision 結果提取 Markdown 表格
+                            if vision_result.get("markdown_representation") and vision_result.get("type") in ["table", "chart"]:
+                                final_content = vision_result["markdown_representation"]
+                                messy_table_repaired = True
+                                logger.info(f" ✅ Vision 成功修復混亂表格 (Page {page_num})")
+                                logger.debug(f" 修復後內容: {final_content[:200]}...")
+                            else:
+                                logger.warning(f" ⚠️ Vision 無法修復表格，回退使用原始內容")
+                        except Exception as e:
+                            logger.warning(f" ⚠️ Vision 修復表格失敗: {e}")
+                    else:
+                        logger.warning(f" ⚠️ 無法找到表格截圖，混亂表格無法自動修復")
+                        logger.warning(f" 建議：手動檢查 LlamaParse 解析結果")
 
                 # 寫入最終表格結果
                 if db_client:
@@ -305,9 +449,10 @@ class Stage2Enrichment:
                         logger.warning(f" ⚠️ 保存表格 {page_num} 失敗: {e}")
 
             # ---------------------------
-            # 處理 Image (RAG-Anything 上下文對齊)
+            # 處理 Image 和 Chart (RAG-Anything 上下文對齊)
+            # 🌟 v4.0: chart 類型也需要 Vision 分析
             # ---------------------------
-            elif art_type == "image":
+            elif art_type in ["image", "chart"]:
                 filename = artifact.get("filename") or artifact.get("name") or f"image_{page_num}_{i}.png"
 
                 # 從 downloaded_images 找本地路徑，若無則看 artifact 本身
@@ -332,13 +477,13 @@ class Stage2Enrichment:
                     file_size_kb = os.path.getsize(local_path) / 1024
                     
                     if file_size_kb < 15.0:
-                        logger.debug(f"   ⏭️ 圖片太小 ({file_size_kb:.1f}KB)，疑似 Logo/裝飾，跳過 Vision 分析")
+                        logger.debug(f"   ⏭️ {art_type} 太小 ({file_size_kb:.1f}KB)，疑似 Logo/裝飾，跳過 Vision 分析")
                         stats["images_saved"] += 1
                         if db_client:
                             await db_client.insert_raw_artifact(
-                                artifact_id=f"img_{doc_id}_p{page_num}_{i}",
+                                artifact_id=f"{art_type}_{doc_id}_p{page_num}_{i}",
                                 document_id=document_id,
-                                artifact_type="image",
+                                artifact_type=art_type,
                                 page_num=page_num,
                                 content_json={"filename": filename, "local_path": local_path},
                                 content=filename
@@ -359,33 +504,65 @@ class Stage2Enrichment:
                             vision_model=vision_model or llm_core.vision_model
                         )
 
+                        # 🌟 v4.0: 生成 AI Summary (Image-to-Text 預處理)
+                        ai_summary = await Stage2Enrichment._generate_chart_summary(
+                            image_base64=image_base64,
+                            vision_model=vision_model or llm_core.vision_model
+                        )
+
                         if db_client:
+                            # 🌟 v4.2: 完美組合 - 語意描述 + 結構化數據
+                            # 解決「過度丟失語意上下文」問題
+                            md_repr = vision_result.get("markdown_representation", "")
+                            
+                            if md_repr and ai_summary:
+                                # 黃金組合：靠描述命中 + 靠表格提取
+                                primary_content = f"""[圖表語意描述]
+{ai_summary}
+
+[結構化數據 - 可直接查詢]
+{md_repr}
+"""
+                            else:
+                                # Fallback: 優先用表格，無則用描述
+                                primary_content = md_repr or ai_summary or ""
+                            
+                            content_json = {
+                                "filename": filename,
+                                "local_path": local_path,
+                                "url": url,
+                                "analysis": vision_result,
+                                "structural_context": precise_context,
+                                "ai_summary": ai_summary,
+                                "markdown_representation": md_repr  # 🆕 明確存儲
+                            }
+                            
                             await db_client.insert_raw_artifact(
                                 artifact_id=f"vision_{doc_id}_p{page_num}_{i}",
                                 document_id=document_id,
                                 artifact_type="vision_analysis",
                                 page_num=page_num,
-                                content_json={
-                                    "filename": filename,
-                                    "local_path": local_path,
-                                    "url": url,
-                                    "analysis": vision_result,
-                                    "structural_context": precise_context
-                                },
-                                content=vision_result.get("markdown_representation", "")
+                                content_json=content_json,
+                                content=primary_content  # 🌟 v4.2: 完美組合
                             )
 
                         stats["vision_analyzed"] += 1
                         stats["images_saved"] += 1
+                        stats["charts_saved"] = stats.get("charts_saved", 0) + (1 if art_type == "chart" else 0)
+
+                        # 🌟 v4.0: 打印 AI Summary 日誌
+                        if ai_summary:
+                            logger.info(f"   ✅ {art_type.upper()} AI Summary 生成: {filename}")
+                            logger.debug(f"      Summary: {ai_summary[:100]}...")
 
                     except Exception as e:
                         logger.warning(f" ⚠️ Vision 分析失敗: {e}")
                         # 失敗也保存元數據
                         if db_client:
                             await db_client.insert_raw_artifact(
-                                artifact_id=f"img_{doc_id}_p{page_num}_{i}",
+                                artifact_id=f"{art_type}_{doc_id}_p{page_num}_{i}",
                                 document_id=document_id,
-                                artifact_type="image",
+                                artifact_type=art_type,
                                 page_num=page_num,
                                 content_json={"filename": filename, "local_path": local_path},
                                 content=filename
@@ -395,15 +572,15 @@ class Stage2Enrichment:
                     stats["images_saved"] += 1
                     if db_client:
                         await db_client.insert_raw_artifact(
-                            artifact_id=f"img_{doc_id}_p{page_num}_{i}",
+                            artifact_id=f"{art_type}_{doc_id}_p{page_num}_{i}",
                             document_id=document_id,
-                            artifact_type="image",
+                            artifact_type=art_type,
                             page_num=page_num,
                             content_json={"filename": filename, "local_path": local_path},
                             content=filename
                         )
 
-        logger.info(f"✅ Stage 2 完成: {stats['pages_saved']} 頁, {stats['tables_saved']} 表格, {stats['images_saved']} 圖片, {stats['vision_analyzed']} Vision 分析")
+        logger.info(f"✅ Stage 2 完成: {stats['pages_saved']} 頁, {stats['tables_saved']} 表格, {stats['images_saved']} 圖片, {stats.get('charts_saved', 0)} 圖表, {stats['vision_analyzed']} Vision 分析")
         return stats
 
     @staticmethod
@@ -427,18 +604,22 @@ class Stage2Enrichment:
 請仔細觀察圖片，並結合上述邏輯上下文，過濾幻覺，輸出一個高精度的 JSON：
 1. "type": 判斷這是 chart(圖表), table(表格掃描件), diagram(架構圖), 還是 photo(普通照片)。
 2. "title": 綜合上下文給這張圖表一個精確的標題。
-3. "markdown_representation": 🌟 最重要！
-   - 如果是 Table，請轉換為標準 Markdown 表格。
-   - 如果是 Chart (圓餅圖/柱狀圖)，請轉換為條列式的數據描述 (e.g., - 2023年: 45%)。
-   這將直接進入向量資料庫。
+3. "markdown_representation": 🌟 最重要！必須是可直接查詢的結構化格式：
+   - **如果是 Table**: 輸出標準 Markdown 表格：| 列名 | 列名 |\n|---|---|\n| 值 | 值 |
+   - **如果是 Chart (圓餅圖/柱狀圖)**: 輸出 Markdown 表格：| 類別 | 數值 |\n|---|---|\n| Canada | 1% |\n| Asia | 15% |
+   - **如果是折線圖**: 輸出時間序列表格：| 年份 | 數值 |\n|---|---|\n| 2023 | 45% |
+   - **如果是 Diagram**: 用條列式描述結構
+   
+   ⚠️ **關鍵**: 每個數據點必須有明確的 Key（如 "Canada"）和 Value（如 "1%"），不要用模糊的「指標1：數值1」格式！
+   
 4. "key_entities": 提取圖表中提及的重要實體 (如公司、地區、指標)。
 
 輸出格式必須是純 JSON，不要包含 ```json 標籤：
 {{
  "type": "chart",
  "title": "2023年各區域收入分佈",
- "markdown_representation": "- 香港：45%\\n- 歐洲：30%",
- "key_entities": ["香港", "歐洲", "收入"]
+ "markdown_representation": "| 地區 | 百分比 |\\n|---|---|\\n| Canada | 1% |\\n| Asia | 15% |",
+ "key_entities": ["Canada", "Asia", "收入"]
 }}
 """
         try:
@@ -458,3 +639,63 @@ class Stage2Enrichment:
         except Exception as e:
             logger.warning(f"Vision call error: {e}")
             return {"markdown_representation": "", "error": str(e)}
+
+    @staticmethod
+    async def _generate_chart_summary(
+        image_base64: str,
+        vision_model: str
+    ) -> str:
+        """
+        🌟 v4.0: 將圖表自動轉換為 Markdown Summary
+        
+        核心目的：
+        - 讓 Vector Search 可以語意搵圖（"Canada Revenue"、"淨利潤趨勢"）
+        - 即使沒有 "Figure X" 也能被發現
+        - 投資回報率高（只需改幾行代碼）
+        
+        Args:
+            image_base64: 圖片的 Base64 編碼
+            vision_model: Vision 模型名稱
+            
+        Returns:
+            str: 圖表的 Markdown 摘要
+        """
+        prompt = """
+請將這張圖表轉換為以下格式，用於向量資料庫檢索：
+
+## 圖表總結
+**類型**：[折線圖/柱狀圖/圓餅圖/表格等]
+**標題**：[如果有的話]
+**關鍵數據**：
+- 指標1：數值1
+- 指標2：數值2
+- 指標3：數值3
+
+**趨勢分析**：[3-5句話描述趨勢、對比、異常]
+
+**單位**：[貨幣/百分比/數量等]
+
+⚠️ 注意事項：
+1. 如果數字模糊或不清楚，請標註 ⚠️
+2. 盡可能提取所有可見的數據點
+3. 使用中文回答
+4. 只返回 Markdown 內容，不要包含 ``` 標籤
+"""
+        
+        try:
+            response = await llm_core.vision(
+                image_base64=image_base64,
+                prompt=prompt,
+                model=vision_model
+            )
+            
+            # 清理 Markdown 標籤
+            import re
+            cleaned = re.sub(r'^```\w*\n?', '', response)
+            cleaned = re.sub(r'\n?```$', '', cleaned)
+            
+            return cleaned.strip()
+            
+        except Exception as e:
+            logger.warning(f"⚠️ AI Summary 生成失敗: {e}")
+            return ""
