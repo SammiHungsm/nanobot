@@ -447,14 +447,15 @@ class DocumentPipeline(BaseIngestionPipeline):
             
             # ===== Stage 9: Entity Resolver (圖文關聯) 🆕 =====
             if progress_callback:
-                progress_callback(98.0, "Stage 9: Entity Resolver")
+                progress_callback(98.0, "Stage 9: Image Text Linker")
             
             if self.db and document_id:
                 try:
-                    from nanobot.ingestion.extractors.entity_resolver import EntityResolver
-                    resolver = EntityResolver(db_client=self.db)
-                    links_count = await resolver.link_image_and_text_context(document_id=document_id)
-                    logger.info(f"   ✅ 圖文關聯完成: {links_count} 條關聯")
+                    # 改為 import 新的 ImageTextLinker
+                    from nanobot.ingestion.extractors.image_text_linker import ImageTextLinker
+                    linker = ImageTextLinker(db_client=self.db)
+                    links_count = await linker.link_image_and_text_context(document_id=document_id)
+                    logger.info(f"   ✅ 圖文關聯完成: 成功寫入 {links_count} 條關聯到 artifact_relations")
                     result["stages"]["stage9"] = {"links_count": links_count}
                 except Exception as e:
                     logger.warning(f"   ⚠️ 圖文關聯失敗: {e}")

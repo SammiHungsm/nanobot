@@ -208,7 +208,8 @@ Returns:
         registry.register(GetChartContextTool())
         registry.register(FindChartByFigureNumberTool())
         registry.register(AssembleMultimodalPromptTool())
-        
+        from nanobot.agent.tools.multimodal_rag import AnalyzeChartWithVisionTool
+        registry.register(AnalyzeChartWithVisionTool())
         logger.info("✅ Registered multimodal RAG tools (cross-modal retrieval)")
         
     except ImportError as e:

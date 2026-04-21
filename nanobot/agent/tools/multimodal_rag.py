@@ -566,7 +566,104 @@ class AssembleMultimodalPromptTool(Tool):
         """組裝多模態 Prompt"""
         return assemble_multimodal_prompt(image_description, context_text, user_question)
 
+import base64
+import os
+import asyncpg
+from openai import AsyncOpenAI
+from nanobot.agent.tools.base import Tool
 
+class AnalyzeChartWithVisionTool(Tool):
+    """
+    🌟 終極殺手鐧：真正連圖帶字發送給 Vision Model 進行視覺分析
+    """
+    @property
+    def name(self) -> str:
+        return "analyze_chart_with_vision"
+    
+    @property
+    def description(self) -> str:
+        return (
+            "當你需要讀取圖表中的具體數據（例如 %、金額、趨勢）時調用此工具。"
+            "傳入圖表的 artifact_id 和你想問的問題，本工具會自動提取圖片和背景文字，並調用 Vision AI 直接看圖解答。"
+        )
+    
+    @property
+    def parameters(self) -> dict:
+        return {
+            "type": "object",
+            "properties": {
+                "image_artifact_id": {
+                    "type": "string",
+                    "description": "圖表的 Artifact ID (可以先用 find_chart_by_figure_number 取得)"
+                },
+                "question": {
+                    "type": "string",
+                    "description": "你要問的問題，例如 'Canada 的 % 和 Amount 是多少？'"
+                }
+            },
+            "required": ["image_artifact_id", "question"]
+        }
+        
+    async def execute(self, image_artifact_id: str, question: str, **kwargs) -> str:
+        # 1. 從資料庫查出圖片的實體路徑 (local_path)
+        db_url = os.getenv(
+            "DATABASE_URL",
+            "postgresql://postgres:postgres_password_change_me@localhost:5433/annual_reports"
+        )
+        
+        try:
+            conn = await asyncpg.connect(db_url)
+            # 查出 local_path
+            row = await conn.fetchrow("""
+                SELECT metadata->>'local_path' as local_path 
+                FROM raw_artifacts 
+                WHERE artifact_id = $1
+            """, image_artifact_id)
+            await conn.close()
+            
+            if not row or not row['local_path']:
+                return f"❌ 找不到圖表 {image_artifact_id} 的圖片路徑記錄，請確認是否有成功下載圖片。"
+                
+            local_image_path = row['local_path']
+        except Exception as e:
+            return f"❌ 資料庫查詢失敗: {e}"
+
+        if not os.path.exists(local_image_path):
+            return f"❌ 找不到實體圖片檔案: {local_image_path}"
+            
+        # 2. 自動拉取跨頁背景解釋文字
+        context_text = await get_chart_context(image_artifact_id, db_url)
+        if context_text.startswith("資料庫中沒有找到"):
+            context_text = "目前沒有額外的跨頁背景文字。"
+
+        # 3. 將本地圖片轉為 Base64
+        with open(local_image_path, "rb") as image_file:
+            base64_image = base64.b64encode(image_file.read()).decode('utf-8')
+            
+        prompt = f"【背景資訊】\n{context_text}\n\n【用戶問題】\n{question}\n\n請根據圖片準確提取數據回答，不要憑空捏造。"
+        
+        # 4. 呼叫 Vision API
+        try:
+            client = AsyncOpenAI()
+            response = await client.chat.completions.create(
+                model="gpt-4o", 
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
+                            }
+                        ]
+                    }
+                ],
+                max_tokens=500
+            )
+            return f"✅ Vision AI 讀圖結果：\n{response.choices[0].message.content}"
+        except Exception as e:
+            return f"❌ Vision API 調用失敗: {str(e)}"
 # ===========================================
 # Agent Tool Registration Functions
 # ===========================================

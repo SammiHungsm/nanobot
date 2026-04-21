@@ -184,7 +184,7 @@ class AgenticExecutor:
             
         except Exception as e:
             logger.warning(f"   ⚠️ Tool 执行失败: {e}")
-            return json.dumps({"error": str(e)}))
+            return json.dumps({"error": str(e)})
     
     async def run(
         self,
