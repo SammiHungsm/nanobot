@@ -38,7 +38,8 @@ class Stage0Preprocessor:
         is_index_report: bool = False,
         confirmed_doc_industry: str = None,
         images: list = None,  # 🌟 v4.7 新增：從 parse_result.images 傳入
-        raw_output_dir: str = None  # 🌟 v4.7 新增：用於讀取下載的圖片
+        raw_output_dir: str = None,  # 🌟 v4.7 新增：用於讀取下載的圖片
+        pdf_filename: str = None  # 🌟 v4.5 新增：用於 Fallback 提取公司信息
     ) -> Dict[str, Any]:
         """
         🌟 v4.6 新增: 從 LlamaParse artifacts 提取 Page 1 公司信息
@@ -85,13 +86,29 @@ class Stage0Preprocessor:
         page1_text = ""
         for artifact in page1_artifacts:
             if isinstance(artifact, dict):
-                # artifacts 字典格式：{"type": "text", "page": 1, "content": "..."}
-                page1_text += artifact.get("content", "") + "\n"
-                page1_text += artifact.get("markdown", "") + "\n"
+                # 🌟 v4.4: 只處理 text 類型的 artifact，跳過 table/image/chart
+                art_type = artifact.get("type", "text")
+                if art_type not in ["text", "text_chunk"]:
+                    continue  # 跳過非文字類型
+                
+                content = artifact.get("content", "")
+                # 🌟 v4.4: 確保 content 是字符串
+                if isinstance(content, str):
+                    page1_text += content + "\n"
+                elif isinstance(content, dict):
+                    # 如果是 dict，轉為 JSON 字符串
+                    import json
+                    page1_text += json.dumps(content, ensure_ascii=False) + "\n"
+                else:
+                    page1_text += str(content) + "\n"
+                    
+                markdown = artifact.get("markdown", "")
+                if isinstance(markdown, str):
+                    page1_text += markdown + "\n"
             elif hasattr(artifact, 'content'):
-                page1_text += artifact.content + "\n"
+                page1_text += str(artifact.content) + "\n"
             elif hasattr(artifact, 'markdown'):
-                page1_text += artifact.markdown + "\n"
+                page1_text += str(artifact.markdown) + "\n"
         
         # Step 3: 🌟 v4.7 新增：從 images 參數獲取 Page 1 的圖片
         page1_images = []

@@ -328,11 +328,12 @@ class Stage2Enrichment:
 
         # ===== 2. 處理並保存所有純文字頁面 =====
         text_artifacts = [a for a in artifacts if a is not None and a.get("type") == "text"]
-        for artifact in text_artifacts:
+        for idx, artifact in enumerate(text_artifacts):
             page_num = artifact.get("page", 0)
             content = artifact.get("content", "")
             if db_client:
                 try:
+                    # 🌟 v4.4: 同時保存到 document_pages 和 raw_artifacts (for artifact_relations)
                     await db_client.insert_document_page(
                         document_id=document_id,
                         page_num=page_num,
@@ -340,6 +341,16 @@ class Stage2Enrichment:
                         has_images=(page_num in pages_with_images),  # ✅ 動態判斷
                         has_tables=(page_num in pages_with_tables),   # ✅ Bug 修復：使用 has_tables
                         has_charts=(page_num in pages_with_charts)    # 🆕 新增：圖表判斷
+                    )
+                    # 🌟 v4.4: 同時保存到 raw_artifacts 表 (for artifact_relations)
+                    artifact_id = f"text_chunk_{doc_id}_p{page_num}_{idx}"
+                    await db_client.insert_raw_artifact(
+                        artifact_id=artifact_id,
+                        document_id=document_id,
+                        artifact_type="text_chunk",  # 🌟 新增：保存為 text_chunk 類型
+                        page_num=page_num,
+                        content=content[:5000] if content else None,  # 截取前 5000 字符
+                        raw_text=content
                     )
                     stats["pages_saved"] += 1
                 except Exception as e:

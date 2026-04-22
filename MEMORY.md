@@ -585,6 +585,24 @@ User Input → Channel → MessageBus → AgentLoop → LLM → Tools → Extern
 
 ---
 
-**Last Updated**: 2026-04-16  
-**Version**: v3.2 (LlamaParse migration)  
+**Last Updated**: 2026-04-22  
+**Version**: v4.0 (Stage 1 先行 + Tool Calling)  
 **Maintainer**: Project Team
+
+---
+
+## 📅 最近變更
+
+### 2026-04-22
+
+**Code Review 完成**：
+1. 修正 `vanna_training.py` 中 `embedding_vector` 維度（從 1536 改為 384）
+2. 更新 `README.md` Stage 流程圖，反映 v4.0 的 Stage 1 先行設計
+3. 新增 `docs/REVIEW_2026-04-22.md` review 文檔
+4. 更新 `docs/pipeline_architecture.md` Stage 職責說明
+
+**v4.0 重要變更**：
+- Stage 1 (LlamaParse) 現在最先執行
+- Stage 0 (Vision) 基於 LlamaParse artifacts 分析 Page 1
+- Stage 4 使用真正的 Tool Calling 機制
+- 新增 Stage 9 (Image Text Linker) 圖文關聯

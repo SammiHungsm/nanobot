@@ -156,6 +156,12 @@ class DocumentPipeline(BaseIngestionPipeline):
             
             artifacts = parse_result.artifacts or []
             
+            # 🌟 v4.4: 合併所有 artifacts (text + tables + images) 以確保 artifact_relations 可以建立
+            tables_list = parse_result.tables or []
+            images_list_for_merge = parse_result.images or []
+            all_artifacts = artifacts + tables_list + images_list_for_merge
+            logger.info(f"   📦 Artifacts 合併: text={len(artifacts)}, tables={len(tables_list)}, images={len(images_list_for_merge)}, total={len(all_artifacts)}")
+            
             result["stages"]["stage1"] = {
                 "job_id": parse_result.job_id,
                 "total_pages": parse_result.total_pages,
@@ -169,7 +175,7 @@ class DocumentPipeline(BaseIngestionPipeline):
             
             # 🌟 v4.7: 傳遞 parse_result.images 和 raw_output_dir 給 Stage 0
             stage0_result = await Stage0Preprocessor.extract_company_from_page1(
-                artifacts=artifacts,
+                artifacts=all_artifacts,  # 🌟 v4.4: 使用合併後的 artifacts
                 page_num=1,
                 doc_id=doc_id,
                 is_index_report=is_index_report,
@@ -232,7 +238,7 @@ class DocumentPipeline(BaseIngestionPipeline):
             raw_output_dir = parse_result.raw_output_dir
             
             stage2_result = await Stage2Enrichment.save_all_artifacts(
-                artifacts=artifacts,
+                artifacts=all_artifacts,  # 🌟 v4.4: 使用合併後的 artifacts
                 images=images_list,  # 🌟 新增：传递图片列表
                 doc_id=doc_id,
                 company_id=company_id,
@@ -269,7 +275,7 @@ class DocumentPipeline(BaseIngestionPipeline):
             
             # 🌟 v4.9: 路由所有目標類型，不限於 revenue_breakdown
             stage3_result = await Stage3Router.find_target_pages(
-                artifacts=artifacts,
+                artifacts=all_artifacts,  # 🌟 v4.4: 使用合併後的 artifacts
                 target_types=[
                     "revenue_breakdown",
                     "financial_metrics",
@@ -314,7 +320,7 @@ class DocumentPipeline(BaseIngestionPipeline):
                 progress_callback(60.0, "Stage 4: Agentic Extractor")
             
             stage4_result = await Stage4AgenticExtractor.run_agentic_write(
-                artifacts=artifacts,
+                artifacts=all_artifacts,  # 🌟 v4.4: 使用合併後的 artifacts
                 company_id=company_id,
                 year=year,
                 doc_id=doc_id,
@@ -345,7 +351,7 @@ class DocumentPipeline(BaseIngestionPipeline):
             
             try:
                 stage4_5_result = await Stage4_5_KGExtractor.run(
-                    artifacts=artifacts,
+                    artifacts=all_artifacts,  # 🌟 v4.4: 使用合併後的 artifacts
                     document_id=document_id,
                     company_name_full=company_name_full,
                     db_client=self.db
@@ -436,7 +442,7 @@ class DocumentPipeline(BaseIngestionPipeline):
                 progress_callback(95.0, "Stage 8: Archiver (归档与清理)")
             
             stage8_result = await Stage8Archiver.run(
-                artifacts=artifacts,
+                artifacts=all_artifacts,  # 🌟 v4.4: 使用合併後的 artifacts
                 doc_id=doc_id,
                 document_id=document_id,
                 stages_result=result["stages"],

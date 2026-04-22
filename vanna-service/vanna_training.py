@@ -332,7 +332,7 @@ CREATE TABLE document_pages (
     ocr_confidence FLOAT DEFAULT 0.0,
     has_tables BOOLEAN DEFAULT FALSE,
     has_images BOOLEAN DEFAULT FALSE,
-    embedding_vector VECTOR(1536),
+    embedding_vector VECTOR(384),  -- 🌟 本地 Embedding 模型維度 (sentence-transformers all-MiniLM-L6-v2)
     metadata JSONB DEFAULT '{}'::jsonb,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT unique_page UNIQUE (document_id, page_num)
@@ -347,11 +347,11 @@ CREATE TABLE document_chunks (
     content TEXT NOT NULL,
     page_number INTEGER,
     bounding_box JSONB,
-    embedding_vector VECTOR(1536),
+    embedding_vector VECTOR(384),  -- 🌟 本地 Embedding 模型維度 (sentence-transformers all-MiniLM-L6-v2)
     metadata JSONB DEFAULT '{}'::jsonb,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
-""",
+"",
             'document_tables': """
 CREATE TABLE document_tables (
     id SERIAL PRIMARY KEY,

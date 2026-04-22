@@ -209,7 +209,12 @@ class Stage3Router:
             elif artifact_type == "table":
                 table_content = artifact.get("content", {})
                 if isinstance(table_content, dict):
-                    content = json.dumps(table_content, ensure_ascii=False).lower()
+                    # 🌟 v4.4: 使用自定義序列化，忽略 BBox 等不可序列化的對象
+                    try:
+                        content = json.dumps(table_content, ensure_ascii=False, default=str).lower()
+                    except Exception as e:
+                        logger.warning(f"   ⚠️ 表格內容序列化失敗: {e}")
+                        content = str(table_content).lower()
                 else:
                     content = str(table_content).lower()
                 Stage3Router._check_keywords(content, page_num, keywords_to_search, results, keyword_hits)
