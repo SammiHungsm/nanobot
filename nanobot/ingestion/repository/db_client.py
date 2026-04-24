@@ -1535,6 +1535,46 @@ class DBClient:
         async with self.connection() as conn:
             return await conn.fetchval("SELECT id FROM documents WHERE doc_id = $1", doc_id)
     
+    async def get_document_by_id(self, document_id: int) -> Optional[Dict[str, Any]]:
+        """
+        🌟 v4.13: 根據 document_id 獲取文檔信息（用於 Checkpoint 恢復）
+        
+        Args:
+            document_id: 文檔 ID（整數主鍵）
+            
+        Returns:
+            Dict: 文檔信息，或 None
+        """
+        try:
+            async with self.connection() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT id, doc_id, company_id, year, status, filename, original_filename,
+                           created_at, updated_at
+                    FROM documents
+                    WHERE id = $1
+                    """,
+                    document_id
+                )
+                
+                if row:
+                    return {
+                        "id": row["id"],
+                        "doc_id": row["doc_id"],
+                        "company_id": row["company_id"],
+                        "year": row["year"],
+                        "status": row["status"],
+                        "filename": row["filename"],
+                        "original_filename": row["original_filename"],
+                        "created_at": str(row["created_at"]) if row["created_at"] else None,
+                        "updated_at": str(row["updated_at"]) if row["updated_at"] else None
+                    }
+                return None
+                
+        except Exception as e:
+            logger.error(f"❌ 獲取文檔信息失敗: {e}")
+            return None
+    
     async def execute_query(self, sql: str, *args) -> Any:
         """執行原始 SQL 查詢"""
         # 🌟 使用连接池（避免并发冲突）
@@ -2035,6 +2075,153 @@ class DBClient:
                 
         except Exception as e:
             logger.error(f"❌ 插入 Processing history 失败: {e}")
+            return False
+    
+    async def get_processing_history(
+        self,
+        document_id: int
+    ) -> List[Dict[str, Any]]:
+        """
+        🌟 v4.13: 獲取文檔的處理歷史（用於 Checkpoint 恢復）
+        """
+        try:
+            async with self.connection() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT stage, status, details, created_at
+                    FROM document_processing_history
+                    WHERE document_id = $1
+                    ORDER BY created_at
+                    """,
+                    document_id
+                )
+                
+                history = []
+                for row in rows:
+                    history.append({
+                        "stage": row["stage"],
+                        "status": row["status"],
+                        "details": row["details"],
+                        "created_at": str(row["created_at"]) if row["created_at"] else None
+                    })
+                
+                return history
+                
+        except Exception as e:
+            logger.error(f"❌ 獲取 Processing history 失敗: {e}")
+            return []
+    
+    async def get_last_successful_stage(
+        self,
+        document_id: int
+    ) -> Optional[str]:
+        """
+        🌟 v4.13: 獲取最後一個成功的 stage（用於 Checkpoint 恢復）
+        """
+        try:
+            async with self.connection() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT stage
+                    FROM document_processing_history
+                    WHERE document_id = $1 AND status = 'success'
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    document_id
+                )
+                
+                return row["stage"] if row else None
+                
+        except Exception as e:
+            logger.error(f"❌ 獲取最後成功 stage 失敗: {e}")
+            return None
+    
+    async def is_stage_completed(
+        self,
+        document_id: int,
+        stage: str
+    ) -> bool:
+        """
+        🌟 v4.13: 檢查某個 stage 是否已完成（用於增量更新）
+        """
+        try:
+            async with self.connection() as conn:
+                status = await conn.fetchval(
+                    """
+                    SELECT status
+                    FROM document_processing_history
+                    WHERE document_id = $1 AND stage = $2
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    document_id,
+                    stage
+                )
+                
+                return status == "success"
+                
+        except Exception as e:
+            logger.error(f"❌ 檢查 stage 狀態失敗: {e}")
+            return False
+    
+    async def save_tool_call_trace(
+        self,
+        document_id: int,
+        trace_id: str,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+        tool_result: Any,
+        success: bool,
+        error_message: str = None,
+        duration_ms: int = None
+    ) -> bool:
+        """
+        🌟 v4.13: 保存 Tool Call 追蹤日誌（用於 Debug）
+        """
+        try:
+            async with self.connection() as conn:
+                # 🌟 檢查表是否存在，不存在則創建
+                await conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS tool_call_traces (
+                        id SERIAL PRIMARY KEY,
+                        document_id INTEGER NOT NULL,
+                        trace_id VARCHAR(64) NOT NULL,
+                        tool_name VARCHAR(100) NOT NULL,
+                        tool_args JSONB,
+                        tool_result JSONB,
+                        success BOOLEAN DEFAULT true,
+                        error_message TEXT,
+                        duration_ms INTEGER,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_tool_traces_document ON tool_call_traces(document_id);
+                    CREATE INDEX IF NOT EXISTS idx_tool_traces_trace ON tool_call_traces(trace_id);
+                    """
+                )
+                
+                await conn.execute(
+                    """
+                    INSERT INTO tool_call_traces 
+                    (document_id, trace_id, tool_name, tool_args, tool_result, success, error_message, duration_ms)
+                    VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8)
+                    """,
+                    document_id,
+                    trace_id,
+                    tool_name,
+                    json.dumps(tool_args, ensure_ascii=False, default=str),
+                    json.dumps(tool_result, ensure_ascii=False, default=str) if tool_result else None,
+                    success,
+                    error_message,
+                    duration_ms
+                )
+                
+                logger.debug(f"   📝 Tool Trace: {tool_name} -> {success}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"❌ 保存 Tool Trace 失敗: {e}")
             return False
     
     async def insert_document_chunk(

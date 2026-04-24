@@ -2640,10 +2640,22 @@ class InsertMentionedCompanyTool(Tool):
         if not name_en and not name_zh:
             return json.dumps({"success": False, "error": "Must provide name_en or name_zh"}, ensure_ascii=False)
         
-        # 🌟 v4.5: 自己創建 DBClient 實例，不依賴 context
+        # 🌟 v4.16: 過濾通用公司引用（不應該作為「其他公司」添加）
+        GENERIC_COMPANY_REFS = [
+            "the group", "the company", "本公司", "本集团", "本公司集团",
+            "附屬公司", "附屬機構", "子公司", "聯營公司", "合資企業",
+            "our group", "our company", "we", "us"
+        ]
+        name_lower = (name_en or "").lower()
+        if name_lower in GENERIC_COMPANY_REFS or name_zh in GENERIC_COMPANY_REFS:
+            return json.dumps({
+                "success": False,
+                "error": f"'{name_en or name_zh}' is a generic reference, not a distinct company"
+            }, ensure_ascii=False)
+        
+        # 🌟 v4.16: 使用 Singleton DBClient
         from nanobot.ingestion.repository.db_client import DBClient
-        db_client = DBClient()
-        await db_client.connect()
+        db_client = DBClient.get_instance()
         
         if not document_id:
             # 嘗試從最近處理的 document 獲取 document_id
@@ -2703,6 +2715,3 @@ class InsertMentionedCompanyTool(Tool):
         except Exception as e:
             logger.error(f"InsertMentionedCompanyTool error: {e}")
             return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
-        finally:
-            # 🌟 v4.5: 確保關閉數據庫連接
-            await db_client.close()

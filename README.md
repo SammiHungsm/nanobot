@@ -20,7 +20,7 @@
 
 | 模組 | 版本 | 說明 |
 |------|------|------|
-| **Pipeline** | v4.12 | Stage 4 支援 DB 讀取 artifacts + 分批處理；Vision content 加入元數據標籤 |
+| **Pipeline** | v4.13 | Checkpoint 恢復 + Tool Validation Layer + Tool Call Trace Log |
 | **Schema** | v2.3 | 雙軌制行業、JSONB 動態屬性、完美溯源 |
 | **Vanna Service** | v2.3.0 | Text-to-SQL 微服務 |
 

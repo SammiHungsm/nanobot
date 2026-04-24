@@ -129,63 +129,77 @@ class AgenticExecutor:
         """
         执行单个 Tool
         
+        🌟 v4.13 新特性：
+        - 執行前驗證參數
+        - 執行後保存 Tool Call Trace 到 DB
+        - 執行後驗證結果
+        
         Args:
             tool_call: Tool 调用请求
             
         Returns:
             str: Tool 执行结果
         """
+        import time
+        start_time = time.time()
+        
         tool_name = tool_call.name
         tool_args = tool_call.arguments
         
         logger.info(f"   🔧 执行 Tool: {tool_name}({tool_args})")
         
         if tool_name not in self.tools_registry:
-            return json.dumps({"error": f"Tool '{tool_name}' not found"})
+            error_msg = f"Tool '{tool_name}' not found"
+            self._save_tool_trace(tool_name, tool_args, None, False, error_msg)
+            return json.dumps({"error": error_msg})
         
         tool_obj = self.tools_registry[tool_name]
         
         # =================================================================
-        # 🌟 系統級優化：Auto Type Casting (根據 Tool 的 Schema 自動轉型)
+        # 🌟 Step 1: Pre-execution Validation (參數驗證)
         # =================================================================
-        # LLM 經常會傳遞錯誤的資料型態（例如 "1" 而不是 1），
-        # 這裡根據 Tool 的 JSON Schema 自動進行類型轉換
+        validation_error = self._validate_tool_parameters(tool_name, tool_obj, tool_args)
+        if validation_error:
+            logger.warning(f"   ⚠️ Tool '{tool_name}' 參數驗證失敗: {validation_error}")
+            self._save_tool_trace(tool_name, tool_args, None, False, validation_error)
+            return json.dumps({"error": f"Parameter validation failed: {validation_error}"})
+        
+        # =================================================================
+        # 🌟 Step 2: Auto Type Casting (根據 Tool 的 Schema 自動轉型)
         # =================================================================
         if hasattr(tool_obj, 'parameters'):
             properties = tool_obj.parameters.get("properties", {})
             
             for key, val in tool_args.items():
                 if key in properties and val is not None:
-                    # 獲取 Schema 中定義的預期類型
                     expected_type = properties[key].get("type")
                     
                     try:
                         if expected_type == "integer":
-                            # 如果預期是整數，但 LLM 傳了字串 "1" 或浮點數 1.0
                             if isinstance(val, str):
                                 tool_args[key] = int(float(val))
                             elif isinstance(val, float):
                                 tool_args[key] = int(val)
                         elif expected_type == "number":
-                            # 如果預期是浮點數，但 LLM 傳了字串 "123.45"
                             if isinstance(val, str):
                                 tool_args[key] = float(val)
                         elif expected_type == "boolean":
-                            # 處理 "true", "False", "1" 等各種布林字串
                             if isinstance(val, str):
                                 tool_args[key] = val.lower() in ("true", "1", "yes", "t")
                             elif isinstance(val, (int, float)):
                                 tool_args[key] = bool(val)
                         elif expected_type == "string":
-                            # 強制轉字串
                             tool_args[key] = str(val)
                     except (ValueError, TypeError) as e:
-                        # 如果 LLM 傳了完全無法轉換的東西 (例如 "abc" 轉 int)，
-                        # 這裡放行保留原值，讓 Tool 執行時自己報錯
                         logger.warning(f"⚠️ 自動轉型失敗: {key}={val} (預期: {expected_type}), error: {e}")
-                        pass
         
-        # 🌟 v4.16: 使用重試機制執行 Tool
+        # =================================================================
+        # 🌟 Step 3: 執行 Tool（帶重試機制）
+        # =================================================================
+        result = None
+        success = False
+        error_message = None
+        
         async with AsyncRetry(
             max_attempts=self.max_tool_attempts,
             backoff_factor=self.tool_backoff_factor,
@@ -196,25 +210,22 @@ class AgenticExecutor:
             )
         ) as retry:
             try:
-                # 🌟 v3.20: 获取 execute 方法
                 if hasattr(tool_obj, 'execute'):
                     execute_func = tool_obj.execute
                 else:
                     execute_func = tool_obj
                 
-                # 🌟 v4.4: 检查 execute 方法是否接受 context 参数
                 import inspect
                 sig = inspect.signature(execute_func)
                 accepts_context = 'context' in sig.parameters
                 
-                # 🌟 执行 Tool（支持 async 和 sync）
-                # 如果 Tool 接受 context 参数，才传入
                 if accepts_context:
                     tool_args_with_context = {**tool_args, 'context': self.context}
                 else:
                     tool_args_with_context = tool_args
                 
                 result = await retry.execute(execute_func, **tool_args_with_context)
+                success = True
                 
                 # 🌟 确保结果是字符串
                 if isinstance(result, dict):
@@ -223,32 +234,167 @@ class AgenticExecutor:
                     result_str = str(result)
                 
                 logger.debug(f"   ✅ Tool 结果: {result_str[:100]}...")
-                return result_str
                 
             except Exception as e:
+                error_message = str(e)
                 logger.warning(f"   ⚠️ Tool '{tool_name}' 執行失敗: {e}")
-                return json.dumps({"error": str(e)})
+                result_str = json.dumps({"error": error_message})
+                result = {"error": error_message}
+        
+        # =================================================================
+        # 🌟 Step 4: 保存 Tool Call Trace 到 DB
+        # =================================================================
+        duration_ms = int((time.time() - start_time) * 1000)
+        self._save_tool_trace(tool_name, tool_args, result, success, error_message, duration_ms)
+        
+        # =================================================================
+        # 🌟 Step 5: Post-execution Validation (結果驗證)
+        # =================================================================
+        if success:
+            post_validation = self._validate_tool_result(tool_name, result)
+            if post_validation:
+                logger.warning(f"   ⚠️ Tool '{tool_name}' 結果驗證警告: {post_validation}")
+        
+        return result_str
+    
+    def _validate_tool_parameters(self, tool_name: str, tool_obj: Any, tool_args: Dict) -> Optional[str]:
+        """
+        🌟 v4.13: 執行前參數驗證
+        
+        檢查必填參數是否存在、類型是否正確。
+        
+        Returns:
+            Optional[str]: 錯誤訊息，None 表示通過驗證
+        """
+        if not hasattr(tool_obj, 'parameters'):
+            return None
+        
+        schema = tool_obj.parameters
+        required = schema.get('required', [])
+        properties = schema.get('properties', {})
+        
+        # 檢查必填參數
+        for req_param in required:
+            if req_param not in tool_args or tool_args[req_param] is None:
+                return f"Missing required parameter: {req_param}"
+        
+        # 檢查類型（寬鬆檢查）
+        for key, val in tool_args.items():
+            if key in properties and val is not None:
+                expected_type = properties[key].get('type')
+                # 只做簡單檢查，Auto Type Casting 會處理大部分情況
+                if expected_type == 'integer' and not isinstance(val, (int, float, str)):
+                    return f"Parameter '{key}' should be numeric, got {type(val).__name__}"
+        
+        return None
+    
+    def _validate_tool_result(self, tool_name: str, result: Any) -> Optional[str]:
+        """
+        🌟 v4.13: 執行後結果驗證
+        
+        檢查結果是否合理（例如 insert 操作是否返回成功訊息）。
+        
+        Returns:
+            Optional[str]: 警告訊息，None 表示通過驗證
+        """
+        if result is None:
+            return "Tool returned None"
+        
+        if isinstance(result, dict):
+            if 'error' in result:
+                return f"Tool returned error: {result['error']}"
+        
+        # 針對 insert 類 Tool，檢查是否返回成功訊息
+        if tool_name.startswith('insert_') and isinstance(result, str):
+            if 'success' not in result.lower() and 'error' in result.lower():
+                return "Insert tool returned error"
+        
+        return None
+    
+    def _save_tool_trace(
+        self,
+        tool_name: str,
+        tool_args: Dict,
+        tool_result: Any,
+        success: bool,
+        error_message: str = None,
+        duration_ms: int = 0
+    ) -> None:
+        """
+        🌟 v4.13: 保存 Tool Call Trace 到 DB
+        """
+        # 從 context 獲取 db_client 和 document_id
+        db_client = self.context.get('db_client')
+        document_id = self.context.get('document_id')
+        
+        if not db_client or not document_id:
+            logger.debug(f"   📝 Tool Trace (skip DB): {tool_name} -> {success}")
+            return
+        
+        try:
+            # 使用 sync wrapper 或直接調用 async
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # 在 running loop 中，使用 create_task
+                asyncio.create_task(
+                    db_client.save_tool_call_trace(
+                        document_id=document_id,
+                        trace_id=self.trace_id,
+                        tool_name=tool_name,
+                        tool_args=tool_args,
+                        tool_result=tool_result,
+                        success=success,
+                        error_message=error_message,
+                        duration_ms=duration_ms
+                    )
+                )
+            else:
+                loop.run_until_complete(
+                    db_client.save_tool_call_trace(
+                        document_id=document_id,
+                        trace_id=self.trace_id,
+                        tool_name=tool_name,
+                        tool_args=tool_args,
+                        tool_result=tool_result,
+                        success=success,
+                        error_message=error_message,
+                        duration_ms=duration_ms
+                    )
+                )
+        except Exception as e:
+            logger.debug(f"   📝 Tool Trace (save failed): {e}"))
     
     async def run(
         self,
         system_prompt: str,
         user_message: str,
         context: Dict[str, Any] = None,
-        on_tool_call: Callable[[str, Dict], None] = None
+        on_tool_call: Callable[[str, Dict], None] = None,
+        trace_id: str = None  # 🌟 v4.13: 追蹤 ID（用於 Debug）
     ) -> Dict[str, Any]:
         """
         执行 Agentic Workflow
+        
+        🌟 v4.13 新特性：
+        - trace_id: 用於追蹤整個 workflow 的 Tool 調用
+        - 自動保存 Tool Call Trace 到 DB
         
         Args:
             system_prompt: System Prompt
             user_message: 用户消息
             context: 上下文信息
             on_tool_call: Tool 调用回调
+            trace_id: 🆕 追蹤 ID
             
         Returns:
-            Dict: 执行结果 {"content": str, "tool_calls": List, "iterations": int}
+            Dict: 执行结果 {"content": str, "tool_calls": List, "iterations": int, "trace_id": str}
         """
-        logger.info(f"🤖 Agentic Workflow 开始 (tools={len(self.tools_registry)})")
+        # 🌟 v4.13: 生成或使用 trace_id
+        import uuid
+        self.trace_id = trace_id or f"trace_{uuid.uuid4().hex[:16]}"
+        
+        logger.info(f"🤖 Agentic Workflow 开始 (tools={len(self.tools_registry)}, trace_id={self.trace_id})")
         
         # 🌟 v4.3: Store context for tool execution
         self.context = context or {}
@@ -298,14 +444,15 @@ class AgenticExecutor:
             
             # 🌟 如果没有 Tool Calls，返回结果
             if not response.has_tool_calls:
-                logger.info(f"✅ Agentic Workflow 完成 (iterations={iterations})")
+                logger.info(f"✅ Agentic Workflow 完成 (iterations={iterations}, trace_id={self.trace_id})")
                 logger.debug(f"   📝 LLM Response (no tool_calls): {response.content[:500] if response.content else 'None'}...")
                 logger.debug(f"   🏁 Finish Reason: {response.finish_reason}")
                 return {
                     "content": response.content,
                     "tool_calls": all_tool_calls,
                     "iterations": iterations,
-                    "finish_reason": response.finish_reason
+                    "finish_reason": response.finish_reason,
+                    "trace_id": self.trace_id  # 🌟 v4.13
                 }
             
             # 🌟 执行 Tool Calls
@@ -342,12 +489,13 @@ class AgenticExecutor:
             # 🌟 添加 Tool Results
             messages.extend(tool_results)
         
-        logger.warning(f"⚠️ Agentic Workflow 达到最大迭代次数 ({self.max_iterations})")
+        logger.warning(f"⚠️ Agentic Workflow 达到最大迭代次数 ({self.max_iterations}, trace_id={self.trace_id})")
         return {
             "content": response.content if response else "",
             "tool_calls": all_tool_calls,
             "iterations": iterations,
-            "finish_reason": "max_iterations"
+            "finish_reason": "max_iterations",
+            "trace_id": self.trace_id  # 🌟 v4.13
         }
 
 

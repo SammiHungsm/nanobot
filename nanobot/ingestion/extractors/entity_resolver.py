@@ -1,10 +1,14 @@
 """
-Entity Resolver - 財務名詞標準化 (v3.0)
+Entity Resolver - 財務名詞標準化 (v3.1)
 
 核心功能：
 1. 統一不同公司的會計名詞到標準名稱 (Canonical Name)
 2. 支援中英文對照
 3. 確保 Vanna 查詢的一致性
+
+v3.1 改進：
+- 🌟 v4.16: 新增通用公司/文檔引用過濾（GENERIC_METRIC_REFS）
+- 避免 "the group"、"本公司" 等被錯誤識別為財務指標
 
 v3.0 改進：
 - 移除冗餘的雙重定義（只保留 core_metrics）
@@ -221,6 +225,15 @@ class EntityResolver:
             logger.error(f"❌ 載入名詞對照表失敗: {e}")
             self.mapping = {}
     
+    # 🌟 v4.16: 通用公司/文檔引用（不解釋為財務指標）
+    GENERIC_METRIC_REFS = {
+        "the group", "the company", "本公司", "本集团", "本公司集团",
+        "附屬公司", "附屬機構", "子公司", "聯營公司", "合資企業",
+        "our group", "our company", "we", "us",
+        "this annual report", "this report", "this document",
+        "note", "notes", "see", "page", "pages", "table", "figure"
+    }
+    
     @lru_cache(maxsize=1000)
     def resolve_metric_name(self, raw_name: str) -> Tuple[str, str]:
         """
@@ -233,6 +246,12 @@ class EntityResolver:
             Tuple[str, str]: (canonical_en, canonical_zh)
         """
         if not raw_name:
+            return raw_name, raw_name
+        
+        # 🌟 v4.16: 過濾通用引用（這些不是財務指標）
+        name_lower = raw_name.lower().strip()
+        if name_lower in self.GENERIC_METRIC_REFS:
+            logger.debug(f"ℹ️ 跳過通用引用: '{raw_name}' (不是財務指標)")
             return raw_name, raw_name
         
         # 直接查找
