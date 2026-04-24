@@ -24,16 +24,96 @@ class DateTimeEncoder(json.JSONEncoder):
 
 class DBClient:
     """
-    數據庫客戶端
+    數據庫客戶端（Singleton 模式）
     
     負責所有 PostgreSQL 操作，包括：
     - 公司 CRUD
     - Revenue Breakdown CRUD
     - Document 狀態管理
     
+    🌟 Singleton 模式（v4.16 Fix）：
+    - 整個 Pipeline 共享同一個 DBClient 實例
+    - 避免每個 Tool 都創建新連接池（40次迭代 = 40次連接池創建/銷毀）
+    - 使用 get_instance() 獲取單例，close_instance() 關閉
+    
     Fix #2: 使用連接池代替單連接
     Fix #3: 添加事務管理
     """
+    
+    # 🌟 Singleton 全域實例
+    _instance: Optional["DBClient"] = None
+    _instance_kwargs: Dict[str, Any] = {}
+    _initialized: bool = False
+    
+    @classmethod
+    def get_instance(cls, db_url: str = None, pool_size: int = 10,
+                     max_inactive_connection_lifetime: float = 300.0) -> "DBClient":
+        """
+        🌟 獲取 Singleton 實例
+        
+        用途：整個 Pipeline 共享同一個 DBClient
+        - 第一次調用：創建並緩存實例
+        - 後續調用：返回緩存的實例（忽略參數）
+        
+        Args:
+            db_url: PostgreSQL 連接字符串
+            pool_size: 連接池大小
+            max_inactive_connection_lifetime: 連接最大空閒時間（秒）
+            
+        Returns:
+            DBClient: Singleton 實例
+        """
+        if cls._instance is None:
+            logger.info(f"🌟 DBClient creating singleton instance (pool_size={pool_size})...")
+            cls._instance_kwargs = {
+                'db_url': db_url,
+                'pool_size': pool_size,
+                'max_inactive_connection_lifetime': max_inactive_connection_lifetime
+            }
+            cls._instance = cls(**cls._instance_kwargs)
+            cls._initialized = False
+        return cls._instance
+    
+    @classmethod
+    def is_initialized(cls) -> bool:
+        """🌟 檢查單例是否已初始化並連接"""
+        return cls._instance is not None and cls._initialized
+    
+    @classmethod
+    def set_initialized(cls):
+        """🌟 標記單例已初始化（connect 後調用）"""
+        cls._initialized = True
+    
+    @classmethod
+    def close_instance(cls):
+        """
+        🌟 關閉並清理 Singleton 實例
+        
+        用途：Pipeline 結束後調用，關閉所有連接
+        """
+        if cls._instance is not None:
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(cls._instance._async_close())
+                else:
+                    asyncio.run(cls._instance._async_close())
+            except Exception as e:
+                logger.warning(f"⚠️ DBClient close error: {e}")
+            finally:
+                cls._instance = None
+                cls._initialized = False
+                logger.info("🌟 DBClient singleton closed")
+    
+    async def _async_close(self):
+        """異步關閉連接"""
+        if self._conn:
+            await self._conn.close()
+            logger.debug("📴 DBClient: 單連接已關閉")
+        if self.pool:
+            await self.pool.close()
+            logger.debug("📴 DBClient: 連接池已關閉")
     
     def __init__(self, db_url: str = None, 
                  pool_size: int = 10,
@@ -91,6 +171,7 @@ class DBClient:
             await self._load_schema_cache()
             
             logger.info(f"✅ 數據庫連接池創建成功 (size={self.pool_size})")
+            DBClient.set_initialized()
         except Exception as e:
             logger.error(f"❌ 創建數據庫連接池失敗：{e}")
             raise
@@ -138,13 +219,16 @@ class DBClient:
         return self._conn
     
     async def close(self):
-        """關閉連接池和單連接"""
-        if self._conn:
-            await self._conn.close()
-            logger.info("📴 單連接已關閉")
-        if self.pool:
-            await self.pool.close()
-            logger.info("📴 數據庫連接池已關閉")
+        """
+        關閉連接池和單連接
+        
+        ⚠️ 警告：使用 Singleton 模式時，請調用 DBClient.close_instance() 
+           而不是直接調用此方法！
+        """
+        await self._async_close()
+        # 重置 Singleton 狀態
+        DBClient._instance = None
+        DBClient._initialized = False
     
     @asynccontextmanager
     async def transaction(self):

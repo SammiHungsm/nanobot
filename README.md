@@ -409,6 +409,105 @@ PDF 上傳
 
 ---
 
+## 📊 資料流向與處理邏輯
+
+### Artifact 類型與處理路徑
+
+LlamaParse 解析 PDF 後產生三種主要 Artifact 類型，每種有不同的處理路徑：
+
+| Artifact 類型 | Stage 2 處理 | Agent 參與 | 最終存儲 |
+|--------------|-------------|-----------|----------|
+| **text** | 直接保存 | ❌ 不需要 | `document_pages`, `raw_artifacts` |
+| **image** | Vision 分析 | ✅ 需要 | `raw_artifacts` (vision_analysis) |
+| **table** | 混亂則 Vision | ⚠️ 條件性 | `raw_artifacts`, `document_tables` |
+| **chart** | Vision 分析 | ✅ 需要 | `raw_artifacts` (vision_analysis) |
+
+### 決策樹：何時調用 Vision API
+
+```
+Artifact 進入 Stage 2
+    │
+    ├─ type == "text"?
+    │   └─ ✅ 直接信任 LlamaParse → 寫入 document_pages
+    │
+    ├─ type == "image" 或 "chart"?
+    │   ├─ file_size < 15KB?
+    │   │   └─ ⏭️ 跳過 Vision（疑似 Logo/裝飾）
+    │   └─ ✅ Vision 分析 → 語意描述 + 結構化表格
+    │
+    └─ type == "table"?
+        ├─ HTML 表格?
+        │   └─ ✅ 轉換為 Markdown → 直接使用
+        ├─ 混亂表格?（空儲存格 > 10, 無分隔線）
+        │   ├─ 找到附近截圖?
+        │   │   └─ ✅ Vision 修復 → 重建表格結構
+        │   └─ ❌ 無截圖 → 記錄警告，保留原樣
+        └─ ✅ 格式良好 → 直接使用
+```
+
+### 結構化數據提取流程（Stage 4）
+
+Stage 4 使用 **Tool Calling Agentic Workflow**，LLM 自主決定調用哪個 Tool：
+
+```
+Stage 3.5 Context → 構建結構化上下文
+    │
+    ▼
+Stage 4 Agent → LLM 分析上下文
+    │
+    ├─ 發現財務指標？
+    │   └─ Tool: insert_financial_metrics → financial_metrics 表
+    │
+    ├─ 發現收入分解？
+    │   └─ Tool: insert_revenue_breakdown → revenue_breakdown 表
+    │
+    ├─ 發現關鍵人員？
+    │   └─ Tool: insert_key_personnel → key_personnel 表
+    │
+    ├─ 發現股東結構？
+    │   ├─ 表格中有？→ Tool: insert_shareholding
+    │   └─ 純文字中？→ Tool: extract_shareholders_from_text
+    │
+    ├─ 發現市場數據？
+    │   └─ Tool: insert_market_data → market_data 表
+    │
+    └─ 發現子公司/競爭對手？
+        └─ Tool: insert_mentioned_company → companies 表
+```
+
+### Agent vs 直接 DB 操作對比
+
+| 操作 | Agent (LLM) | 直接 DB |
+|------|-------------|--------|
+| **Page 保存** | ❌ | ✅ 直接 INSERT |
+| **Vision 分析** | ✅ LLM 理解圖片 | ❌ |
+| **表格轉換** | ❌ | ✅ BeautifulSoup |
+| **結構化提取** | ✅ LLM 決定調用哪個 Tool | ❌ |
+| **實體關係** | ✅ LLM 識別關係 | ❌ |
+| **關鍵字路由** | ❌ | ✅ Regex + JSON 配置 |
+| **向量索引** | ❌ | ✅ OpenAI Embedding API |
+
+### Continuous Learning Loop
+
+Agent 具備自我學習能力，發現遺漏數據時自動補救：
+
+```
+Agent 發現遺漏數據
+    │
+    ├─ Tool: search_document_pages
+    │   └─ 搜尋 PDF 其他頁面
+    │
+    ├─ Tool: register_new_keyword
+    │   └─ 註冊新關鍵字到 financial_terms_mapping.json
+    │
+    └─ Tool: backfill_from_fallback
+        └─ 回填遺漏數據
+```
+
+---
+
+---
+
 ## 🛠️ Tools 與 Skills
 
 ### 架構對比

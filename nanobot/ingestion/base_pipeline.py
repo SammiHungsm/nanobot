@@ -50,12 +50,18 @@ class BaseIngestionPipeline(ABC):
         logger.info(f"✅ BaseIngestionPipeline 初始化完成 (tier={tier})")
     
     async def connect(self):
-        """連接資料庫"""
+        """
+        連接資料庫
+        
+        🌟 v4.16: 使用 Singleton 模式，整個 Pipeline 共享同一個 DBClient
+        """
         if self.db_url:
             from nanobot.ingestion.repository.db_client import DBClient
-            self.db = DBClient(self.db_url)
-            await self.db.connect()
-            logger.info("✅ 資料庫連接成功")
+            # 🌟 使用 Singleton（pool_size=20 適合高並發）
+            self.db = DBClient.get_instance(db_url=self.db_url, pool_size=20)
+            if not DBClient.is_initialized():
+                await self.db.connect()
+                logger.info("✅ DBClient singleton connected")
     
     async def close(self):
         """關閉連接"""

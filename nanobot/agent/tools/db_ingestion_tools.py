@@ -6,6 +6,11 @@ Database Ingestion Tools - Smart Insert with Industry Assignment Rules
 2. 規則 B：AI 自動提取各行業
 3. JSONB 動態屬性存儲
 4. 事務性寫入保證數據一致性
+
+🌟 v4.16: 使用 Singleton DBClient
+- 所有 Tool 共享同一個 DBClient 實例
+- 不再每個 Tool 創建新連接池（40次迭代 = 40次連接池創建/銷毀）
+- 使用 _get_db_client(context) 獲取 Singleton
 """
 
 from __future__ import annotations
@@ -16,6 +21,39 @@ from loguru import logger
 
 from nanobot.agent.tools.base import Tool
 from pydantic import BaseModel, Field
+
+
+# ============================================================
+# 🌟 Helper: 獲取 Singleton DBClient (v4.16)
+# ============================================================
+
+def _get_db_client(context: dict = None) -> Any:
+    """
+    🌟 獲取 Singleton DBClient（v4.16）
+    
+    優先順序：
+    1. context['db_client'] - Executor 傳入的
+    2. DBClient.get_instance() - 全域單例
+    
+    為什麼不直接在 Tool.execute() 創建？
+    - Stage 4 有 40 次迭代 = 40 次 Tool 調用
+    - 如果每個 Tool 都創建新 DBClient = 40 次連接池創建/銷毀
+    - 這會導致 PostgreSQL 連接數瞬間爆錶
+    
+    Args:
+        context: Executor 傳入的上下文（包含 db_client）
+        
+    Returns:
+        DBClient: Singleton 實例
+    """
+    from nanobot.ingestion.repository.db_client import DBClient
+    
+    # 優先使用 context 中的 db_client
+    if context and context.get("db_client"):
+        return context["db_client"]
+    
+    # 否則使用 Singleton
+    return DBClient.get_instance()
 
 
 # ============================================================
@@ -113,12 +151,13 @@ class GetDBSchemaTool(Tool):
     def read_only(self) -> bool:
         return True
     
-    async def execute(self, include_samples: bool = False) -> str:
-        """執行 Schema 獲取"""
-        from nanobot.ingestion.repository.db_client import DBClient
+    async def execute(self, include_samples: bool = False, context: dict = None) -> str:
+        """
+        執行 Schema 獲取
         
-        db = DBClient()
-        await db.connect()
+        🌟 v4.16: 使用 _get_db_client() 獲取 Singleton
+        """
+        db = _get_db_client(context)
         
         try:
             async with db.connection() as conn:

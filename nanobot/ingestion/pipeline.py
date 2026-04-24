@@ -59,9 +59,14 @@ class DocumentPipeline(BaseIngestionPipeline):
         await super().connect()
     
     async def close(self):
-        """关闭数据库连接"""
-        if self.db:
-            await self.db.close()
+        """
+        关闭数据库连接
+        
+        🌟 v4.16: 使用 Singleton close_instance() 确保连接池被正确关闭
+        """
+        from nanobot.ingestion.repository.db_client import DBClient
+        DBClient.close_instance()
+        self.db = None
     
     # ===========================================
     # 🌟 辅助方法
