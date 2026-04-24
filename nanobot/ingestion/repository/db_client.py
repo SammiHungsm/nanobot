@@ -176,11 +176,20 @@ class DBClient:
             logger.error(f"❌ 創建數據庫連接池失敗：{e}")
             raise
     
-    async def _load_schema_cache(self):
-        """🌟 加载所有表的列名到缓存"""
-        try:
+    async def _load_schema_cache(self, tables: List[str] = None):
+        """
+        🌟 加载所有表的列名到缓存
+        
+        Args:
+            tables: 要加载的表列表（如果为 None，使用默认列表）
+        """
+        if tables is None:
             tables = ['entity_relations', 'companies', 'documents', 'financial_metrics', 
-                      'revenue_breakdown', 'key_personnel', 'document_pages']
+                      'revenue_breakdown', 'key_personnel', 'document_pages',
+                      'processing_history', 'raw_artifacts', 'review_queue',
+                      'shareholding_structure', 'operational_metrics', 'entity_relations']
+        
+        try:
             for table in tables:
                 rows = await self._conn.fetch(
                     "SELECT column_name FROM information_schema.columns WHERE table_name = $1",
@@ -190,6 +199,34 @@ class DBClient:
             logger.debug(f"✅ Schema 缓存加载完成: {len(self._schema_cache)} 个表")
         except Exception as e:
             logger.warning(f"⚠️ Schema 缓存加载失败: {e}")
+    
+    async def reload_schema_cache(self, tables: List[str] = None):
+        """
+        🌟 v4.16: 熱重載 Schema 緩存
+        
+        用途：當數據庫 Schema 變更後（如新增列），無需重啟進程即可更新緩存
+        
+        Args:
+            tables: 要重載的表列表（如果為 None，重載所有表）
+        """
+        logger.info(f"🔄 Schema 缓存熱重載中... (tables={tables or 'all'})")
+        await self._load_schema_cache(tables=tables)
+        logger.info(f"✅ Schema 缓存熱重載完成")
+    
+    def get_table_columns(self, table: str) -> set:
+        """
+        🌟 v4.16: 獲取表的所有列名
+        
+        Args:
+            table: 表名
+            
+        Returns:
+            set: 列名集合
+        """
+        if table not in self._schema_cache:
+            logger.warning(f"⚠️ 表 {table} 不在 Schema 緩存中")
+            return set()
+        return self._schema_cache[table]
     
     def _validate_columns(self, table: str, columns: list) -> tuple:
         """🌟 验证字段名并返回有效字段"""
@@ -1718,6 +1755,120 @@ class DBClient:
         except Exception as e:
             logger.error(f"❌ Artifact 入庫失敗: {e}")
             return False
+    
+    async def get_raw_artifacts_by_document(
+        self,
+        document_id: int,
+        artifact_types: List[str] = None,
+        limit: int = 100,
+        offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """
+        🌟 v4.12: 從 DB 讀取 Raw Artifacts（解決內存壓力問題）
+        
+        用於 Stage 4 從 DB 讀取而非內存，支持分頁。
+        
+        Args:
+            document_id: 文檔 ID
+            artifact_types: 過濾類型（None = 全部）
+            limit: 每頁數量
+            offset: 偏移量
+            
+        Returns:
+            List[Dict]: Artifact 列表
+            
+        Example:
+            artifacts = await db.get_raw_artifacts_by_document(
+                document_id=123,
+                artifact_types=["vision_analysis", "text_chunk", "table"],
+                limit=50
+            )
+        """
+        try:
+            async with self.connection() as conn:
+                if artifact_types:
+                    rows = await conn.fetch(
+                        """
+                        SELECT artifact_id, artifact_type, content, parsed_data, 
+                               file_path, page_num, created_at
+                        FROM raw_artifacts 
+                        WHERE document_id = $1 AND artifact_type = ANY($2)
+                        ORDER BY page_num, artifact_id
+                        LIMIT $3 OFFSET $4
+                        """,
+                        document_id,
+                        artifact_types,
+                        limit,
+                        offset
+                    )
+                else:
+                    rows = await conn.fetch(
+                        """
+                        SELECT artifact_id, artifact_type, content, parsed_data,
+                               file_path, page_num, created_at
+                        FROM raw_artifacts 
+                        WHERE document_id = $1
+                        ORDER BY page_num, artifact_id
+                        LIMIT $2 OFFSET $3
+                        """,
+                        document_id,
+                        limit,
+                        offset
+                    )
+                
+                # 轉換為 Dict 列表
+                artifacts = []
+                for row in rows:
+                    artifact = {
+                        "artifact_id": row["artifact_id"],
+                        "type": row["artifact_type"],
+                        "content": row["content"],
+                        "content_json": row["parsed_data"],
+                        "file_path": row["file_path"],
+                        "page": row["page_num"],
+                        "created_at": str(row["created_at"]) if row["created_at"] else None
+                    }
+                    artifacts.append(artifact)
+                
+                logger.debug(f"   📦 從 DB 讀取 {len(artifacts)} 個 artifacts (document_id={document_id})")
+                return artifacts
+                
+        except Exception as e:
+            logger.error(f"❌ 讀取 artifacts 失敗: {e}")
+            return []
+    
+    async def count_raw_artifacts_by_document(
+        self,
+        document_id: int,
+        artifact_types: List[str] = None
+    ) -> int:
+        """
+        🌟 v4.12: 統計 Raw Artifacts 數量
+        
+        用於分頁處理時計算總頁數。
+        """
+        try:
+            async with self.connection() as conn:
+                if artifact_types:
+                    count = await conn.fetchval(
+                        """
+                        SELECT COUNT(*) FROM raw_artifacts 
+                        WHERE document_id = $1 AND artifact_type = ANY($2)
+                        """,
+                        document_id,
+                        artifact_types
+                    )
+                else:
+                    count = await conn.fetchval(
+                        "SELECT COUNT(*) FROM raw_artifacts WHERE document_id = $1",
+                        document_id
+                    )
+                
+                return count or 0
+                
+        except Exception as e:
+            logger.error(f"❌ 統計 artifacts 失敗: {e}")
+            return 0
     
     # ===========================================
     # Entity Relations (知识图谱)

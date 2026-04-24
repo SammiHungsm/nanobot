@@ -383,6 +383,231 @@ class KeywordManager:
         return {"success": True, "keyword": keyword, "message": f"已移除 '{keyword}'"}
     
     # ===========================================
+    # 🌟 v4.16: 關鍵字質量管理系統
+    # ===========================================
+    
+    # 質量閾值
+    HIT_RATE_THRESHOLDS = {
+        "gold": 0.7,      # 命中率 >= 70% → gold
+        "silver": 0.4,    # 命中率 >= 40% → silver
+        "bronze": 0.0,    # 默認 bronze
+    }
+    
+    # 最小樣本數（達到此數量才進行評估）
+    MIN_SAMPLES_FOR_EVALUATION = 5
+    
+    # 低效能關鍵字閾值
+    LOW_PERFORMANCE_HIT_RATE = 0.2
+    LOW_PERFORMANCE_MIN_USAGE = 5
+    
+    def evaluate_keyword_quality(self, keyword_entry: dict) -> str:
+        """
+        🌟 v4.16: 評估關鍵字質量，返回建議的 confidence 等級
+        
+        規則：
+        - 命中率 >= 70% → gold（高質量，直接上線）
+        - 命中率 >= 40% → silver（質量尚可）
+        - 命中率 < 20% → 建議移除
+        - 使用次數 < 5 → 樣本不足，無法評估
+        
+        Args:
+            keyword_entry: 關鍵字條目
+            
+        Returns:
+            str: 建議的 confidence 等級
+        """
+        usage = keyword_entry.get("usage_count", 0)
+        hits = keyword_entry.get("hit_count", 0)
+        current_confidence = keyword_entry.get("confidence", "bronze")
+        
+        if usage < self.MIN_SAMPLES_FOR_EVALUATION:
+            return current_confidence  # 樣本不足，保持現有等級
+        
+        hit_rate = hits / usage if usage > 0 else 0
+        
+        # 評估
+        if hit_rate >= self.HIT_RATE_THRESHOLDS["gold"]:
+            return "gold"
+        elif hit_rate >= self.HIT_RATE_THRESHOLDS["silver"]:
+            return "silver"
+        elif hit_rate < self.LOW_PERFORMANCE_HIT_RATE:
+            return "remove"  # 建議移除
+        else:
+            return "bronze"
+    
+    def auto_upgrade_confidence(self, category: str = None) -> dict:
+        """
+        🌟 v4.16: 自動升級高質量關鍵字
+        
+        檢查所有關鍵字，自動將高命中率的 bronze → silver → gold
+        
+        Args:
+            category: 類別（None 表示全部）
+            
+        Returns:
+            dict: 升級結果統計
+        """
+        data = self._safe_read()
+        upgrades = []
+        
+        for cat_name, cat_data in data["categories"].items():
+            if category and cat_name != category:
+                continue
+            
+            for kw_entry in cat_data.get("keywords", []):
+                suggested = self.evaluate_keyword_quality(kw_entry)
+                current = kw_entry.get("confidence", "bronze")
+                
+                if suggested in ("gold", "silver", "bronze") and suggested != current:
+                    # 檢查是否可以升級（只能往高一級升）
+                    level_order = ["bronze", "silver", "gold"]
+                    current_idx = level_order.index(current) if current in level_order else 0
+                    suggested_idx = level_order.index(suggested) if suggested in level_order else 0
+                    
+                    if suggested_idx > current_idx:
+                        old_confidence = kw_entry["confidence"]
+                        kw_entry["confidence"] = suggested
+                        kw_entry["last_evaluated"] = datetime.now().isoformat()
+                        
+                        upgrades.append({
+                            "keyword": kw_entry["keyword"],
+                            "category": cat_name,
+                            "old_confidence": old_confidence,
+                            "new_confidence": suggested,
+                            "usage_count": kw_entry.get("usage_count", 0),
+                            "hit_rate": round(kw_entry.get("hit_count", 0) / max(kw_entry.get("usage_count", 1), 1), 2)
+                        })
+                        logger.info(f"🌟 關鍵字升級: {kw_entry['keyword']} ({old_confidence} → {suggested})")
+        
+        if upgrades:
+            self._safe_write(data)
+        
+        return {
+            "status": "success",
+            "upgrades_count": len(upgrades),
+            "upgrades": upgrades
+        }
+    
+    def auto_remove_low_performance(self, dry_run: bool = True) -> dict:
+        """
+        🌟 v4.16: 自動移除低效能關鍵字
+        
+        規則：
+        - 使用次數 >= 5
+        - 命中率 < 20%
+        → 建議移除（或自動移除）
+        
+        Args:
+            dry_run: 如果 True，只返回報告不實際移除
+            
+        Returns:
+            dict: 移除結果報告
+        """
+        data = self._safe_read()
+        to_remove = []
+        
+        for cat_name, cat_data in data["categories"].items():
+            for kw_entry in cat_data.get("keywords", []):
+                suggested = self.evaluate_keyword_quality(kw_entry)
+                
+                if suggested == "remove":
+                    usage = kw_entry.get("usage_count", 0)
+                    hits = kw_entry.get("hit_count", 0)
+                    hit_rate = hits / usage if usage > 0 else 0
+                    
+                    to_remove.append({
+                        "keyword": kw_entry["keyword"],
+                        "category": cat_name,
+                        "usage_count": usage,
+                        "hit_count": hits,
+                        "hit_rate": round(hit_rate, 2),
+                        "reason": f"命中率 {hit_rate:.0%} < 20%"
+                    })
+        
+        if not dry_run and to_remove:
+            for item in to_remove:
+                self.remove_keyword(item["category"], item["keyword"])
+        
+        return {
+            "status": "success",
+            "dry_run": dry_run,
+            "would_remove_count": len(to_remove),
+            "candidates": to_remove
+        }
+    
+    def get_quality_report(self, category: str = None) -> dict:
+        """
+        🌟 v4.16: 獲取關鍵字質量報告
+        
+        Args:
+            category: 類別
+            
+        Returns:
+            dict: 質量報告
+        """
+        data = self._safe_read()
+        report = {
+            "total_keywords": 0,
+            "by_confidence": {"gold": 0, "silver": 0, "bronze": 0},
+            "by_category": {},
+            "low_performance_candidates": [],
+            "needs_review": []  # bronze 但使用次數不足
+        }
+        
+        for cat_name, cat_data in data["categories"].items():
+            if category and cat_name != category:
+                continue
+            
+            report["by_category"][cat_name] = {
+                "total": 0,
+                "gold": 0, "silver": 0, "bronze": 0,
+                "avg_hit_rate": 0.0,
+                "total_usage": 0
+            }
+            
+            total_hit_rate = 0.0
+            hit_rate_count = 0
+            
+            for kw_entry in cat_data.get("keywords", []):
+                confidence = kw_entry.get("confidence", "bronze")
+                usage = kw_entry.get("usage_count", 0)
+                hits = kw_entry.get("hit_count", 0)
+                
+                report["total_keywords"] += 1
+                report["by_confidence"][confidence] = report["by_confidence"].get(confidence, 0) + 1
+                report["by_category"][cat_name]["total"] += 1
+                report["by_category"][cat_name][confidence] = report["by_category"][cat_name].get(confidence, 0) + 1
+                report["by_category"][cat_name]["total_usage"] += usage
+                
+                if usage > 0:
+                    hit_rate = hits / usage
+                    total_hit_rate += hit_rate
+                    hit_rate_count += 1
+                    
+                    if hit_rate < self.LOW_PERFORMANCE_HIT_RATE and usage >= self.LOW_PERFORMANCE_MIN_USAGE:
+                        report["low_performance_candidates"].append({
+                            "keyword": kw_entry["keyword"],
+                            "category": cat_name,
+                            "usage_count": usage,
+                            "hit_rate": round(hit_rate, 2)
+                        })
+                
+                # 需要審查的（bronze 且樣本不足）
+                if confidence == "bronze" and usage < self.MIN_SAMPLES_FOR_EVALUATION:
+                    report["needs_review"].append({
+                        "keyword": kw_entry["keyword"],
+                        "category": cat_name,
+                        "usage_count": usage
+                    })
+            
+            if hit_rate_count > 0:
+                report["by_category"][cat_name]["avg_hit_rate"] = round(
+                    total_hit_rate / hit_rate_count, 2
+                )
+        
+        return report
+    
+    # ===========================================
     # 🌟 Phase 3: 上下文感知 + 反向學習
     # ===========================================
     

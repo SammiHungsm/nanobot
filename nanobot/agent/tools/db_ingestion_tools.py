@@ -261,8 +261,6 @@ class GetDBSchemaTool(Tool):
         except Exception as e:
             logger.error(f"❌ 獲取 Schema 失敗: {e}")
             return json.dumps({"success": False, "error": str(e)})
-        finally:
-            await db.close()
 
 
 class SmartInsertDocumentTool(Tool):
@@ -382,8 +380,7 @@ class SmartInsertDocumentTool(Tool):
         from nanobot.ingestion.repository.db_client import DBClient
         import uuid
         
-        db = DBClient()
-        await db.connect()
+        db = _get_db_client(context)
         
         try:
             async with db.connection() as conn:
@@ -476,8 +473,6 @@ class SmartInsertDocumentTool(Tool):
         except Exception as e:
             logger.error(f"❌ Smart insert failed: {e}")
             return json.dumps({"success": False, "error": str(e)})
-        finally:
-            await db.close()
 
 
 class UpdateDocumentStatusTool(Tool):
@@ -532,8 +527,7 @@ class UpdateDocumentStatusTool(Tool):
         """更新文檔狀態 (Schema v2.3: processing_status)"""
         from nanobot.ingestion.repository.db_client import DBClient
         
-        db = DBClient()
-        await db.connect()
+        db = _get_db_client(context)
         
         try:
             async with db.connection() as conn:
@@ -556,8 +550,6 @@ class UpdateDocumentStatusTool(Tool):
         except Exception as e:
             logger.error(f"❌ Status update failed: {e}")
             return json.dumps({"success": False, "error": str(e)})
-        finally:
-            await db.close()
 
 
 class UpdateDynamicAttributesTool(Tool):
@@ -618,8 +610,7 @@ class UpdateDynamicAttributesTool(Tool):
         """
         from nanobot.ingestion.repository.db_client import DBClient
         
-        db = DBClient()
-        await db.connect()
+        db = _get_db_client(context)
         
         try:
             async with db.connection() as conn:
@@ -661,8 +652,6 @@ class UpdateDynamicAttributesTool(Tool):
         except Exception as e:
             logger.error(f"❌ Update dynamic attributes failed: {e}")
             return json.dumps({"success": False, "error": str(e)})
-        finally:
-            await db.close()
 
 
 class CreateReviewRecordTool(Tool):
@@ -715,8 +704,7 @@ class CreateReviewRecordTool(Tool):
         """創建審核記錄"""
         from nanobot.ingestion.repository.db_client import DBClient
         
-        db = DBClient()
-        await db.connect()
+        db = _get_db_client(context)
         
         try:
             async with db.connection() as conn:
@@ -746,8 +734,6 @@ class CreateReviewRecordTool(Tool):
         except Exception as e:
             logger.error(f"❌ Create review record failed: {e}")
             return json.dumps({"success": False, "error": str(e)})
-        finally:
-            await db.close()
 
 
 class RegisterNewKeywordTool(Tool):
@@ -976,8 +962,7 @@ class InsertKeyPersonnelTool(Tool):
         if context and context.get("document_id"):
             document_id = context["document_id"]
         
-        db = DBClient()
-        await db.connect()
+        db = _get_db_client(context)
         
         try:
             # 🌟 Method A: 名称转 ID
@@ -1060,8 +1045,6 @@ class InsertKeyPersonnelTool(Tool):
             
         except Exception as e:
             return json.dumps({"success": False, "error": str(e)}, indent=2)
-        finally:
-            await db.close()
 
 
 class InsertFinancialMetricsTool(Tool):
@@ -1149,8 +1132,7 @@ class InsertFinancialMetricsTool(Tool):
         if context and context.get("document_id"):
             document_id = context["document_id"]
         
-        db = DBClient()
-        await db.connect()
+        db = _get_db_client(context)
         
         try:
             # 🌟 Method A: 名称转 ID
@@ -1214,8 +1196,6 @@ class InsertFinancialMetricsTool(Tool):
             
         except Exception as e:
             return json.dumps({"success": False, "error": str(e)}, indent=2)
-        finally:
-            await db.close()
 
 
 class InsertShareholdingTool(Tool):
@@ -1298,8 +1278,7 @@ class InsertShareholdingTool(Tool):
         if context and context.get("document_id"):
             document_id = context["document_id"]
         
-        db = DBClient()
-        await db.connect()
+        db = _get_db_client(context)
         
         try:
             # 🌟 Method A: 名称转 ID
@@ -1354,8 +1333,6 @@ class InsertShareholdingTool(Tool):
             
         except Exception as e:
             return json.dumps({"success": False, "error": str(e)}, indent=2)
-        finally:
-            await db.close()
 
 
 class InsertRevenueBreakdownTool(Tool):
@@ -1450,8 +1427,7 @@ class InsertRevenueBreakdownTool(Tool):
             except (ValueError, TypeError):
                 document_id = None
         
-        db = DBClient()
-        await db.connect()
+        db = _get_db_client(context)
         
         try:
             # 🌟 Method A: 名称转 ID
@@ -1521,8 +1497,6 @@ class InsertRevenueBreakdownTool(Tool):
         except Exception as e:
             logger.error(f"❌ 写入收入分解失败: {e}")
             return json.dumps({"success": False, "error": str(e)}, indent=2)
-        finally:
-            await db.close()
 
 
 from typing import Any, Optional
@@ -1661,8 +1635,7 @@ class InsertEntityRelationTool(Tool):
                 logger.warning(f"⚠️ 無法將 event_year '{event_year}' 轉換為整數，將設為 NULL")
                 actual_event_year = None
 
-        db = DBClient()
-        await db.connect()
+        db = _get_db_client(context)
         
         try:
             async with db.connection() as conn:
@@ -1696,8 +1669,6 @@ class InsertEntityRelationTool(Tool):
         except Exception as e:
             logger.error(f"❌ 写入实体关系失败: {e}")
             return json.dumps({"success": False, "error": str(e)}, indent=2)
-        finally:
-            await db.close()
 
 class InsertMarketDataTool(Tool):
     """
@@ -1778,8 +1749,7 @@ class InsertMarketDataTool(Tool):
         if context and context.get("document_id"):
             document_id = context["document_id"]
         
-        db = DBClient()
-        await db.connect()
+        db = _get_db_client(context)
         
         try:
             # 🌟 Method A: 名称转 ID
@@ -1845,8 +1815,6 @@ class InsertMarketDataTool(Tool):
         except Exception as e:
             logger.error(f"❌ 寫入市場數據失敗: {e}")
             return json.dumps({"success": False, "error": str(e)}, indent=2)
-        finally:
-            await db.close()
 
 
 class ExtractShareholdersFromTextTool(Tool):
@@ -1899,6 +1867,7 @@ class ExtractShareholdersFromTextTool(Tool):
         company_id: int,
         year: int,
         document_id: int = None,
+        context: dict = None,
         **kwargs
     ) -> str:
         """從文本中提取股東信息"""
@@ -1951,12 +1920,9 @@ class ExtractShareholdersFromTextTool(Tool):
                 shareholders = result.get("shareholders", [])
                 
                 if shareholders:
-                    # 自動調用 insert_shareholding
-                    from nanobot.ingestion.repository.db_client import DBClient
-                    
-                    db = DBClient()
-                    await db.connect()
-                    
+                    # 🌟 v4.16: 使用 _get_db_client() 獲取 Singleton
+                    db = _get_db_client(context)
+                                
                     inserted = 0
                     async with db.connection() as conn:
                         for sh in shareholders:
@@ -1982,8 +1948,6 @@ class ExtractShareholdersFromTextTool(Tool):
                                 inserted += 1
                             except Exception as e:
                                 logger.warning(f"插入股東失敗: {e}")
-                    
-                    await db.close()
                     
                     return json.dumps({
                         "success": True,
@@ -2183,8 +2147,7 @@ class SearchDocumentPagesTool(Tool):
     async def execute(self, document_id: int, keywords: List[str], limit: int = 10, **kwargs) -> str:
         """搜索包底库"""
         from nanobot.ingestion.repository.db_client import DBClient
-        db = DBClient()
-        await db.connect()
+        db = _get_db_client(context)
         try:
             async with db.connection() as conn:
                 conditions = [f"markdown_content ILIKE '%{kw}%'" for kw in keywords]
@@ -2200,8 +2163,6 @@ class SearchDocumentPagesTool(Tool):
                     "hint": "找到后请注册新关键词并回填数据"}, indent=2, ensure_ascii=False)
         except Exception as e:
             return json.dumps({"success": False, "error": str(e)}, indent=2)
-        finally:
-            await db.close()
 
 
 class SearchChartByDescriptionTool(Tool):
@@ -2272,8 +2233,7 @@ class SearchChartByDescriptionTool(Tool):
         """執行圖表搜索"""
         from nanobot.ingestion.repository.db_client import DBClient
         
-        db = DBClient()
-        await db.connect()
+        db = _get_db_client(context)
         
         try:
             async with db.connection() as conn:
@@ -2352,8 +2312,6 @@ class SearchChartByDescriptionTool(Tool):
         except Exception as e:
             logger.error(f"❌ 圖表搜索失敗: {e}")
             return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
-        finally:
-            await db.close()
 
 
 class BackfillFromFallbackTool(Tool):
@@ -2403,8 +2361,7 @@ class BackfillFromFallbackTool(Tool):
         from nanobot.ingestion.repository.db_client import DBClient
         from nanobot.ingestion.utils.keyword_manager import KeywordManager
         
-        db = DBClient()
-        await db.connect()
+        db = _get_db_client(context)
         try:
             count = 0
             async with db.connection() as conn:
@@ -2511,8 +2468,6 @@ class BackfillFromFallbackTool(Tool):
             }, indent=2, ensure_ascii=False)
         except Exception as e:
             return json.dumps({"success": False, "error": str(e)}, indent=2)
-        finally:
-            await db.close()
 
 
 # ============================================================

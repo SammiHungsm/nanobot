@@ -20,7 +20,7 @@
 
 | 模組 | 版本 | 說明 |
 |------|------|------|
-| **Pipeline** | v4.11 | Stage 2 RAG-Anything 上下文增強：同頁擴展、heading/title 掃描、多 caption/next_text 收集 |
+| **Pipeline** | v4.12 | Stage 4 支援 DB 讀取 artifacts + 分批處理；Vision content 加入元數據標籤 |
 | **Schema** | v2.3 | 雙軌制行業、JSONB 動態屬性、完美溯源 |
 | **Vanna Service** | v2.3.0 | Text-to-SQL 微服務 |
 
@@ -344,14 +344,13 @@ PDF 上傳
     │
     ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ Stage 4: 代理提取器 (Agentic Extractor) - Tool Calling      │
+│ Stage 4: 代理提取器 (Agentic Extractor) - Tool Calling v4.12  │
 │ ├─ 🌟 真正的 Agentic Workflow（Tool Calling Loop）          │
 │ ├─ LLM 自己決定調用哪個 Tool                                 │
-│ ├─ Revenue Breakdown (收入分解)                             │
-│ ├─ Key Personnel (關鍵人員)                                 │
-│ ├─ Financial Metrics (財務指標)                             │
-│ ├─ Shareholding (股東結構)                                  │
-│ ├─ Market Data (市場數據)                                   │
+│ ├─ 🆕 v4.12: 支援從 DB 讀取 artifacts（解決記憶體壓力）      │
+│ ├─ 🆕 v4.12: 分批處理（解決 token 上限問題）                 │
+│ ├─ Revenue Breakdown / Key Personnel / Financial Metrics    │
+│ ├─ Shareholding / Market Data / Entity Relations            │
 │ └─ 寫入對應的結構化表                                        │
 └─────────────────────────────────────────────────────────────┘
     │

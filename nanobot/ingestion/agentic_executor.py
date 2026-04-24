@@ -1,5 +1,5 @@
 """
-Agentic Workflow Executor - Tool Calling Loop (v4.3 Context Fix)
+Agentic Workflow Executor - Tool Calling Loop (v4.16)
 
 执行真正的 Agentic Workflow：
 1. 把 Tools Schema 传给 LLM
@@ -10,6 +10,11 @@ Agentic Workflow Executor - Tool Calling Loop (v4.3 Context Fix)
 🌟 v4.3 Critical Fix:
 - Context 現在正確傳入 Tools！
 - Tools 可以訪問 db_client, document_id, company_id 等
+
+🌟 v4.16 新特性：
+- LLM 調用重試機制（網絡抖動、速率限制）
+- Tool 執行重試機制（暫時性錯誤）
+- 雙層重試：LLM 失敗重試 3 次，Tool 失敗重試 2 次
 
 Usage:
     from nanobot.ingestion.agentic_executor import AgenticExecutor
@@ -25,6 +30,7 @@ from loguru import logger
 
 from nanobot.core.llm_core import llm_core
 from nanobot.providers.base import LLMResponse, ToolCallRequest
+from nanobot.ingestion.utils.retry import AsyncRetry, LLMRateLimitError, ToolExecutionError
 
 
 class AgenticExecutor:
@@ -38,7 +44,12 @@ class AgenticExecutor:
         self,
         tools_registry: Dict[str, Any],  # 🌟 改为 Any，可以是 Tool 实例或 execute 方法
         max_iterations: int = 10,
-        model: str = None
+        model: str = None,
+        # 🌟 v4.16: 重試配置
+        max_llm_attempts: int = 3,
+        max_tool_attempts: int = 2,
+        llm_backoff_factor: float = 2.0,
+        tool_backoff_factor: float = 0.5
     ):
         """
         初始化
@@ -47,11 +58,20 @@ class AgenticExecutor:
             tools_registry: Tool 名称 → Tool 实例或 execute 函数的映射
             max_iterations: 最大迭代次数（防止无限循环）
             model: LLM 模型
+            max_llm_attempts: 🌟 v4.16 LLM 最大嘗試次數
+            max_tool_attempts: 🌟 v4.16 Tool 最大嘗試次數
+            llm_backoff_factor: 🌟 v4.16 LLM 退避因子（秒）
+            tool_backoff_factor: 🌟 v4.16 Tool 退避因子（秒）
         """
         self.tools_registry = tools_registry
         self.max_iterations = max_iterations
         self.model = model or llm_core.default_model
         self.context = {}  # 🌟 v4.3: Store context for tool execution
+        # 🌟 v4.16: 重試配置
+        self.max_llm_attempts = max_llm_attempts
+        self.max_tool_attempts = max_tool_attempts
+        self.llm_backoff_factor = llm_backoff_factor
+        self.tool_backoff_factor = tool_backoff_factor
     
     def _build_tools_schema(self) -> List[Dict[str, Any]]:
         """
@@ -165,42 +185,49 @@ class AgenticExecutor:
                         logger.warning(f"⚠️ 自動轉型失敗: {key}={val} (預期: {expected_type}), error: {e}")
                         pass
         
-        try:
-            # 🌟 v3.20: 获取 execute 方法
-            if hasattr(tool_obj, 'execute'):
-                execute_func = tool_obj.execute
-            else:
-                execute_func = tool_obj
-            
-            # 🌟 v4.4: 检查 execute 方法是否接受 context 参数
-            import inspect
-            sig = inspect.signature(execute_func)
-            accepts_context = 'context' in sig.parameters
-            
-            # 🌟 执行 Tool（支持 async 和 sync）
-            # 如果 Tool 接受 context 参数，才传入
-            if accepts_context:
-                tool_args_with_context = {**tool_args, 'context': self.context}
-            else:
-                tool_args_with_context = tool_args
-            
-            if asyncio.iscoroutinefunction(execute_func):
-                result = await execute_func(**tool_args_with_context)
-            else:
-                result = execute_func(**tool_args_with_context)
-            
-            # 🌟 确保结果是字符串
-            if isinstance(result, dict):
-                result_str = json.dumps(result, indent=2, ensure_ascii=False)
-            else:
-                result_str = str(result)
-            
-            logger.debug(f"   ✅ Tool 结果: {result_str[:100]}...")
-            return result_str
-            
-        except Exception as e:
-            logger.warning(f"   ⚠️ Tool 执行失败: {e}")
-            return json.dumps({"error": str(e)})
+        # 🌟 v4.16: 使用重試機制執行 Tool
+        async with AsyncRetry(
+            max_attempts=self.max_tool_attempts,
+            backoff_factor=self.tool_backoff_factor,
+            backoff_max=10.0,
+            retryable_exceptions=(ToolExecutionError, ConnectionError, TimeoutError),
+            on_retry=lambda e, attempt: logger.warning(
+                f"   ⚠️ Tool '{tool_name}' 重試 {attempt}/{self.max_tool_attempts}: {e}"
+            )
+        ) as retry:
+            try:
+                # 🌟 v3.20: 获取 execute 方法
+                if hasattr(tool_obj, 'execute'):
+                    execute_func = tool_obj.execute
+                else:
+                    execute_func = tool_obj
+                
+                # 🌟 v4.4: 检查 execute 方法是否接受 context 参数
+                import inspect
+                sig = inspect.signature(execute_func)
+                accepts_context = 'context' in sig.parameters
+                
+                # 🌟 执行 Tool（支持 async 和 sync）
+                # 如果 Tool 接受 context 参数，才传入
+                if accepts_context:
+                    tool_args_with_context = {**tool_args, 'context': self.context}
+                else:
+                    tool_args_with_context = tool_args
+                
+                result = await retry.execute(execute_func, **tool_args_with_context)
+                
+                # 🌟 确保结果是字符串
+                if isinstance(result, dict):
+                    result_str = json.dumps(result, indent=2, ensure_ascii=False)
+                else:
+                    result_str = str(result)
+                
+                logger.debug(f"   ✅ Tool 结果: {result_str[:100]}...")
+                return result_str
+                
+            except Exception as e:
+                logger.warning(f"   ⚠️ Tool '{tool_name}' 執行失敗: {e}")
+                return json.dumps({"error": str(e)})
     
     async def run(
         self,
@@ -243,14 +270,24 @@ class AgenticExecutor:
             iterations += 1
             logger.debug(f"   🔄 Iteration {iterations}/{self.max_iterations}")
             
-            # 🌟 调用 LLM（带 Tools）
-            response: LLMResponse = await llm_core.chat(
-                messages=messages,
-                tools=tools_schema,
-                tool_choice="auto",
-                return_response=True,
-                model=self.model
-            )
+            # 🌟 v4.16: 调用 LLM（带重試機制）
+            async with AsyncRetry(
+                max_attempts=self.max_llm_attempts,
+                backoff_factor=self.llm_backoff_factor,
+                backoff_max=60.0,
+                retryable_exceptions=(LLMRateLimitError, ConnectionError, TimeoutError),
+                on_retry=lambda e, attempt: logger.warning(
+                    f"   ⚠️ LLM 重試 {attempt}/{self.max_llm_attempts}: {e}"
+                )
+            ) as retry:
+                response: LLMResponse = await retry.execute(
+                    llm_core.chat,
+                    messages=messages,
+                    tools=tools_schema,
+                    tool_choice="auto",
+                    return_response=True,
+                    model=self.model
+                )
             
             # 🌟 Debug: 记录 LLM 响应状态
             logger.debug(f"   📨 LLM Response: has_tool_calls={response.has_tool_calls}, finish_reason={response.finish_reason}")

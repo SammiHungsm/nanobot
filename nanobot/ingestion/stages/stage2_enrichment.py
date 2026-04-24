@@ -479,14 +479,23 @@ class Stage2Enrichment:
                             # 🌟 v4.3: 從統一結果中提取
                             md_repr = vision_result.get("markdown_representation", "")
                             semantic_desc = vision_result.get("semantic_description", "")
+                            vision_type = vision_result.get("type", art_type)
+                            vision_title = vision_result.get("title", "")
                             
-                            # 完美組合：語意描述 + 結構化表格
+                            # 🌟 v4.12: 完美組合 + 元數據標籤（解決上下文丟失問題）
                             if md_repr and semantic_desc:
                                 primary_content = f"""[圖表語意描述]
 {semantic_desc}
 
 [結構化數據 - 可直接查詢]
 {md_repr}
+
+[元數據]
+- 原始類型: {vision_type}
+- 頁碼: {page_num}
+- 上下文標題: {precise_context.get('closest_heading', 'N/A')}
+- 圖表標題: {vision_title}
+- 檔案名: {filename}
 """
                             else:
                                 primary_content = md_repr or semantic_desc or ""

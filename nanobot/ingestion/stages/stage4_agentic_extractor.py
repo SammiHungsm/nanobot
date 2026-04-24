@@ -108,10 +108,13 @@ class Stage4AgenticExtractor:
         document_id: int,
         is_index_report: bool,
         index_theme: str,
-        confirmed_doc_industry: str
+        confirmed_doc_industry: str,
+        year: int = 2025
     ) -> str:
         """
-        🌟 v4.10: 构建 System Prompt
+        🌟 v4.16: 使用 Policy Classes 構建 System Prompt
+        
+        將龐大的 System Prompt 拆分為獨立的 Policy 類
         
         Args:
             company_id: 公司 ID
@@ -119,154 +122,87 @@ class Stage4AgenticExtractor:
             is_index_report: 是否为指数报告
             index_theme: 指数主题
             confirmed_doc_industry: 报告定义的行业
+            year: 主要年份
             
         Returns:
             str: 系统提示文本
         """
-        if is_index_report:
-            report_context = f"""
-这是一份【指数/行业报告】(主题: {index_theme or 'Unknown'}, 行业: {confirmed_doc_industry or 'Unknown'})。
-里面包含多间公司的数据，请不要预设单一母公司。
-行业分配规则：规则 A - 所有成分股都应指派行业 '{confirmed_doc_industry or 'Unknown'}'
-"""
-        else:
-            report_context = f"""
-这是一份【单一公司年报】，母公司 ID 为 {company_id or '待提取'}。
-行业分配规则：规则 B - 使用 AI 提取各公司行业
-"""
+        # 🌟 v4.16: 使用 Policy Registry
+        from nanobot.ingestion.stages.stage4_policies import PolicyRegistry
         
-        system_prompt = f"""
-你是一个高级 PostgreSQL 数据库写入 Agent。
-任务目标：分析 PDF 内容，智能提取并写入对应的数据表。
-
-{report_context}
-
-📌 可用的 Tools（你可以自由调用）：
+        policies = PolicyRegistry.for_stage4(
+            is_index_report=is_index_report,
+            index_theme=index_theme,
+            confirmed_doc_industry=confirmed_doc_industry,
+            parent_company_id=company_id,
+            primary_year=year
+        )
+        
+        # 🌟 工具列表（Policy 類不包含這個）
+        tools_section = f"""
+🛠️ 可用的 Tools（你可以自由调用）：
 1. get_db_schema - 查看数据库结构（🌟 第一步必须调用！）
 2. insert_financial_metrics - 写入财务指标（利润、资产）
 3. insert_key_personnel - 写入关键人员（董事、高管）
 4. insert_shareholding - 写入股东结构（持股比例）
-5. insert_revenue_breakdown - 写入收入分解 🌟 新增！（按地区/业务划分）
-6. insert_entity_relation - 写入实体关系 🌟 新增！（知识图谱）
-7. insert_market_data - 写入市场数据 🌟 新增！（PE、市值、股价）
-8. insert_mentioned_company - 写入提及的其他公司 🆕 v4.12！（子公司、对手、合作伙伴）
-9. register_new_keyword - 注册新关键词（发现特殊标题时使用）
-10. search_document_pages - 搜索包底库找遗漏数据（🌟 关键！）
+5. insert_revenue_breakdown - 写入收入分解（按地区/业务划分）
+6. insert_entity_relation - 写入实体关系（知识图谱）
+7. insert_market_data - 写入市场数据（PE、市值、股价）
+8. insert_mentioned_company - 写入提及的其他公司
+9. register_new_keyword - 注册新关键词
+10. search_document_pages - 搜索包底库找遗漏数据
 11. backfill_from_fallback - 回填数据到结构化表
-12. update_dynamic_attributes - 更新 JSONB 动态属性（🌟 新字段用这个！）
+12. update_dynamic_attributes - 更新 JSONB 动态属性
 13. update_document_status - 更新文档状态
-14. create_review_record - 创建审核记录（不确定时使用）
-15. insert_artifact_relation - 写入跨模态图文关联 🌟 新增！（图表与文字解释）
-
-🌟 执行流程（必须严格遵守）：
+14. create_review_record - 创建审核记录
+15. insert_artifact_relation - 写入跨模态图文关联
 
 ⚠️ 重要：文档记录已在上传时创建，document_id={document_id} 已存在，无需创建新文档！
+"""
+        
+        # 🌟 拼接所有 Policy
+        policies_section = policies.build()
+        
+        # 🌟 執行流程（簡化版）
+        execution_flow = """
+🚀 執行流程：
 
-Step 1: 摸清底细 (Schema Compare)
-- 第一步必须调用 get_db_schema 了解数据库结构
-- 查看有哪些表、有哪些 JSONB 字段
+Step 1: 摸清底细
+   - 調用 get_db_schema 了解數據庫結構
 
 Step 2: 分析 PDF 内容
-- 阅读 PDF 内容，识别数据类型
-- 对比 Schema，决定写入哪些表
-- ⚠️ 【重要】如果看到表格包含多年數據（如 2023、2022、2021），必須提取所有年份的數據！
-  → 例如：見到「2023 | 2022」兩列，要調用兩次 insert_financial_metrics，分別 year=2023 和 year=2022
-  → 見到「Revenue 40,851 (2023) vs 44,141 (2022)」，要同時寫入兩個年度
+   - 識別數據類型
+   - 對比 Schema，決定寫入哪些表
 
-Step 3: 动态写入 🌟 关键！（选择正确的 Tool）
+Step 3: 動態寫入
+   - 根據數據類型選擇正確的 Tool
+   - 嚴格遵守 Policy 中的規則
 
-========================================
-🌟 【动态写入指引 (Tool Usage Guide)】
-========================================
-
-⚠️ 多公司数据处理规则 (非常重要！Method A)：
-
-如果数据属于当前 PDF 的「母公司」：
-   → 请传入 company_id 参数
-
-如果你发现数据属于「子公司」、「联营公司」、「合资企业」或「竞争对手」：
-   → 【不要】填写 company_id
-   → 将该公司的名称填入 `company_name` 参数！
-   → 系统会自动为 `company_name` 寻找或建立正确的数据库 ID
-   
-例如：如果母公司是「长和」，但你发现了「腾讯」的利润数据：
-   ❌ 错误：company_id=1 (长和的 ID)，但数据是腾讯的
-   ✅ 正确：company_name="腾讯"，系统会自动查找或创建腾讯的 ID
-
-⚠️ 选择正确的 Tool 是关键！不同数据用不同 Tool：
-1️⃣ 财务指标（利润、资产、负债）
-   → 使用 insert_financial_metrics
-   → 例如：净利润 123亿、总资产 500亿
-
-2️⃣ 收入分解（按地区/业务/产品划分）🆕
-   → 使用 insert_revenue_breakdown
-   → 例如：「香港 25%、欧洲 30%、北美 45%」
-   → ⚠️ 千万不要用 financial_metrics！
-
-3️⃣ 关键人员（董事、高管）
-   → 使用 insert_key_personnel
-   → 例如：CEO 张三、独立董事 李四
-
-4️⃣ 股东持股比例
-   → 使用 insert_shareholding
-   → 例如：第一大股东持股 15.2%
-
-5️⃣ 市场数据（PE ratio、市值、股价）🆕
-   → 使用 insert_market_data
-   → 例如：市盈率 15倍、市值 500亿
-
-6️⃣ 实体关系（人物-公司关系）🆕
-   → 使用 insert_entity_relation
-   → 例如：「张三是腾讯CEO」、「A公司收购B公司」
-
-7️⃣ 提及的其他公司（子公司、竞争对手、合作伙伴）🆕 v4.12
-   → 使用 insert_mentioned_company
-   → 例子：「本集团下辖子公司 ABC Limited」、「我们的竞争对手 XYZ Corp」
-   → relation_type 可选: subsidiary, competitor, partner, investor, customer, mentioned
-   → 🆕 v4.7: 如果知道该公司的股票代码，请填写 stock_code 参数（例如：1038.HK, 0700.HK）
-   → 🆕 v4.7: 如果知道该公司的行业，请填写 industry 参数（例如：Infrastructure, Retail）
-   → 🆕 v4.7: 如果知道该公司的核数师，请填写 auditor 参数
-
-8️⃣ 自定义字段（Schema 没有的）🆕
-   → 使用 update_dynamic_attributes
-   → 例如：环保评分、ESG 指标、特殊披露
-   → 存入 JSONB，无需 ALTER TABLE
-
-9️⃣ 发现图表与文字解释的关联 🆕
-   → 使用 insert_artifact_relation
-   → 必须提供图表的 artifact_id (source) 和文字段落的 artifact_id (target)
-   → 例如：「第 50 页的文字在解释第 5 页的图表」
-
-========================================
-
-- 见到财务数字（利润、资产、负债） → insert_financial_metrics
-- 见到高管/董事名单 → insert_key_personnel
-- 见到股东持股比例 → insert_shareholding
-- 见到按地区/业务划分的收入 → insert_revenue_breakdown 🌟 新增！
-- 见到市场数据（PE ratio、市值、股价） → insert_market_data 🌟 新增！
-- 见到人物-公司关系（张三是腾讯CEO） → insert_entity_relation
-- 发现图表与文字解释的关联 ➔ 使用 insert_artifact_relation 🌟 新增！
-- 见到新名词/新标题（如「按地区划分之收益」）→
-  ① register_new_keyword 注册
-  ② update_dynamic_attributes 写入 JSONB
-
-Step 4: Continuous Learning Loop
-- 如果结构化表找不到数据 → search_document_pages 搜索包底库
-- 找到后 → backfill_from_fallback 回填
+Step 4: 持續學習
+   - 如果找不到數據 → search_document_pages
+   - 找到後 → backfill_from_fallback
 
 Step 5: 完成
-- update_document_status 标记完成
+   - update_document_status 標記完成
 
 ⚠️ 重要：
-- 不要返回大 JSON，而是**逐一调用 Tools**
-- 发现新字段时，先注册关键词，再写入 JSONB
-- 不确定时，创建审核记录
-- 选择正确的 Tool！（revenue_breakdown ≠ financial_metrics）
-- 🌟 使用 company_name 而不是猜测 ID！（Method A）
-
-开始执行！
+- 不要返回大 JSON，而是**逐一調用 Tools**
+- 發現新字段時，先註冊關鍵詞，再寫入 JSONB
+- 不確定時，創建審核記錄
 """
-        return system_prompt
+        
+        return f"""
+你是一個高級 PostgreSQL 數據庫寫入 Agent。
+任務目標：分析 PDF 內容，智能提取並寫入對應的數據表。
+
+{policies_section}
+
+{tools_section}
+
+{execution_flow}
+
+開始執行！
+"""
     
     @classmethod
     def _build_user_message_with_context(
@@ -490,34 +426,33 @@ PDF 内容：
     
     @staticmethod
     async def run_agentic_write(
-        artifacts: List[Dict[str, Any]],
-        company_id: int,
-        year: int,
-        doc_id: str,
-        document_id: int,
+        artifacts: List[Dict[str, Any]] = None,  # 🌟 v4.12: 改為可選
+        company_id: int = None,
+        year: int = None,
+        doc_id: str = None,
+        document_id: int = None,
         is_index_report: bool = False,
         index_theme: str = None,
         confirmed_doc_industry: str = None,
         db_client: Any = None,
         extraction_types: List[str] = None,
         progress_callback: Any = None,
-        stage3_result: Dict[str, Any] = None,  # 🌟 v4.8: Stage 3 路由结果
-        context_result: Dict[str, Any] = None  # 🌟 v4.10: Stage 3.5 結構化上下文
+        stage3_result: Dict[str, Any] = None,
+        context_result: Dict[str, Any] = None,
+        use_db_artifacts: bool = False,  # 🌟 v4.12: 從 DB 讀取 artifacts
+        artifact_types: List[str] = None,  # 🌟 v4.12: 過濾 artifact 類型
+        batch_size: int = 50  # 🌟 v4.12: 分批處理
     ) -> Dict[str, Any]:
         """
-        🌟 Agentic 多表写入（v4.10 - 使用結構化上下文）
+        🌟 Agentic 多表写入（v4.12 - 支援 DB 讀取 + 分批處理）
         
-        根据文档类型使用不同的写入策略：
-        - 指数报告（规则 A）：所有成分股指派同一行业
-        - 年报（规则 B）：AI 提取各公司行业
-        
-        🌟 v4.10 新特性：
-        - 使用 Stage 3.5 的結構化上下文（章節樹、表格上下文）
-        - Agent 不再需要同時做「理解文檔」和「提取數據」
-        - 表格帶有所屬章節、附近文本等上下文信息
+        🌟 v4.12 新特性：
+        - use_db_artifacts=True: 從 DB 讀取 artifacts（解決記憶體壓力）
+        - batch_size: 分批處理（解決 token 上限問題）
+        - artifact_types: 過濾特定類型的 artifacts
         
         Args:
-            artifacts: Artifacts 列表
+            artifacts: Artifacts 列表（如果 use_db_artifacts=True 則可選）
             company_id: 公司 ID
             year: 年份
             doc_id: 文档 ID
@@ -528,13 +463,64 @@ PDF 内容：
             db_client: DB 客户端
             extraction_types: 提取类型
             progress_callback: 进度回调
-            stage3_result: Stage 3 路由结果（包含候选页面）
-            context_result: Stage 3.5 結構化上下文（章節樹、表格上下文）
+            stage3_result: Stage 3 路由结果
+            context_result: Stage 3.5 結構化上下文
+            use_db_artifacts: 🆕 是否從 DB 讀取 artifacts
+            artifact_types: 🆕 過濾 artifact 類型（如 ["vision_analysis", "text_chunk", "table"]）
+            batch_size: 🆕 每批處理的 artifact 數量
             
         Returns:
             Dict: 写入结果
         """
         extraction_types = extraction_types or ["revenue_breakdown", "key_personnel", "financial_metrics"]
+        
+        # 🌟 v4.12: 從 DB 讀取 artifacts（解決記憶體壓力）
+        if use_db_artifacts and db_client and document_id:
+            logger.info(f"🎯 Stage 4: 從 DB 讀取 artifacts (document_id={document_id})...")
+            
+            # 默認讀取這些類型
+            if artifact_types is None:
+                artifact_types = ["vision_analysis", "text_chunk", "table", "image"]
+            
+            # 統計總數
+            total_count = await db_client.count_raw_artifacts_by_document(
+                document_id=document_id,
+                artifact_types=artifact_types
+            )
+            
+            logger.info(f"   📊 DB 中有 {total_count} 個 artifacts，每批 {batch_size} 個")
+            
+            # 🌟 v4.12: 如果 artifacts 太多，改為分批處理
+            if total_count > batch_size:
+                return await Stage4AgenticExtractor._run_batch_extraction(
+                    db_client=db_client,
+                    document_id=document_id,
+                    company_id=company_id,
+                    year=year,
+                    doc_id=doc_id,
+                    is_index_report=is_index_report,
+                    index_theme=index_theme,
+                    confirmed_doc_industry=confirmed_doc_industry,
+                    extraction_types=extraction_types,
+                    artifact_types=artifact_types,
+                    batch_size=batch_size,
+                    total_count=total_count,
+                    progress_callback=progress_callback
+                )
+            
+            # 讀取所有 artifacts
+            artifacts = await db_client.get_raw_artifacts_by_document(
+                document_id=document_id,
+                artifact_types=artifact_types,
+                limit=1000
+            )
+            
+            logger.info(f"   ✅ 從 DB 讀取了 {len(artifacts)} 個 artifacts")
+        
+        # 如果 artifacts 還是空的，報錯
+        if not artifacts:
+            logger.error("❌ 沒有 artifacts 可以處理")
+            return {"status": "failed", "error": "No artifacts to process"}
         
         logger.info(f"🎯 Stage 4: Agentic 写入（v4.0 Tool Calling）...")
         
@@ -604,6 +590,141 @@ PDF 内容：
             "iterations": result["iterations"],
             "is_index_report": is_index_report,
             "industry_rule": "A" if is_index_report else "B"
+        }
+    
+    @staticmethod
+    async def _run_batch_extraction(
+        db_client: Any,
+        document_id: int,
+        company_id: int,
+        year: int,
+        doc_id: str,
+        is_index_report: bool,
+        index_theme: str,
+        confirmed_doc_industry: str,
+        extraction_types: List[str],
+        artifact_types: List[str],
+        batch_size: int,
+        total_count: int,
+        progress_callback: Any = None
+    ) -> Dict[str, Any]:
+        """
+        🌟 v4.12: 分批處理大量 artifacts（解決 token 上限問題）
+        
+        當 artifacts 數量 > batch_size 時，分批處理：
+        1. 每批讀取 batch_size 個 artifacts
+        2. 調用 Agent 提取
+        3. 合併結果
+        
+        Args:
+            db_client: DB 客戶端
+            document_id: 文檔 ID
+            company_id: 公司 ID
+            year: 年份
+            doc_id: 文檔 ID
+            is_index_report: 是否為指數報告
+            index_theme: 指數主題
+            confirmed_doc_industry: 行業
+            extraction_types: 提取類型
+            artifact_types: artifact 類型過濾
+            batch_size: 每批數量
+            total_count: 總數
+            progress_callback: 進度回調
+            
+        Returns:
+            Dict: 合併後的結果
+        """
+        import math
+        
+        total_batches = math.ceil(total_count / batch_size)
+        logger.info(f"   🔄 分批處理: {total_count} artifacts = {total_batches} 批")
+        
+        all_tool_calls = []
+        total_iterations = 0
+        
+        for batch_idx in range(total_batches):
+            offset = batch_idx * batch_size
+            
+            # 讀取這批 artifacts
+            artifacts = await db_client.get_raw_artifacts_by_document(
+                document_id=document_id,
+                artifact_types=artifact_types,
+                limit=batch_size,
+                offset=offset
+            )
+            
+            if not artifacts:
+                continue
+            
+            logger.info(f"   📦 Batch {batch_idx + 1}/{total_batches}: {len(artifacts)} artifacts")
+            
+            if progress_callback:
+                progress = 60.0 + (batch_idx / total_batches) * 20.0
+                progress_callback(progress, f"Stage 4: Batch {batch_idx + 1}/{total_batches}")
+            
+            # 🌟 構建這批的 user_message
+            # 簡化版：只包含內容，不重複系統提示
+            content_text = "\n\n".join([
+                f"--- Page {a.get('page', '?')} ({a.get('type', '?')}) ---\n{a.get('content', '')[:2000]}"
+                for a in artifacts[:20]  # 每批最多 20 個
+            ])
+            
+            user_message = f"""
+請繼續分析以下 PDF 內容（Batch {batch_idx + 1}/{total_batches}）：
+
+{content_text}
+
+公司 ID: {company_id}
+年份: {year}
+文檔 ID: {document_id}
+
+請提取數據並寫入數據庫！
+"""
+            
+            # 構建 tools registry
+            tools_registry = Stage4AgenticExtractor._build_tools_registry(db_client)
+            system_prompt = Stage4AgenticExtractor._build_system_prompt(
+                company_id=company_id,
+                document_id=document_id,
+                is_index_report=is_index_report,
+                index_theme=index_theme,
+                confirmed_doc_industry=confirmed_doc_industry
+            )
+            
+            # 執行 Agent
+            executor = AgenticExecutor(
+                tools_registry=tools_registry,
+                max_iterations=20,  # 分批時減少迭代
+                model=llm_core.default_model
+            )
+            
+            result = await executor.run(
+                system_prompt=system_prompt,
+                user_message=user_message,
+                context={
+                    "company_id": company_id,
+                    "year": year,
+                    "document_id": document_id,
+                    "is_index_report": is_index_report,
+                    "confirmed_doc_industry": confirmed_doc_industry,
+                    "db_client": db_client,
+                },
+                on_tool_call=lambda name, args: logger.info(f"      📞 Tool Call: {name}")
+            )
+            
+            all_tool_calls.extend(result.get("tool_calls", []))
+            total_iterations += result.get("iterations", 0)
+        
+        logger.info(f"✅ 分批處理完成: {total_batches} 批, {len(all_tool_calls)} tool_calls")
+        
+        return {
+            "status": "success",
+            "content": f"Processed {total_count} artifacts in {total_batches} batches",
+            "tool_calls": all_tool_calls,
+            "iterations": total_iterations,
+            "is_index_report": is_index_report,
+            "industry_rule": "A" if is_index_report else "B",
+            "batches_processed": total_batches
         }
     
     @staticmethod
