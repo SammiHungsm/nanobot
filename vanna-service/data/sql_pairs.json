@@ -38,7 +38,7 @@
     {
       "id": "shareholding_trust_001",
       "question": "What is the percentage of shareholding of Li Ka-Shing Unity Trustee Company Limited as trustee of The Li Ka-Shing Unity Trust? (p 94)",
-      "sql": "SELECT shareholder_name, trust_name, trustee_name, percentage FROM shareholding_structure WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND year = 2023 AND trustee_name ILIKE '%Li Ka-Shing Unity Trustee%' AND trust_name ILIKE '%Li Ka-Shing Unity Trust%';",
+      "sql": "SELECT shareholder_name, trust_name, trustee_name, percentage FROM shareholding_structure WHERE company_id = (SELECT id FROM companies WHERE stock_code = '00001') AND trustee_name ILIKE '%Li Ka-Shing Unity Trustee%' AND trust_name ILIKE '%Li Ka-Shing Unity Trust%';",
       "tags": [
         "shareholding_structure",
         "trust",
