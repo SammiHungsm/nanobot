@@ -344,13 +344,22 @@ Step 5: 完成
    - 如果在表格中找不到 Key Personnel 或 Shareholder：你【必須】調用 `ExtractShareholdersFromTextTool` 或閱讀純文字內容進行提取！絕對不能直接放棄！
 
 2. **必須完成的強制清單 (Checklist)**：
-   在你宣佈任務完成之前，請檢查是否已經嘗試提取以下 6 類數據。如果某項沒有找到，請明確創建 Review Record 說明原因：
+   在你宣佈任務完成之前，請檢查是否已經嘗試提取以下 7 類數據。如果某項沒有找到，請明確創建 Review Record 說明原因：
    [ ] 財務指標 (insert_financial_metrics)
    [ ] 收入分解 (insert_revenue_breakdown)
    [ ] 關鍵人員 (insert_key_personnel) - 💡 提示：常出現在「董事及高級管理層」文字段落中
    [ ] 股東結構 (insert_shareholding 或 ExtractShareholdersFromTextTool)
    [ ] 市場數據 (insert_market_data)
    [ ] 提及的其他公司 (insert_mentioned_company) - 💡 **主動狩獵模式**：子公司和聯營公司通常在文件較後方（可能在第 100+ 頁的「附註」中）。如果你在目前的文本中找不到，【必須】呼叫 `search_document_pages` 工具，搜尋關鍵字如 "subsidiary", "joint venture", "associate", "附屬公司", "聯營公司", "子公司"，然後再提取！
+   [ ] **重大事件 (insert_entity_relation)** - 💡 **必須提取！** 請特別注意以下關鍵字：
+       - 收購/併購 (acquisition/merger)：例如「本公司已完成收購 ABC」
+       - 派息 (dividend)：例如「宣派末期股息每股 5 元」
+       - 分拆/重組 (spin-off/restructuring)：例如「本公司將分拆 XYZ 業務」
+       - 合營/聯營 (joint venture/associate)：例如「與 ABC 合營 XYZ」
+       - 法律訴訟 (litigation)：例如「本公司涉及與 XYZ 的訴訟」
+       - 監管/調查 (regulatory/investigation)：例如「遭監管機構罰款」
+       - 減值/撇銷 (impairment/write-off)：例如「就 XYZ 資產減值」
+       - 回購/集資 (buyback/capital raising)：例如「股份回購計劃」
 
 3. **不要重複搜索**，請善用上面已經提供的上下文內容。
 
