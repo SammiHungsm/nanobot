@@ -2496,7 +2496,8 @@ def register_ingestion_tools(registry) -> None:
     # 🌟 核心 Tools
     registry.register(GetDBSchemaTool())
     registry.register(SmartInsertDocumentTool())
-    registry.register(UpdateDocumentStatusTool())
+    # ❌ UpdateDocumentStatusTool 已移除 - Status 由 pipeline 在所有 stages 完成后统一设置
+    # registry.register(UpdateDocumentStatusTool())
     registry.register(UpdateDynamicAttributesTool())
     registry.register(CreateReviewRecordTool())
     
