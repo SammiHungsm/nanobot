@@ -105,6 +105,7 @@ services:
       - PYTHONPATH=/app
       - NANOBOT_CONFIG=/app/config/config.json  
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
+      - DASHSCOPE_API_BASE=${DASHSCOPE_API_BASE:-https://qianfan.baidubce.com/v2/coding}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       # 🌟 LlamaParse API Key
       - LLAMA_CLOUD_API_KEY=${LLAMA_CLOUD_API_KEY}

@@ -1072,7 +1072,7 @@ class DBClient:
                 params.append(year)
                 param_idx += 1
             
-            sql += f" ORDER BY dp.page_num LIMIT $1 OFFSET 0"
+            sql += f" ORDER BY dp.page_num LIMIT ${param_idx}"
             params.append(limit)
             
             # 🌟 使用连接池（避免并发冲突）

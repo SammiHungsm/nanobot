@@ -172,12 +172,22 @@ class AgenticExecutor:
             else:
                 execute_func = tool_obj
             
+            # 🌟 v4.4: 检查 execute 方法是否接受 context 参数
+            import inspect
+            sig = inspect.signature(execute_func)
+            accepts_context = 'context' in sig.parameters
+            
             # 🌟 执行 Tool（支持 async 和 sync）
-            # 🌟 v4.3: 將 context 傳入 Tool
-            if asyncio.iscoroutinefunction(execute_func):
-                result = await execute_func(**tool_args, context=self.context)
+            # 如果 Tool 接受 context 参数，才传入
+            if accepts_context:
+                tool_args_with_context = {**tool_args, 'context': self.context}
             else:
-                result = execute_func(**tool_args, context=self.context)
+                tool_args_with_context = tool_args
+            
+            if asyncio.iscoroutinefunction(execute_func):
+                result = await execute_func(**tool_args_with_context)
+            else:
+                result = execute_func(**tool_args_with_context)
             
             # 🌟 确保结果是字符串
             if isinstance(result, dict):

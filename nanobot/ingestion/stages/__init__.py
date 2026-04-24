@@ -25,7 +25,8 @@ from .stage1_parser import Stage1Parser
 from .stage2_enrichment import Stage2Enrichment
 from .stage3_router import Stage3Router
 from .stage4_agentic_extractor import Stage4AgenticExtractor
-from .stage4_5_kg_extractor import Stage4_5_KGExtractor  # 🌟 1. 新增這個 import
+from .stage4_5_kg_extractor import Stage4_5_KGExtractor  # 🌟 KG 實體關係抽取
+from .stage4_6_trend_extractor import Stage4_6_TrendExtractor  # 🆕 多年趨勢數據提取
 from .stage5_vanna_training import Stage5VannaTraining
 from .stage6_validator import Stage6Validator
 from .stage7_vector_indexer import Stage7VectorIndexer
@@ -38,7 +39,8 @@ __all__ = [
     "Stage2Enrichment",
     "Stage3Router",
     "Stage4AgenticExtractor",
-    "Stage4_5_KGExtractor",  # 🌟 2. 把它加進對外暴露的清單
+    "Stage4_5_KGExtractor",  # 🌟 KG 實體關係抽取
+    "Stage4_6_TrendExtractor",  # 🆕 多年趨勢數據提取
     "Stage5VannaTraining",
     "Stage6Validator",
     "Stage7VectorIndexer",

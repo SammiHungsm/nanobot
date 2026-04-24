@@ -1543,7 +1543,7 @@ class InsertEntityRelationTool(Tool):
     
     async def execute(
         self,
-        document_id: int,
+        document_id: int = None,
         source_entity_type: str,
         source_entity_name: str,
         relation_type: str,
@@ -1551,18 +1551,20 @@ class InsertEntityRelationTool(Tool):
         target_entity_name: str,
         confidence_score: float = 0.8,
         event_year: Optional[Any] = None,
-        context: dict = None,  # 🌟 v4.5: Context fallback for document_id
         **kwargs  # 🌟 防弹参数：吸收 LLM 幻觉产生的多余参数
     ) -> str:
         """写入实体关系"""
         
-        # 🌟 v4.5: Always prefer context's document_id (overrides LLM's hallucinated value)
-        if context and context.get("document_id"):
-            document_id = context["document_id"]
-            logger.info(f"   🔧 Using context document_id={document_id} instead of LLM's value")
-        elif document_id == 0:
-            logger.warning(f"⚠️ LLM passed document_id=0 and no context fallback available, skipping")
-            return json.dumps({"success": False, "error": "document_id is 0 and no context fallback available"}, ensure_ascii=False)
+        # 🌟 Get document_id from context (AgenticExecutor passes context via kwargs)
+        context = kwargs.get("context", {})
+        ctx_doc_id = context.get("document_id")
+        
+        # If document_id is not provided, use context
+        if not document_id and ctx_doc_id:
+            document_id = ctx_doc_id
+        
+        if not document_id:
+            return json.dumps({"success": False, "error": "Missing document_id"})
         
         # ==================================================
         # 🌟 第 2 層防護：Python 邏輯層過濾 (防止 LLM 繞過 Schema)

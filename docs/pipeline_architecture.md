@@ -13,21 +13,49 @@
 在 v4.0 版本中，Stage 1 (LlamaParse) 最先執行，然後 Stage 0 (Vision) 分析 Page 1 的 artifacts。
 這樣做的好處是：LlamaParse 解析後有完整的 Markdown + 圖片，Vision 提取公司信息更準確。
 
+**Pipeline 版本：v4.8**（最新）
+
 ```
 Stage 1: Parser (LlamaParse) 🌟 最先執行
-Stage 0: Preprocessor (Vision 分析 Page 1)
-Stage 0.5: Registrar (Hash + 注册)
-Stage 2: Enrichment (RAGAnything 上下文分析)
-Stage 3: Router (关键字掃描與頁面路由)
+    ↓
+Stage 0: Preprocessor (Vision 分析 Page 1) - v4.7 移除 PyMuPDF
+    ↓
+Stage 0.5: Registrar (Hash + 文檔/公司註冊)
+    ↓
+Stage 2: Enrichment (RAGAnything 上下文分析) - v4.3 統一 Vision 調用
+    ↓
+Stage 3: Router (關鍵字掃描與頁面路由)
+    ↓
 Stage 3.5: Context Builder (結構化上下文)
-Stage 4: Agentic Extractor (Tool Calling 结构化提取)
+    ↓
+Stage 4: Agentic Extractor (Tool Calling 結構化提取) 🌟 唯一提取入口
+    ↓
 Stage 4.5: KG Extractor (知識圖譜)
-Stage 5: Vanna Training
-Stage 6: Validator (数据验证)
-Stage 7: Vector Indexer (RAG 文本切块 + Embedding)
-Stage 8: Archiver (归档 + 清理)
-Stage 9: Image Text Linker (圖文關聯) 🆕
+    ↓
+Stage 4.6: Trend Extractor (多年趨勢數據提取)
+    ↓
+Stage 5: Vanna Training (Text-to-SQL 訓練)
+    ↓
+Stage 6: Validator (數據校驗)
+    ↓
+Stage 7: Vector Indexer (文本切塊 + Embedding)
+    ↓
+Stage 8: Archiver (歸檔 + 清理)
 ```
+
+---
+
+## 版本歷史
+
+| 版本 | 日期 | 更新內容 |
+|------|------|----------|
+| v4.8 | 2026-04-22 | 修復 Stage 0 圖片匹配問題 |
+| v4.7 | 2026-04-20 | 移除 PyMuPDF 依賴 |
+| v4.6 | 2026-04-18 | 新增 Stage 4.6 趨勢提取 |
+| v4.3 | 2026-04-15 | 統一 Vision 調用，節省 50% API cost |
+| v4.0 | 2026-04-10 | Stage 1 先行架構，Agentic Extractor |
+
+---
 
 ---
 
@@ -64,8 +92,9 @@ Stage 9: Image Text Linker (圖文關聯) 🆕
 - 🌟 **基於 LlamaParse artifacts**：分析 Stage 1 輸出的 Page 1 artifacts
 - 使用 Vision API 從圖片和 Markdown 提取公司資訊
 - 提取：stock_code, year, name_en, name_zh
-- 🌟 **v4.7 更新**：已移除 PyMuPDF 依賴
+- 🌟 **v4.7 更新**：已移除 PyMuPDF 依賴，完全基於 LlamaParse
 - 多圖片 Vision 合併邏輯
+- 🌟 **v4.8 更新**：修復 Page 1 圖片精確匹配問題
 
 **輸入**：
 - Stage 1 輸出的 artifacts 列表
@@ -104,42 +133,41 @@ Stage 9: Image Text Linker (圖文關聯) 🆕
 
 ### Stage 2：RAGAnything (圖片 + 文本上下文分析)
 
-**核心職責**：多模態富文本擴充 (v3.5 RAG-Anything 精準上下文與防禦性修復)
+**核心職責**：多模態富文本擴充 (v4.3 統一 Vision 分析)
 
 **實現位置**：`nanobot/ingestion/stages/stage2_enrichment.py`
 
 **功能說明**：
-- 🌟 **防禦性檢查**：攔截 LlamaParse 失敗的 Markdown 表格，動用 PyMuPDF 截圖重解
-- 🌟 **層級上下文對齊 (Hierarchical Context Alignment)**：使用滑動視窗 (Sliding Window) 捕捉精準的結構化上下文
-- 不再粗暴取整页文字（噪声太多，结构全无），而是寻找：
-  - **closest_heading**: 最接近的标题
-  - **caption**: 图表标签/图说 (如 "Figure 1:", "Table 2:")
-  - **previous_text**: 图表前的引言
-  - **next_text**: 图表后的解释分析
-- 把图片连同这些精准上下文一起喂给 Vision LLM
-- 输出完美 `markdown_representation`（直接进入向量数据库）
+- 🌟 **v4.3 重大優化**：合併兩次 Vision 調用為一次，節省 50% API cost
+- 一次輸出：type, title, markdown_representation, key_entities, semantic_description
+- 從 LlamaParse Cloud 下載圖片
+- RAG-Anything：滑動視窗提取精準上下文 (Title, Caption, 前後文)
+- Vision 分析圖片內容 + 實體關係，輸出完美 Markdown Representation
+- 寫入資料庫 (raw_artifacts, document_pages)
+
+**黃金分工**：
+- ✅ LlamaParse 可靠的：純文字、格式良好的 Markdown 表格
+- ⚠️ 需要 Vision 補強的：圖片 (image)、圖表 (chart)、混亂表格 (messy table)
 
 **核心方法**：
-1. `_is_messy_table()`: 防禦性檢查（判斷表格是否解析失敗）
-2. `_get_precise_context()`: 精准上下文提取（滑动窗口）
-3. `_analyze_image_with_precise_context()`: 高阶 Vision 分析（结合结构化上下文）
+1. `_should_use_vision_enrichment()`: 黃金法則決策樹
+2. `_get_precise_context()`: 精准上下文提取（滑動視窗）
+3. `analyze_image_with_context()`: Vision 分析（結合結構化上下文）
 
 **輸入**：
-- LlamaParse 解析后的图片列表
-- artifacts 列表（用于精准上下文提取）
-- PDF 文件（用于防御性截图修复）
+- LlamaParse 解析後的圖片列表
+- artifacts 列表（用於精准上下文提取）
+- raw_output_dir（圖片下載目錄）
 
 **輸出**：
-- Vision 分析结果（包含 `markdown_representation`）
-- 图片与文本的关联分析
-- `structural_context`（存入 DB，Stage 7 切块时非常有用）
-- 修复后的表格内容（如果原始 Markdown 表格解析失败）
+- Vision 分析結果（包含 `markdown_representation`）
+- 圖片與文本的關聯分析
+- 寫入 raw_artifacts 表
 
 **設計理念**：
-- **防禦性容錯**：不會再被 LlamaParse 失敗的 Table 綁架，自動退回截圖模式
-- **消除幻覺**：Vision LLM 看图时能核對上下文中的數據
+- **消除幻覺**：Vision LLM 看圖時能核對上下文中的數據
+- **Cost 優化**：合併調用，節省 50% API cost
 - **完美繼承 RAGAnything 的精神**：Decoupling Parsing and Reasoning
-- **优化 Database Raw Data**：将 `structural_context` 和完美的 `markdown_representation` 存入 PostgreSQL，Stage 7 切块时质量核弹级提升
 
 ---
 
@@ -240,4 +268,6 @@ Stage 7 (Vector Indexer) → Chunks + Embeddings
 
 ## 更新日志
 
+- **2026-04-24**: 更新至 v4.8，添加 Stage 4.6 趨勢提取說明
+- **2026-04-23**: 更新 Stage 2 v4.3 Vision 統一調用說明
 - **2026-04-18**: 初始文档创建，澄清 Stage 2/3/7 的职责分离

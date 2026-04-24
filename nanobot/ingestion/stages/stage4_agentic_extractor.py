@@ -52,7 +52,7 @@ class Stage4AgenticExtractor:
         """
         from nanobot.agent.tools.db_ingestion_tools import (
             GetDBSchemaTool,
-            SmartInsertDocumentTool,
+            # ❌ SmartInsertDocumentTool 已移除 - 文档在上传时已创建，不应重复创建
             UpdateDocumentStatusTool,
             UpdateDynamicAttributesTool,
             CreateReviewRecordTool,
@@ -72,9 +72,10 @@ class Stage4AgenticExtractor:
         # ❌ 移除 InsertArtifactRelationTool - Agent 无法看到 UUID，改用 entity_resolver.py 的 Regex 处理
         
         # 🌟 构建 Tools Registry
+        # ❌ SmartInsertDocumentTool 已移除 - 文档在上传时已创建
         tool_classes = [
             GetDBSchemaTool,
-            SmartInsertDocumentTool,
+            # SmartInsertDocumentTool,  # 文档已存在，无需创建
             UpdateDocumentStatusTool,
             UpdateDynamicAttributesTool,
             CreateReviewRecordTool,
@@ -168,23 +169,24 @@ class Stage4AgenticExtractor:
 
 📌 可用的 Tools（你可以自由调用）：
 1. get_db_schema - 查看数据库结构（🌟 第一步必须调用！）
-2. smart_insert_document - 智能写入文档（支持规则 A/B）
-3. insert_financial_metrics - 写入财务指标（利润、资产）
-4. insert_key_personnel - 写入关键人员（董事、高管）
-5. insert_shareholding - 写入股东结构（持股比例）
-6. insert_revenue_breakdown - 写入收入分解 🌟 新增！（按地区/业务划分）
-7. insert_entity_relation - 写入实体关系 🌟 新增！（知识图谱）
-8. insert_market_data - 写入市场数据 🌟 新增！（PE、市值、股价）
-9. insert_mentioned_company - 写入提及的其他公司 🆕 v4.12！（子公司、对手、合作伙伴）
-10. register_new_keyword - 注册新关键词（发现特殊标题时使用）
-11. search_document_pages - 搜索包底库找遗漏数据（🌟 关键！）
-12. backfill_from_fallback - 回填数据到结构化表
-13. update_dynamic_attributes - 更新 JSONB 动态属性（🌟 新字段用这个！）
-14. update_document_status - 更新文档状态
-15. create_review_record - 创建审核记录（不确定时使用）
-16. insert_artifact_relation - 写入跨模态图文关联 🌟 新增！（图表与文字解释）
+2. insert_financial_metrics - 写入财务指标（利润、资产）
+3. insert_key_personnel - 写入关键人员（董事、高管）
+4. insert_shareholding - 写入股东结构（持股比例）
+5. insert_revenue_breakdown - 写入收入分解 🌟 新增！（按地区/业务划分）
+6. insert_entity_relation - 写入实体关系 🌟 新增！（知识图谱）
+7. insert_market_data - 写入市场数据 🌟 新增！（PE、市值、股价）
+8. insert_mentioned_company - 写入提及的其他公司 🆕 v4.12！（子公司、对手、合作伙伴）
+9. register_new_keyword - 注册新关键词（发现特殊标题时使用）
+10. search_document_pages - 搜索包底库找遗漏数据（🌟 关键！）
+11. backfill_from_fallback - 回填数据到结构化表
+12. update_dynamic_attributes - 更新 JSONB 动态属性（🌟 新字段用这个！）
+13. update_document_status - 更新文档状态
+14. create_review_record - 创建审核记录（不确定时使用）
+15. insert_artifact_relation - 写入跨模态图文关联 🌟 新增！（图表与文字解释）
 
 🌟 执行流程（必须严格遵守）：
+
+⚠️ 重要：文档记录已在上传时创建，document_id={document_id} 已存在，无需创建新文档！
 
 Step 1: 摸清底细 (Schema Compare)
 - 第一步必须调用 get_db_schema 了解数据库结构
@@ -193,6 +195,9 @@ Step 1: 摸清底细 (Schema Compare)
 Step 2: 分析 PDF 内容
 - 阅读 PDF 内容，识别数据类型
 - 对比 Schema，决定写入哪些表
+- ⚠️ 【重要】如果看到表格包含多年數據（如 2023、2022、2021），必須提取所有年份的數據！
+  → 例如：見到「2023 | 2022」兩列，要調用兩次 insert_financial_metrics，分別 year=2023 和 year=2022
+  → 見到「Revenue 40,851 (2023) vs 44,141 (2022)」，要同時寫入兩個年度
 
 Step 3: 动态写入 🌟 关键！（选择正确的 Tool）
 

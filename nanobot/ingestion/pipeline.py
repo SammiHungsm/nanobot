@@ -31,6 +31,7 @@ from nanobot.ingestion.stages import (
     Stage3Router,
     Stage4AgenticExtractor,
     Stage4_5_KGExtractor,
+    Stage4_6_TrendExtractor,  # 🆕 多年趨勢數據提取
     Stage5VannaTraining,
     Stage6Validator,
     Stage7VectorIndexer,
@@ -364,22 +365,32 @@ class DocumentPipeline(BaseIngestionPipeline):
             if progress_callback:
                 progress_callback(75.0, "Stage 4.5: Fallback Check")
             
-            # 檢查是否漏了 Key Personnel 或 Shareholding
+            # 🌟 終極包底：如果這些表為空，嘗試直接提取
             if self.db and document_id:
                 try:
+                    # all_artifacts 已經在上面定義（line ~163）
+                    # 直接使用 local variable
+                    
+                    # 檢查 revenue_breakdown
                     async with self.db.connection() as conn:
-                        # 檢查 key_personnel
-                        personnel_count = await conn.fetchval(
-                            "SELECT COUNT(*) FROM key_personnel WHERE company_id = $1",
+                        revenue_count = await conn.fetchval(
+                            "SELECT COUNT(*) FROM revenue_breakdown WHERE company_id = $1",
                             company_id
                         )
                         
-                        if personnel_count == 0:
-                            logger.warning("⚠️ Agent 未能提取 Key Personnel，觸發單一任務包底提取")
-                            # 嘗試從純文本提取
-                            text_content = context_result.get("text_content", "") if context_result else ""
-                            if text_content:
-                                logger.info(f"   📝 已準備 Fallback 內容: {len(text_content[:10000])} 字符")
+                        if revenue_count == 0:
+                            logger.warning("⚠️ Agent 未能提取 Revenue Breakdown，觸發 Fallback 直接提取")
+                            # 調用專門的收入分解提取
+                            from nanobot.ingestion.stages.stage4_fallback_extractor import Stage4FallbackExtractor
+                            fallback_result = await Stage4FallbackExtractor.extract_revenue_breakdown(
+                                artifacts=all_artifacts,
+                                company_id=company_id,
+                                document_id=document_id,
+                                year=year,
+                                db_client=self.db
+                            )
+                            if fallback_result.get("extracted_count", 0) > 0:
+                                logger.info(f"   ✅ Fallback 成功提取 {fallback_result['extracted_count']} 條 revenue_breakdown")
                         
                         # 檢查 shareholding
                         shareholding_count = await conn.fetchval(
@@ -388,17 +399,46 @@ class DocumentPipeline(BaseIngestionPipeline):
                         )
                         
                         if shareholding_count == 0:
-                            logger.warning("⚠️ Agent 未能提取 Shareholding，建議手動檢查")
-                            # 創建 Review Record
-                            await conn.execute(
-                                """
-                                INSERT INTO review_queue (document_id, review_type, issue_description, priority)
-                                VALUES ($1, 'data_quality', 'Shareholding data not extracted by Agent', 3)
-                                """,
-                                document_id
+                            logger.warning("⚠️ Agent 未能提取 Shareholding，觸發 Fallback 直接提取")
+                            from nanobot.ingestion.stages.stage4_fallback_extractor import Stage4FallbackExtractor
+                            fallback_result = await Stage4FallbackExtractor.extract_shareholding(
+                                artifacts=all_artifacts,
+                                company_id=company_id,
+                                document_id=document_id,
+                                year=year,
+                                db_client=self.db
                             )
+                            if fallback_result.get("extracted_count", 0) > 0:
+                                logger.info(f"   ✅ Fallback 成功提取 {fallback_result['extracted_count']} 條 shareholding")
                 except Exception as e:
                     logger.warning(f"   ⚠️ Fallback Check 失敗: {e}")
+            
+            # ===== Stage 4.6: Multi-Year Trend Extractor 🆕 多年趨勢數據自動提取 =====
+            if progress_callback:
+                progress_callback(77.0, "Stage 4.6: Multi-Year Trend Extractor")
+            
+            if self.db and document_id:
+                try:
+                    stage4_6_result = await Stage4_6_TrendExtractor.extract_trends(
+                        document_id=document_id,
+                        company_id=company_id,
+                        db_client=self.db,
+                        doc_id=doc_id
+                    )
+                    result["stages"]["stage4_6"] = stage4_6_result
+                    
+                    # 記錄 processing history
+                    if stage4_6_result.get("metrics_extracted", 0) > 0:
+                        await self.db.insert_processing_history(
+                            document_id=document_id,
+                            stage="stage4_6",
+                            status="success",
+                            message=f"多年趨勢數據提取完成",
+                            artifacts_count=stage4_6_result.get("metrics_extracted", 0)
+                        )
+                except Exception as e:
+                    logger.warning(f"   ⚠️ Stage 4.6 多年趨勢提取失敗: {e}")
+                    result["stages"]["stage4_6"] = {"status": "failed", "error": str(e)}
             
             # ===== Stage 5: Vanna Training =====
             if progress_callback:

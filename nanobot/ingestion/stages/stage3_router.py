@@ -202,7 +202,8 @@ class Stage3Router:
                 continue
             
             # 只在有文字或表格的区块搜索
-            if artifact_type == "text":
+            # 🌟 v4.16: 支持 text_chunk 類型（LlamaParse 输出）
+            if artifact_type in ["text", "text_chunk"]:
                 content = str(artifact.get("content", "")).lower()
                 Stage3Router._check_keywords(content, page_num, keywords_to_search, results, keyword_hits)
             

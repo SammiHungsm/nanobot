@@ -4,6 +4,18 @@ For the latest documentation, visit [nanobot.wiki](https://nanobot.wiki/docs/lat
 
 The pages in this directory track the current repository and may move faster than the published website.
 
+## Project-Specific Docs
+
+| Topic | Repo docs | What it covers |
+|---|---|---|
+| Pipeline Architecture | [`pipeline_architecture.md`](./pipeline_architecture.md) | 9-Stage PDF processing pipeline design |
+| Vanna Microservice Refactor | [`VANNA_MICROSERVICE_REFACTOR.md`](./VANNA_MICROSERVICE_REFACTOR.md) | Text-to-SQL microservice architecture |
+| Code Review 2026-04-18 | [`CODE_REVIEW_2026-04-18.md`](./CODE_REVIEW_2026-04-18.md) | Initial code review report |
+| Code Review 2026-04-22 | [`REVIEW_2026-04-22.md`](./REVIEW_2026-04-22.md) | Follow-up review (vanna_training fixes) |
+| Code Review 2026-04-23 | [`REVIEW_2026-04-23.md`](./REVIEW_2026-04-23.md) | Comprehensive review (vanna-service, storage, ingestion) |
+| Code Review 2026-04-24 | [`REVIEW_2026-04-24.md`](./REVIEW_2026-04-24.md) | Comment accuracy verification (v4.8) |
+| PDF Upload Analysis | [`PDF_UPLOAD_ANALYSIS_2026-04-20.md`](./PDF_UPLOAD_ANALYSIS_2026-04-20.md) | PDF upload workflow analysis |
+
 ## Core Docs
 
 Start here for setup, everyday usage, and deployment.

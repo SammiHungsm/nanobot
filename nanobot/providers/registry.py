@@ -360,6 +360,15 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         default_api_base="http://localhost:8000/v3",
     ),
     # === Auxiliary (not a primary LLM provider) ============================
+    # NVIDIA NIM: OpenAI-compatible API for Llama Vision and other models
+    ProviderSpec(
+        name="nvidia",
+        keywords=("nvidia", "nemo",),
+        env_key="NVIDIA_API_KEY",
+        display_name="NVIDIA NIM",
+        backend="openai_compat",
+        default_api_base="https://integrate.api.nvidia.com/v1",
+    ),
     # Groq: mainly used for Whisper voice transcription, also usable for LLM
     ProviderSpec(
         name="groq",
