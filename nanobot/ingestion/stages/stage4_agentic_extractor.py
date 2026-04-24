@@ -60,8 +60,7 @@ class Stage4AgenticExtractor:
         """
         from nanobot.agent.tools.db_ingestion_tools import (
             GetDBSchemaTool,
-            # ❌ SmartInsertDocumentTool 已移除 - 文档在上传时已创建，不应重复创建
-            UpdateDocumentStatusTool,
+            # ❌ UpdateDocumentStatusTool 已移除 - Status 由 pipeline 在所有 stages 完成后统一设置，不应由 Agent 提前标记
             UpdateDynamicAttributesTool,
             CreateReviewRecordTool,
             RegisterNewKeywordTool,
@@ -83,8 +82,7 @@ class Stage4AgenticExtractor:
         # ❌ SmartInsertDocumentTool 已移除 - 文档在上传时已创建
         tool_classes = [
             GetDBSchemaTool,
-            # SmartInsertDocumentTool,  # 文档已存在，无需创建
-            UpdateDocumentStatusTool,
+            # UpdateDocumentStatusTool,  # 已移除 - Status 由 pipeline 统一管理
             UpdateDynamicAttributesTool,
             CreateReviewRecordTool,
             RegisterNewKeywordTool,
