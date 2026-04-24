@@ -551,7 +551,7 @@ PDF 内容：
         
         if context_result:
             logger.info(f"   🏗️ 使用 Stage 3.5 結構化上下文...")
-            user_message = cls._build_user_message_with_context(
+            user_message = Stage4AgenticExtractor._build_user_message_with_context(
                 artifacts=artifacts,
                 company_id=company_id,
                 year=year,
@@ -560,7 +560,7 @@ PDF 内容：
             )
         else:
             logger.info(f"   ⚠️ 没有 Stage 3.5 上下文，使用候选页面...")
-            user_message = cls._build_user_message_fallback(
+            user_message = Stage4AgenticExtractor._build_user_message_fallback(
                 artifacts=artifacts,
                 company_id=company_id,
                 year=year,
