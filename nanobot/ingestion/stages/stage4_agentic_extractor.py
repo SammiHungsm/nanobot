@@ -541,7 +541,7 @@ PDF 内容：
         tools_registry = Stage4AgenticExtractor._build_tools_registry(db_client)
         
         # 🌟 v4.10: 使用拆分的辅助方法构建 Prompt
-        system_prompt = cls._build_system_prompt(
+        system_prompt = Stage4AgenticExtractor._build_system_prompt(
             company_id=company_id,
             document_id=document_id,
             is_index_report=is_index_report,
