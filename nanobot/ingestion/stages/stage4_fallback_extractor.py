@@ -264,7 +264,6 @@ class Stage4FallbackExtractor:
             inserted_count = await cls._insert_shareholding(
                 db_client=db_client,
                 company_id=company_id,
-                year=year,
                 document_id=document_id,
                 shareholders=shareholders
             )
@@ -357,11 +356,10 @@ class Stage4FallbackExtractor:
     async def _insert_shareholding(
         db_client,
         company_id: int,
-        year: int,
         document_id: int,
         shareholders: List[Dict]
     ) -> int:
-        """寫入 shareholding_structure 表"""
+        """寫入 shareholding_structure 表 (v4.6: 移除 year 欄位)"""
         inserted_count = 0
         
         async with db_client.connection() as conn:
@@ -370,18 +368,17 @@ class Stage4FallbackExtractor:
                     await conn.execute(
                         '''
                         INSERT INTO shareholding_structure 
-                        (company_id, year, shareholder_name, shareholder_type, 
+                        (company_id, shareholder_name, shareholder_type, 
                          shares_held, percentage, is_controlling, is_institutional,
                          trust_name, trustee_name, source_document_id)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-                        ON CONFLICT (company_id, year, shareholder_name)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                        ON CONFLICT (company_id, shareholder_name, source_document_id)
                         DO UPDATE SET 
-                            percentage = $6,
-                            is_controlling = $7,
-                            source_document_id = $11
+                            percentage = $5,
+                            is_controlling = $6,
+                            shares_held = $4
                         ''',
                         company_id,
-                        year,
                         sh.get("shareholder_name"),
                         sh.get("shareholder_type", "corporate"),
                         sh.get("shares_held"),

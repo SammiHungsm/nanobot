@@ -921,7 +921,8 @@ class InsertKeyPersonnelTool(Tool):
         return False
     
     async def execute(self, personnel_list: List[Dict], company_id: int = None, 
-                      company_name: str = None, document_id: Optional[int] = None, **kwargs) -> str:
+                      company_name: str = None, document_id: Optional[int] = None, 
+                      context: dict = None, **kwargs) -> str:
         """写入关键人员
         
         🌟 Method A: 支持 company_name 参数
@@ -930,7 +931,12 @@ class InsertKeyPersonnelTool(Tool):
         """
         from nanobot.ingestion.repository.db_client import DBClient
         
-        context = kwargs.get("context", {})
+        # 🌟 v4.5: Always prefer context's document_id
+        if context is None:
+            context = kwargs.get("context", {})
+        if context and context.get("document_id"):
+            document_id = context["document_id"]
+        
         db = DBClient()
         await db.connect()
         
@@ -1083,7 +1089,8 @@ class InsertFinancialMetricsTool(Tool):
         return False
     
     async def execute(self, year: int, metrics: List[Dict], company_id: int = None, 
-                      company_name: str = None, **kwargs) -> str:
+                      company_name: str = None, document_id: int = None,
+                      context: dict = None, **kwargs) -> str:
         """写入财务指标
         
         🌟 Method A: 支持 company_name 参数
@@ -1092,10 +1099,17 @@ class InsertFinancialMetricsTool(Tool):
         
         🌟 防弹参数：
         - **kwargs 吸收 LLM 幻觉产生的多余参数（如 document_id）
+        
+        🌟 v4.5: context.document_id fallback
         """
         from nanobot.ingestion.repository.db_client import DBClient
         
-        context = kwargs.get("context", {})
+        # 🌟 v4.5: Always prefer context's document_id
+        if context is None:
+            context = kwargs.get("context", {})
+        if context and context.get("document_id"):
+            document_id = context["document_id"]
+        
         db = DBClient()
         await db.connect()
         
@@ -1185,8 +1199,9 @@ class InsertShareholdingTool(Tool):
         return (
             "Insert shareholding structure into shareholding_structure table. "
             "Use this when you find shareholder names and ownership percentages. "
-            "Optional fields: shareholder_type, is_controlling, is_institutional, notes. "
-            "🌟 Supports company_name for subsidiary data (Method A)."
+            "Optional fields: shareholder_type, is_controlling, is_institutional, trust_name, trustee_name. "
+            "🌟 Supports company_name for subsidiary data (Method A). "
+            "Note: year and notes columns removed in v4.6."
         )
     
     @property
@@ -1202,7 +1217,6 @@ class InsertShareholdingTool(Tool):
                     "type": ["string", "null"], 
                     "description": "🌟 如果数据属于子公司、关联公司或竞争对手，请填写他们的公司名称，系统会自动查找或创建对应的 ID"
                 },
-                "year": {"type": "integer", "description": "Year"},
                 "shareholders": {
                     "type": "array",
                     "items": {
@@ -1215,31 +1229,36 @@ class InsertShareholdingTool(Tool):
                             "is_controlling": {"type": ["boolean", "null"], "description": "Is controlling shareholder"},
                             "is_institutional": {"type": ["boolean", "null"], "description": "Is institutional investor"},
                             "trust_name": {"type": ["string", "null"], "description": "Trust name if applicable"},
-                            "trustee_name": {"type": ["string", "null"], "description": "Trustee name if applicable"},
-                            "notes": {"type": ["string", "null"], "description": "Additional notes"}
+                            "trustee_name": {"type": ["string", "null"], "description": "Trustee name if applicable"}
                         },
-                        "required": ["shareholder_name", "percentage"]
+                "required": ["shareholder_name", "percentage"]
                     },
                     "description": "List of shareholders"
                 }
             },
-            "required": ["year", "shareholders"]
+            "required": ["shareholders"]
         }
     
     @property
     def read_only(self) -> bool:
         return False
     
-    async def execute(self, year: int, shareholders: List[Dict], company_id: int = None,
-                      company_name: str = None, **kwargs) -> str:
+    async def execute(self, shareholders: List[Dict], company_id: int = None,
+                      company_name: str = None, document_id: int = None,
+                      context: dict = None, **kwargs) -> str:
         """寫入股東結構
         
         🌟 Method A: 支持 company_name 参数
-        🌟 防彈參數：**kwargs 吸收 LLM 幻覺產生的多餘參數
+        🌟 v4.6: 移除 year 和 notes（冗餘欄位）
         """
         from nanobot.ingestion.repository.db_client import DBClient
         
-        context = kwargs.get("context", {})
+        # 🌟 v4.5: Always prefer context's document_id
+        if context is None:
+            context = kwargs.get("context", {})
+        if context and context.get("document_id"):
+            document_id = context["document_id"]
+        
         db = DBClient()
         await db.connect()
         
@@ -1268,21 +1287,20 @@ class InsertShareholdingTool(Tool):
                     await conn.execute(
                         """
                         INSERT INTO shareholding_structure 
-                        (company_id, year, shareholder_name, shareholder_type, shares_held, percentage,
-                         is_controlling, is_institutional, trust_name, trustee_name, notes)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                        (company_id, shareholder_name, shareholder_type, shares_held, percentage,
+                         is_controlling, is_institutional, trust_name, trustee_name, source_document_id)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                         """,
-                        actual_company_id,  # 🌟 使用转换后的 ID
-                        year,
+                        actual_company_id,
                         sh.get("shareholder_name"),
-                        sh.get("shareholder_type"),  # 🌟 修正：shareholder_type 不是 share_type
+                        sh.get("shareholder_type"),
                         sh.get("shares_held"),
                         sh.get("percentage"),
                         sh.get("is_controlling"),
                         sh.get("is_institutional"),
                         sh.get("trust_name"),
                         sh.get("trustee_name"),
-                        sh.get("notes")
+                        document_id
                     )
                     inserted_count += 1
             
@@ -1290,7 +1308,7 @@ class InsertShareholdingTool(Tool):
                 "success": True,
                 "company_id": actual_company_id,
                 "company_name": company_name,
-                "year": year,
+                "source_document_id": document_id,
                 "inserted_count": inserted_count,
                 "message": f"✅ 寫入 {inserted_count} 個股東 (公司: {company_name or f'ID={actual_company_id}'})"
             }, indent=2, ensure_ascii=False)
@@ -1372,18 +1390,22 @@ class InsertRevenueBreakdownTool(Tool):
         return False
     
     async def execute(self, year: int, segments: List[Dict], company_id: int = None,
-                      company_name: str = None, document_id: Optional[int] = None, **kwargs) -> str:
+                      company_name: str = None, document_id: Optional[int] = None, 
+                      context: dict = None, **kwargs) -> str:
         """写入收入分解
         
         🌟 Method A: 支持 company_name 参数
         🌟 防弹参数：**kwargs 吸收 LLM 幻觉产生的多余参数
+        🌟 v4.5: context.document_id fallback
         """
         from nanobot.ingestion.repository.db_client import DBClient
         
-        context = kwargs.get("context", {})
-        
-        # 🌟 v1.2: 强制转换 document_id 为整数（Agent 可能传字符串）
-        if document_id is not None:
+        # 🌟 v4.5: Always prefer context's document_id
+        if context is None:
+            context = kwargs.get("context", {})
+        if context and context.get("document_id"):
+            document_id = context["document_id"]
+        elif document_id is not None:
             try:
                 document_id = int(document_id)
             except (ValueError, TypeError):
@@ -1700,16 +1722,23 @@ class InsertMarketDataTool(Tool):
     def read_only(self) -> bool:
         return False
     
-    async def execute(self, data_date: str, company_id: int = None, company_name: str = None, **kwargs) -> str:
+    async def execute(self, data_date: str, company_id: int = None, company_name: str = None, 
+                      document_id: int = None, context: dict = None, **kwargs) -> str:
         """寫入市場數據
         
         🌟 Method A: 支持 company_name 参数
         🌟 防彈參數：**kwargs 吸收 LLM 幻覺產生的多餘參數
+        🌟 v4.5: context.document_id fallback
         """
         from nanobot.ingestion.repository.db_client import DBClient
         from datetime import datetime, date as date_type
         
-        context = kwargs.get("context", {})
+        # 🌟 v4.5: Always prefer context's document_id
+        if context is None:
+            context = kwargs.get("context", {})
+        if context and context.get("document_id"):
+            document_id = context["document_id"]
+        
         db = DBClient()
         await db.connect()
         
