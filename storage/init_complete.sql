@@ -847,7 +847,6 @@ CREATE INDEX IF NOT EXISTS idx_personnel_is_current ON key_personnel(is_current)
 CREATE TABLE IF NOT EXISTS shareholding_structure (
     id SERIAL PRIMARY KEY,
     company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-    year INTEGER NOT NULL,
     
     -- 【股東資訊欄位 Shareholder Information Fields】
     shareholder_name VARCHAR(255),
@@ -867,15 +866,14 @@ CREATE TABLE IF NOT EXISTS shareholding_structure (
     
     -- 【元數據欄位 Metadata Fields】
     source_document_id INTEGER REFERENCES documents(id) ON DELETE SET NULL,
-    notes TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     
-    CONSTRAINT unique_shareholder UNIQUE (company_id, year, shareholder_name)
+    -- v4.6: 移除 year 和 notes（冗餘欄位，可從 source_document_id -> documents.year 取得）
+    CONSTRAINT unique_shareholder UNIQUE (company_id, shareholder_name, source_document_id)
 );
 
 -- 【索引策略 Index Strategy】
 CREATE INDEX IF NOT EXISTS idx_shareholding_company_id ON shareholding_structure(company_id);
-CREATE INDEX IF NOT EXISTS idx_shareholding_year ON shareholding_structure(year);
 CREATE INDEX IF NOT EXISTS idx_shareholding_type ON shareholding_structure(shareholder_type);
 CREATE INDEX IF NOT EXISTS idx_shareholding_trust_name ON shareholding_structure(trust_name);
 CREATE INDEX IF NOT EXISTS idx_shareholding_trustee_name ON shareholding_structure(trustee_name);
