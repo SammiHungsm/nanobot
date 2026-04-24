@@ -574,44 +574,49 @@ class Stage2Enrichment:
         - semantic_description (語意描述，用於 Vector Search)
         """
         prompt = f"""
-你是一個專業的數據分析 Agent，負責將文件中的圖片/圖表轉換為高質量的 RAG 向量資料庫 Raw Data。
+你是一個專業的數據分析 Agent，負責將文件中的圖片/圖表轉換為高質量的可搜索數據庫。
 
-我們擷取了該圖表在文件中的【結構化上下文 (Structural Context)】：
+【結構化上下文】
 - 所屬章節標題：{context_data['closest_heading']}
 - 圖表標籤/圖說：{context_data['caption']}
 - 圖表前的引言：{context_data['previous_text']}
 - 圖表後的分析：{context_data['next_text']}
 
-請仔細觀察圖片，並結合上述邏輯上下文，輸出一個高精度的 JSON：
+請仔細觀察圖片，輸出一個高精度的 JSON：
 
-1. "type": 判斷這是 chart(圖表), table(表格掃描件), diagram(架構圖), 還是 photo(普通照片)。
+1. "type": chart(圖表), table(表格), diagram(架構圖), photo(照片)
 
-2. "title": 綜合上下文給這張圖表一個精確的標題。
+2. "title": 精確標題
 
-3. "markdown_representation": 🌟 最重要！必須是可直接查詢的結構化格式：
-   - **Table**: | 列名 | 列名 |\n|---|---|\n| 值 | 值 |
-   - **Chart (圓餅圖/柱狀圖)**: | 類別 | 數值 |\n|---|---|\n| Canada | 1% |
-   - **折線圖**: | 年份 | 數值 |\n|---|---|\n| 2023 | 45% |
-   - **Diagram**: 用條列式描述結構
-   
-   ⚠️ 每個數據點必須有明確的 Key 和 Value！
+3. "markdown_representation": 直接可查詢的結構化格式：
+   - Chart: | 類別 | 數值 |\n|---|---|\n   - Table: | 列名 | 列名 |\n|---|---|\n   - 折線圖: | 年份 | 數值 |\n|---|---|\n   - Diagram: 用條列式描述結構
 
-4. "key_entities": 提取圖表中提及的重要實體 (如公司、地區、指標)。
+4. "key_entities": 重要實體列表 (公司、地區、指標)
 
-5. "semantic_description": 🌟 語意描述，用於 Vector Search 檢索：
-   - 包含年份、數據類型、趨勢關鍵詞
-   - 例如：「這是 2023 年全球營收分佈的圓餅圖，顯示 Canada 佔 1%，Asia 佔 15%...」
-   - 讓用戶可以用「2023年營收」、「Canada percentage」等查詢找到此圖
+5. "semantic_description": 🌟 高可搜索性描述，包含：
+   - 年份 + 數據類型 + 關鍵詞（讓「2023年營收」「Canada percentage」可以匹配）
+   - 例如：「2023年全球營收分佈圓餅圖，Asia佔15%最高，Canada佔1%，Europe佔8%」
 
-輸出格式必須是純 JSON：
+6. "search_keywords": 🌟 显式搜索關鍵詞陣列（確保各種查詢方式都能命中）：
+   - 包括標題、年份、指標、數值、佔比、趨勢等
+   - 例如：["2023", "營收", "分佈", "圓餅圖", "Canada 1%", "Asia 15%", "收入比例", "區域佔比"]
+
+7. "qa_pairs": 🌟 預先生成常見關係性問題 Q&A（覆蓋「邊個最大」「佔幾多」「趨勢」等問題）：
+   - 每個 chart 至少生成 3-5 個 Q&A
+   - 格式：[{{"Q": "問題", "A": "答案"}}]
+   - 例如：[{{"Q": "Canada 佔幾多百分比？", "A": "1%"}}, {{"Q": "邊個地區佔比最高？", "A": "Asia (15%)"}}]
+
+輸出格式（純 JSON）：
 {{
  "type": "chart",
  "title": "2023年各區域收入分佈",
- "markdown_representation": "| 地區 | 百分比 |\\n|---|---|\\n| Canada | 1% |\\n| Asia | 15% |",
- "key_entities": ["Canada", "Asia", "收入"],
- "semantic_description": "這是 2023 年全球營收分佈的圓餅圖，顯示 Asia 佔比最高達 15%，Canada 佔 1%..."
+ "markdown_representation": "| 地區 | 百分比 |\\n|---|---|\n| Asia | 15% |\\n| Canada | 1% |",
+ "key_entities": ["Asia", "Canada", "Europe", "營收"],
+ "semantic_description": "2023年全球營收分佈圓餅圖，Asia佔15%最高，Canada佔1%...",
+ "search_keywords": ["2023", "營收", "分佈", "圓餅圖", "Canada 1%", "Asia 15%", "收入比例", "區域佔比"],
+ "qa_pairs": [{{"Q": "Canada 佔幾多百分比？", "A": "1%"}}, {{"Q": "邊個地區佔比最高？", "A": "Asia (15%)"}}]
 }}
-"""
+""""""
         try:
             response = await llm_core.vision(
                 image_base64=image_base64,

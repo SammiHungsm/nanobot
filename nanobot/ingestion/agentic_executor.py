@@ -150,7 +150,6 @@ class AgenticExecutor:
         
         if tool_name not in self.tools_registry:
             error_msg = f"Tool '{tool_name}' not found"
-            self._save_tool_trace(tool_name, tool_args, None, False, error_msg)
             return json.dumps({"error": error_msg})
         
         tool_obj = self.tools_registry[tool_name]
@@ -161,7 +160,6 @@ class AgenticExecutor:
         validation_error = self._validate_tool_parameters(tool_name, tool_obj, tool_args)
         if validation_error:
             logger.warning(f"   ⚠️ Tool '{tool_name}' 參數驗證失敗: {validation_error}")
-            self._save_tool_trace(tool_name, tool_args, None, False, validation_error)
             return json.dumps({"error": f"Parameter validation failed: {validation_error}"})
         
         # =================================================================
@@ -242,14 +240,11 @@ class AgenticExecutor:
                 result = {"error": error_message}
         
         # =================================================================
-        # 🌟 Step 4: 保存 Tool Call Trace 到 DB
+        # 🌟 Step 4: Post-execution Validation (結果驗證)
         # =================================================================
         duration_ms = int((time.time() - start_time) * 1000)
-        self._save_tool_trace(tool_name, tool_args, result, success, error_message, duration_ms)
+        logger.debug(f"   ⏱️ Tool {tool_name} took {duration_ms}ms")
         
-        # =================================================================
-        # 🌟 Step 5: Post-execution Validation (結果驗證)
-        # =================================================================
         if success:
             post_validation = self._validate_tool_result(tool_name, result)
             if post_validation:
@@ -311,90 +306,26 @@ class AgenticExecutor:
         
         return None
     
-    def _save_tool_trace(
-        self,
-        tool_name: str,
-        tool_args: Dict,
-        tool_result: Any,
-        success: bool,
-        error_message: str = None,
-        duration_ms: int = 0
-    ) -> None:
-        """
-        🌟 v4.13: 保存 Tool Call Trace 到 DB
-        """
-        # 從 context 獲取 db_client 和 document_id
-        db_client = self.context.get('db_client')
-        document_id = self.context.get('document_id')
-        
-        if not db_client or not document_id:
-            logger.debug(f"   📝 Tool Trace (skip DB): {tool_name} -> {success}")
-            return
-        
-        try:
-            # 使用 sync wrapper 或直接調用 async
-            import asyncio
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # 在 running loop 中，使用 create_task
-                asyncio.create_task(
-                    db_client.save_tool_call_trace(
-                        document_id=document_id,
-                        trace_id=self.trace_id,
-                        tool_name=tool_name,
-                        tool_args=tool_args,
-                        tool_result=tool_result,
-                        success=success,
-                        error_message=error_message,
-                        duration_ms=duration_ms
-                    )
-                )
-            else:
-                loop.run_until_complete(
-                    db_client.save_tool_call_trace(
-                        document_id=document_id,
-                        trace_id=self.trace_id,
-                        tool_name=tool_name,
-                        tool_args=tool_args,
-                        tool_result=tool_result,
-                        success=success,
-                        error_message=error_message,
-                        duration_ms=duration_ms
-                    )
-                )
-        except Exception as e:
-            logger.debug(f"   📝 Tool Trace (save failed): {e}"))
-    
     async def run(
         self,
         system_prompt: str,
         user_message: str,
         context: Dict[str, Any] = None,
-        on_tool_call: Callable[[str, Dict], None] = None,
-        trace_id: str = None  # 🌟 v4.13: 追蹤 ID（用於 Debug）
+        on_tool_call: Callable[[str, Dict], None] = None
     ) -> Dict[str, Any]:
         """
         执行 Agentic Workflow
-        
-        🌟 v4.13 新特性：
-        - trace_id: 用於追蹤整個 workflow 的 Tool 調用
-        - 自動保存 Tool Call Trace 到 DB
         
         Args:
             system_prompt: System Prompt
             user_message: 用户消息
             context: 上下文信息
             on_tool_call: Tool 调用回调
-            trace_id: 🆕 追蹤 ID
             
         Returns:
-            Dict: 执行结果 {"content": str, "tool_calls": List, "iterations": int, "trace_id": str}
+            Dict: 执行结果 {"content": str, "tool_calls": List, "iterations": int}
         """
-        # 🌟 v4.13: 生成或使用 trace_id
-        import uuid
-        self.trace_id = trace_id or f"trace_{uuid.uuid4().hex[:16]}"
-        
-        logger.info(f"🤖 Agentic Workflow 开始 (tools={len(self.tools_registry)}, trace_id={self.trace_id})")
+        logger.info(f"🤖 Agentic Workflow 开始 (tools={len(self.tools_registry)})")
         
         # 🌟 v4.3: Store context for tool execution
         self.context = context or {}
@@ -444,15 +375,14 @@ class AgenticExecutor:
             
             # 🌟 如果没有 Tool Calls，返回结果
             if not response.has_tool_calls:
-                logger.info(f"✅ Agentic Workflow 完成 (iterations={iterations}, trace_id={self.trace_id})")
+                logger.info(f"✅ Agentic Workflow 完成 (iterations={iterations})")
                 logger.debug(f"   📝 LLM Response (no tool_calls): {response.content[:500] if response.content else 'None'}...")
                 logger.debug(f"   🏁 Finish Reason: {response.finish_reason}")
                 return {
                     "content": response.content,
                     "tool_calls": all_tool_calls,
                     "iterations": iterations,
-                    "finish_reason": response.finish_reason,
-                    "trace_id": self.trace_id  # 🌟 v4.13
+                    "finish_reason": response.finish_reason
                 }
             
             # 🌟 执行 Tool Calls
@@ -489,13 +419,12 @@ class AgenticExecutor:
             # 🌟 添加 Tool Results
             messages.extend(tool_results)
         
-        logger.warning(f"⚠️ Agentic Workflow 达到最大迭代次数 ({self.max_iterations}, trace_id={self.trace_id})")
+        logger.warning(f"⚠️ Agentic Workflow 达到最大迭代次数 ({self.max_iterations})")
         return {
             "content": response.content if response else "",
             "tool_calls": all_tool_calls,
             "iterations": iterations,
-            "finish_reason": "max_iterations",
-            "trace_id": self.trace_id  # 🌟 v4.13
+            "finish_reason": "max_iterations"
         }
 
 

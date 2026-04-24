@@ -2165,65 +2165,6 @@ class DBClient:
             logger.error(f"❌ 檢查 stage 狀態失敗: {e}")
             return False
     
-    async def save_tool_call_trace(
-        self,
-        document_id: int,
-        trace_id: str,
-        tool_name: str,
-        tool_args: Dict[str, Any],
-        tool_result: Any,
-        success: bool,
-        error_message: str = None,
-        duration_ms: int = None
-    ) -> bool:
-        """
-        🌟 v4.13: 保存 Tool Call 追蹤日誌（用於 Debug）
-        """
-        try:
-            async with self.connection() as conn:
-                # 🌟 檢查表是否存在，不存在則創建
-                await conn.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS tool_call_traces (
-                        id SERIAL PRIMARY KEY,
-                        document_id INTEGER NOT NULL,
-                        trace_id VARCHAR(64) NOT NULL,
-                        tool_name VARCHAR(100) NOT NULL,
-                        tool_args JSONB,
-                        tool_result JSONB,
-                        success BOOLEAN DEFAULT true,
-                        error_message TEXT,
-                        duration_ms INTEGER,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    );
-                    CREATE INDEX IF NOT EXISTS idx_tool_traces_document ON tool_call_traces(document_id);
-                    CREATE INDEX IF NOT EXISTS idx_tool_traces_trace ON tool_call_traces(trace_id);
-                    """
-                )
-                
-                await conn.execute(
-                    """
-                    INSERT INTO tool_call_traces 
-                    (document_id, trace_id, tool_name, tool_args, tool_result, success, error_message, duration_ms)
-                    VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8)
-                    """,
-                    document_id,
-                    trace_id,
-                    tool_name,
-                    json.dumps(tool_args, ensure_ascii=False, default=str),
-                    json.dumps(tool_result, ensure_ascii=False, default=str) if tool_result else None,
-                    success,
-                    error_message,
-                    duration_ms
-                )
-                
-                logger.debug(f"   📝 Tool Trace: {tool_name} -> {success}")
-                return True
-                
-        except Exception as e:
-            logger.error(f"❌ 保存 Tool Trace 失敗: {e}")
-            return False
-    
     async def insert_document_chunk(
         self,
         document_id: int,
