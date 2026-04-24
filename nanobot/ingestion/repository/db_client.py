@@ -1113,12 +1113,14 @@ class DBClient:
                     file_size_bytes, report_type, year, processing_status, uploaded_at
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
                 ON CONFLICT (doc_id) DO UPDATE SET
+                    owner_company_id = COALESCE($2, documents.owner_company_id),
                     processing_status = 'pending',
                     year = COALESCE(documents.year, $8),
+                    filename = COALESCE($3, documents.filename),
                     updated_at = NOW()
                 """,
                 doc_id,
-                company_id,  # 寫入 owner_company_id
+                company_id,  # 寫入 owner_company_id（ON CONFLICT 也會更新）
                 actual_filename,
                 file_path,
                 file_hash,

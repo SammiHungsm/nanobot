@@ -69,7 +69,7 @@ class Stage6Validator:
         Returns:
             Dict: {"is_valid", "total_percentage", "normalized_data", "needs_review"}
         """
-        logger.info(f"🔍 Stage 7: 验证 Revenue Breakdown...")
+        logger.info(f"🔍 Stage 6: 验证 Revenue Breakdown...")
         
         result = {
             "is_valid": True,
@@ -149,7 +149,7 @@ class Stage6Validator:
             except Exception as e:
                 logger.warning(f"   ⚠️ 创建审核记录失败: {e}")
         
-        logger.info(f"✅ Stage 7 Revenue 验证完成: valid={result['is_valid']}, total_pct={total_pct}%")
+        logger.info(f"✅ Stage 6 Revenue 验证完成: valid={result['is_valid']}, total_pct={total_pct}%")
         
         return result
     
@@ -177,7 +177,7 @@ class Stage6Validator:
         Returns:
             Dict: {"is_valid", "normalized_metrics", "needs_review"}
         """
-        logger.info(f"🔍 Stage 7: 验证 Financial Metrics...")
+        logger.info(f"🔍 Stage 6: 验证 Financial Metrics...")
         
         result = {
             "is_valid": True,
@@ -232,7 +232,7 @@ class Stage6Validator:
             
             result["normalized_metrics"].append(normalized_metric)
         
-        logger.info(f"✅ Stage 7 Metrics 验证完成: valid={result['is_valid']}, count={len(metrics_data)}")
+        logger.info(f"✅ Stage 6 Metrics 验证完成: valid={result['is_valid']}, count={len(metrics_data)}")
         
         return result
     
@@ -257,7 +257,7 @@ class Stage6Validator:
         Returns:
             Dict: {"is_valid", "normalized_personnel", "needs_review"}
         """
-        logger.info(f"🔍 Stage 7: 验证 Key Personnel...")
+        logger.info(f"🔍 Stage 6: 验证 Key Personnel...")
         
         result = {
             "is_valid": True,
@@ -302,7 +302,7 @@ class Stage6Validator:
             
             result["normalized_personnel"].append(normalized_person)
         
-        logger.info(f"✅ Stage 7 Personnel 验证完成: valid={result['is_valid']}, count={len(personnel_data)}")
+        logger.info(f"✅ Stage 6 Personnel 验证完成: valid={result['is_valid']}, count={len(personnel_data)}")
         
         return result
     
@@ -325,7 +325,7 @@ class Stage6Validator:
         Returns:
             Dict: {"revenue_validation", "metrics_validation", "personnel_validation", "overall_valid"}
         """
-        logger.info(f"🎯 Stage 7: Validator & Normalizer 开始...")
+        logger.info(f"🎯 Stage 6: Validator & Normalizer 开始...")
         
         result = {
             "revenue_validation": None,
@@ -388,6 +388,6 @@ class Stage6Validator:
             except Exception as e:
                 logger.warning(f"   ⚠️ 更新文档状态失败: {e}")
         
-        logger.info(f"✅ Stage 7 完成: overall_valid={result['overall_valid']}, needs_review={result['needs_review']}")
+        logger.info(f"✅ Stage 6 完成: overall_valid={result['overall_valid']}, needs_review={result['needs_review']}")
         
         return result

@@ -130,17 +130,37 @@ class Stage0_5_Registrar:
             # 🌟 v1.1: create_document 返回 None（INSERT 执行），需要单独查询 document_id
             document_id = await db_client.get_document_internal_id(doc_id) if doc_result else None
             
-            # 🌟 v1.4: 写入 document_companies 关联表
-            if document_id and company_id:
+            # 🌟 Bug Fix: 確保 owner_company_id 和 document_companies 都正確設置
+            # 如果 company_id 有值但 document_id 獲取失敗，仍然要更新 owner_company_id
+            if company_id:
                 try:
-                    await db_client.add_mentioned_company(  # 🌟 v1.5: 修正方法名
-                        document_id=document_id,
+                    # 確保 documents.owner_company_id 被設置
+                    await db_client.update_document_company_id(
+                        doc_id=doc_id,
                         company_id=company_id,
-                        relation_type="primary",  # 主公司（年报所属公司）
-                        extracted_industries=[metadata.get("industry")] if metadata.get("industry") else [],
-                        extraction_source="vision_cover"
+                        year=year
                     )
-                    logger.info(f"   ✅ 文档-公司关联已建立: doc={document_id}, company={company_id}")
+                    logger.info(f"   ✅ owner_company_id 已更新: doc_id={doc_id}, company_id={company_id}")
+                except Exception as e:
+                    logger.warning(f"   ⚠️ update_document_company_id 失敗: {e}")
+                
+                # 🌟 v1.4: 写入 document_companies 关联表（即使 document_id 獲取失敗也能用 doc_id 查詢）
+                try:
+                    # 重新獲取 document_id（如果之前失敗）
+                    if not document_id:
+                        document_id = await db_client.get_document_internal_id(doc_id)
+                    
+                    if document_id:
+                        await db_client.add_mentioned_company(
+                            document_id=document_id,
+                            company_id=company_id,
+                            relation_type="primary",  # 主公司（年报所属公司）
+                            extracted_industries=[metadata.get("industry")] if metadata.get("industry") else [],
+                            extraction_source="vision_cover"
+                        )
+                        logger.info(f"   ✅ 文档-公司关联已建立: doc={document_id}, company={company_id}, relation=primary")
+                    else:
+                        logger.warning(f"   ⚠️ 無法獲取 document_id，document_companies 未建立")
                 except Exception as e:
                     logger.warning(f"   ⚠️ 文档-公司关联失败: {e}")
             
