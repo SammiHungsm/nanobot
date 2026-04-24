@@ -36,7 +36,15 @@ class Stage4AgenticExtractor:
     """Stage 4: Agentic 提取与动态写入 (v4.0 - Tool Calling)
     
     🌟 唯一的提取入口 - 不再有 Toggle，不再有重复逻辑
+    
+    v4.10 重构：
+    - _build_system_prompt() - 构建系统提示
+    - _build_user_message_with_context() - 使用结构化上下文构建用户消息
+    - _build_user_message_fallback() - 使用候选页面构建用户消息
     """
+    
+    # 🌟 常量定义
+    DEFAULT_EXTRACTION_TYPES = ["revenue_breakdown", "key_personnel", "financial_metrics"]
     
     @staticmethod
     def _build_tools_registry(db_client: Any = None) -> Dict[str, Any]:
@@ -95,60 +103,28 @@ class Stage4AgenticExtractor:
         
         return build_tools_registry_from_classes(tool_classes)
     
-    @staticmethod
-    async def run_agentic_write(
-        artifacts: List[Dict[str, Any]],
+    @classmethod
+    def _build_system_prompt(
+        cls,
         company_id: int,
-        year: int,
-        doc_id: str,
         document_id: int,
-        is_index_report: bool = False,
-        index_theme: str = None,
-        confirmed_doc_industry: str = None,
-        db_client: Any = None,
-        extraction_types: List[str] = None,
-        progress_callback: Any = None,
-        stage3_result: Dict[str, Any] = None,  # 🌟 v4.8: Stage 3 路由结果
-        context_result: Dict[str, Any] = None  # 🌟 v4.10: Stage 3.5 結構化上下文
-    ) -> Dict[str, Any]:
+        is_index_report: bool,
+        index_theme: str,
+        confirmed_doc_industry: str
+    ) -> str:
         """
-        🌟 Agentic 多表写入（v4.10 - 使用結構化上下文）
-        
-        根据文档类型使用不同的写入策略：
-        - 指数报告（规则 A）：所有成分股指派同一行业
-        - 年报（规则 B）：AI 提取各公司行业
-        
-        🌟 v4.10 新特性：
-        - 使用 Stage 3.5 的結構化上下文（章節樹、表格上下文）
-        - Agent 不再需要同時做「理解文檔」和「提取數據」
-        - 表格帶有所屬章節、附近文本等上下文信息
+        🌟 v4.10: 构建 System Prompt
         
         Args:
-            artifacts: Artifacts 列表
             company_id: 公司 ID
-            year: 年份
-            doc_id: 文档 ID
-            document_id: 文档内部 ID
+            document_id: 文档 ID
             is_index_report: 是否为指数报告
             index_theme: 指数主题
             confirmed_doc_industry: 报告定义的行业
-            db_client: DB 客户端
-            extraction_types: 提取类型
-            progress_callback: 进度回调
-            stage3_result: Stage 3 路由结果（包含候选页面）
-            context_result: Stage 3.5 結構化上下文（章節樹、表格上下文）
             
         Returns:
-            Dict: 写入结果
+            str: 系统提示文本
         """
-        extraction_types = extraction_types or ["revenue_breakdown", "key_personnel", "financial_metrics"]
-        
-        logger.info(f"🎯 Stage 4: Agentic 写入（v4.0 Tool Calling）...")
-        
-        # 🌟 构建 Tools Registry
-        tools_registry = Stage4AgenticExtractor._build_tools_registry(db_client)
-        
-        # 🌟 构建 System Prompt
         if is_index_report:
             report_context = f"""
 这是一份【指数/行业报告】(主题: {index_theme or 'Unknown'}, 行业: {confirmed_doc_industry or 'Unknown'})。
@@ -158,7 +134,7 @@ class Stage4AgenticExtractor:
         else:
             report_context = f"""
 这是一份【单一公司年报】，母公司 ID 为 {company_id or '待提取'}。
-行业分配规则：规则 B - 使用 AI 提取各公司的行业
+行业分配规则：规则 B - 使用 AI 提取各公司行业
 """
         
         system_prompt = f"""
@@ -219,7 +195,7 @@ Step 3: 动态写入 🌟 关键！（选择正确的 Tool）
    ❌ 错误：company_id=1 (长和的 ID)，但数据是腾讯的
    ✅ 正确：company_name="腾讯"，系统会自动查找或创建腾讯的 ID
 
-⚠️ 选择正确的 Tool 是关键！不同数据用不同 Tool：n
+⚠️ 选择正确的 Tool 是关键！不同数据用不同 Tool：
 1️⃣ 财务指标（利润、资产、负债）
    → 使用 insert_financial_metrics
    → 例如：净利润 123亿、总资产 500亿
@@ -289,22 +265,41 @@ Step 5: 完成
 
 开始执行！
 """
+        return system_prompt
+    
+    @classmethod
+    def _build_user_message_with_context(
+        cls,
+        artifacts: List[Dict[str, Any]],
+        company_id: int,
+        year: int,
+        document_id: int,
+        context_result: Dict[str, Any]
+    ) -> str:
+        """
+        🌟 v4.10: 使用结构化上下文构建用户消息
         
-        # 🌟 v4.10: 使用結構化上下文構建內容
-        # 如果有 Stage 3.5 上下文，使用結構化信息
-        if context_result:
-            logger.info(f"   🏗️ 使用 Stage 3.5 結構化上下文...")
+        Args:
+            artifacts: Artifacts 列表
+            company_id: 公司 ID
+            year: 年份
+            document_id: 文档 ID
+            context_result: Stage 3.5 结构化上下文
             
-            from nanobot.ingestion.stages.stage3_5_context_builder import Stage3_5_ContextBuilder
-            
-            # 格式化上下文
-            context_text = Stage3_5_ContextBuilder.format_context_for_llm(context_result)
-            
-            # 提取按類型分組的內容
-            content_by_type = context_result.get("content_by_type", {})
-            
-            # 構建結構化提示
-            user_message = f"""
+        Returns:
+            str: 用户消息文本
+        """
+        from nanobot.ingestion.stages.stage3_5_context_builder import Stage3_5_ContextBuilder
+        from nanobot.ingestion.utils.content_builder import build_tables_content, build_texts_content
+        
+        # 格式化上下文
+        context_text = Stage3_5_ContextBuilder.format_context_for_llm(context_result)
+        
+        # 提取按類型分組的內容
+        content_by_type = context_result.get("content_by_type", {})
+        
+        # 構建結構化提示
+        user_message = f"""
 請分析以下 PDF 內容，提取數據並寫入數據庫：
 
 {context_text}
@@ -312,31 +307,31 @@ Step 5: 完成
 ## 📄 詳細內容（按數據類型分組）
 
 """
+        
+        # 添加每個類型的表格信息
+        for data_type, type_data in content_by_type.items():
+            tables = type_data.get("tables", [])
+            texts = type_data.get("texts", [])
             
-            # 添加每個類型的表格信息
-            for data_type, type_data in content_by_type.items():
-                tables = type_data.get("tables", [])
-                texts = type_data.get("texts", [])  # 🆕 獲取對應的文字段落
-                
-                if tables:
-                    user_message += f"\n### {data_type.upper()} 表格\n\n"
-                    # 🌟 放寬到 8 個表格，每個表格 3000 字符
-                    for i, tbl in enumerate(tables[:8]):  # 放寬到 8 個
-                        user_message += f"**Table {i+1} @ Page {tbl['page_num']} - Section: {tbl.get('section_title', 'N/A')}**\n\n"
-                        user_message += tbl.get("md", "")[:3000]  # 放寬到 3000 字符
+            if tables:
+                user_message += f"\n### {data_type.upper()} 表格\n\n"
+                # 🌟 放寬到 8 個表格，每個表格 3000 字符
+                for i, tbl in enumerate(tables[:8]):
+                    user_message += f"**Table {i+1} @ Page {tbl['page_num']} - Section: {tbl.get('section_title', 'N/A')}**\n\n"
+                    user_message += tbl.get("md", "")[:3000]
+                    user_message += "\n\n"
+            
+            # 🌟 新增：針對 key_personnel 和 shareholding 強制注入文字段落
+            if data_type in ["key_personnel", "shareholding"]:
+                if texts:
+                    user_message += f"\n### {data_type.upper()} 相關文字段落 🆕\n\n"
+                    user_message += "⚠️ 以下係純文字內容，可能包含董事名單、股東信息等。請仔細閱讀並提取！\n\n"
+                    for i, txt in enumerate(texts[:5]):
+                        user_message += f"**Text {i+1} @ Page {txt.get('page_num', 'N/A')}**\n"
+                        user_message += txt.get("content", "")[:2000]
                         user_message += "\n\n"
-                
-                # 🌟 新增：針對 key_personnel 和 shareholding 強制注入文字段落
-                if data_type in ["key_personnel", "shareholding"]:
-                    if texts:
-                        user_message += f"\n### {data_type.upper()} 相關文字段落 🆕\n\n"
-                        user_message += "⚠️ 以下係純文字內容，可能包含董事名單、股東信息等。請仔細閱讀並提取！\n\n"
-                        for i, txt in enumerate(texts[:5]):
-                            user_message += f"**Text {i+1} @ Page {txt.get('page_num', 'N/A')}**\n"
-                            user_message += txt.get("content", "")[:2000]
-                            user_message += "\n\n"
-            
-            user_message += f"""
+        
+        user_message += f"""
 公司 ID: {company_id}
 年份: {year}
 文檔 ID: {document_id}
@@ -369,63 +364,53 @@ Step 5: 完成
 
 請開始執行！
 """
-        else:
-            # 🌟 v4.8: Fallback - 智能選擇候選頁面內容
-            candidate_pages = {}
+        return user_message
+    
+    @classmethod
+    def _build_user_message_fallback(
+        cls,
+        artifacts: List[Dict[str, Any]],
+        company_id: int,
+        year: int,
+        document_id: int,
+        stage3_result: Dict[str, Any] = None
+    ) -> str:
+        """
+        🌟 v4.10: 使用候选页面构建用户消息（Fallback 模式）
+        
+        Args:
+            artifacts: Artifacts 列表
+            company_id: 公司 ID
+            year: 年份
+            document_id: 文档 ID
+            stage3_result: Stage 3 路由结果
             
-            if stage3_result:
-                # 从 Stage 3 结果中提取候选页面
-                for data_type, pages in stage3_result.items():
-                    if isinstance(pages, list) and pages:
-                        candidate_pages[data_type] = pages
-                        logger.info(f"   📍 Stage 3 路由结果: {data_type} -> {len(pages)} 个候选页面")
+        Returns:
+            str: 用户消息文本
+        """
+        from nanobot.ingestion.utils.content_builder import build_candidate_pages_content, format_routing_hint
+        
+        candidate_pages = {}
+        
+        if stage3_result:
+            # 从 Stage 3 结果中提取候选页面
+            for data_type, pages in stage3_result.items():
+                if isinstance(pages, list) and pages:
+                    candidate_pages[data_type] = pages
+                    logger.info(f"   📍 Stage 3 路由结果: {data_type} -> {len(pages)} 个候选页面")
+        
+        # 构建内容
+        if candidate_pages:
+            logger.info(f"   🎯 使用 Stage 3 候选页面构建内容...")
             
-            # 🌟 构建内容文本
-            content_parts = []
+            content_text, routing_hint = build_candidate_pages_content(
+                artifacts, 
+                candidate_pages,
+                max_pages=50,
+                max_chars_per_page=5000
+            )
             
-            if candidate_pages:
-                # 方案 A: 使用 Stage 3 候选页面
-                logger.info(f"   🎯 使用 Stage 3 候选页面构建内容...")
-                
-                # 收集所有候选页面编号
-                all_candidate_page_nums = set()
-                for pages in candidate_pages.values():
-                    all_candidate_page_nums.update(pages)
-                
-                # 按页码排序，限制最多 50 页
-                sorted_pages = sorted(all_candidate_page_nums)[:50]
-                logger.info(f"   📄 候选页面: {sorted_pages[:10]}... (共 {len(sorted_pages)} 页)")
-                
-                # 提取这些页面的内容
-                for page_num in sorted_pages:
-                    if page_num <= len(artifacts):
-                        artifact = artifacts[page_num - 1]  # 页码从 1 开始
-                        content = artifact.get("content", "") or artifact.get("markdown", "") or ""
-                        if content:
-                            content_parts.append(f"=== 第 {page_num} 页 ===\n{content}")
-                
-                # 构建路由提示
-                routing_hint = "\n".join([
-                    f"- {data_type}: 第 {', '.join(map(str, pages[:10]))} 页..."
-                    for data_type, pages in candidate_pages.items()
-                ])
-            else:
-                # 方案 B: Fallback 到前 20 页
-                logger.info(f"   ⚠️ 没有 Stage 3 路由结果，使用前 20 页...")
-                for i, artifact in enumerate(artifacts[:20]):
-                    content = artifact.get("content", "") or artifact.get("markdown", "") or ""
-                    if content:
-                        content_parts.append(f"=== 第 {i + 1} 页 ===\n{content}")
-                routing_hint = "（没有路由提示，请自行分析）"
-            
-            # 合并内容，限制总长度
-            content_text = "\n\n".join(content_parts)
-            if len(content_text) > 50000:  # 增加到 50000 字符
-                content_text = content_text[:50000] + "\n\n... (内容已截断)"
-            
-            # 🌟 构建用户消息
-            if candidate_pages:
-                user_message = f"""
+            user_message = f"""
 请分析以下 PDF 内容，提取数据并写入数据库：
 
 📌 Stage 3 路由提示（重点页面）：
@@ -452,8 +437,19 @@ PDF 内容（候选页面）：
 
 请开始执行！
 """
-            else:
-                user_message = f"""
+        else:
+            # Fallback 到前 20 页
+            logger.info(f"   ⚠️ 没有 Stage 3 路由结果，使用前 20 页...")
+            
+            from nanobot.ingestion.utils.content_builder import build_content_by_pages
+            content_text = build_content_by_pages(
+                artifacts,
+                start_page=1,
+                end_page=20,
+                max_chars=50000
+            )
+            
+            user_message = f"""
 请分析以下 PDF 内容，提取数据并写入数据库：
 
 PDF 内容：
@@ -465,7 +461,89 @@ PDF 内容：
 
 请开始执行！
 """
-
+        
+        return user_message
+    
+    @staticmethod
+    async def run_agentic_write(
+        artifacts: List[Dict[str, Any]],
+        company_id: int,
+        year: int,
+        doc_id: str,
+        document_id: int,
+        is_index_report: bool = False,
+        index_theme: str = None,
+        confirmed_doc_industry: str = None,
+        db_client: Any = None,
+        extraction_types: List[str] = None,
+        progress_callback: Any = None,
+        stage3_result: Dict[str, Any] = None,  # 🌟 v4.8: Stage 3 路由结果
+        context_result: Dict[str, Any] = None  # 🌟 v4.10: Stage 3.5 結構化上下文
+    ) -> Dict[str, Any]:
+        """
+        🌟 Agentic 多表写入（v4.10 - 使用結構化上下文）
+        
+        根据文档类型使用不同的写入策略：
+        - 指数报告（规则 A）：所有成分股指派同一行业
+        - 年报（规则 B）：AI 提取各公司行业
+        
+        🌟 v4.10 新特性：
+        - 使用 Stage 3.5 的結構化上下文（章節樹、表格上下文）
+        - Agent 不再需要同時做「理解文檔」和「提取數據」
+        - 表格帶有所屬章節、附近文本等上下文信息
+        
+        Args:
+            artifacts: Artifacts 列表
+            company_id: 公司 ID
+            year: 年份
+            doc_id: 文档 ID
+            document_id: 文档内部 ID
+            is_index_report: 是否为指数报告
+            index_theme: 指数主题
+            confirmed_doc_industry: 报告定义的行业
+            db_client: DB 客户端
+            extraction_types: 提取类型
+            progress_callback: 进度回调
+            stage3_result: Stage 3 路由结果（包含候选页面）
+            context_result: Stage 3.5 結構化上下文（章節樹、表格上下文）
+            
+        Returns:
+            Dict: 写入结果
+        """
+        extraction_types = extraction_types or ["revenue_breakdown", "key_personnel", "financial_metrics"]
+        
+        logger.info(f"🎯 Stage 4: Agentic 写入（v4.0 Tool Calling）...")
+        
+        # 🌟 构建 Tools Registry
+        tools_registry = Stage4AgenticExtractor._build_tools_registry(db_client)
+        
+        # 🌟 v4.10: 使用拆分的辅助方法构建 Prompt
+        system_prompt = cls._build_system_prompt(
+            company_id=company_id,
+            document_id=document_id,
+            is_index_report=is_index_report,
+            index_theme=index_theme,
+            confirmed_doc_industry=confirmed_doc_industry
+        )
+        
+        if context_result:
+            logger.info(f"   🏗️ 使用 Stage 3.5 結構化上下文...")
+            user_message = cls._build_user_message_with_context(
+                artifacts=artifacts,
+                company_id=company_id,
+                year=year,
+                document_id=document_id,
+                context_result=context_result
+            )
+        else:
+            logger.info(f"   ⚠️ 没有 Stage 3.5 上下文，使用候选页面...")
+            user_message = cls._build_user_message_fallback(
+                artifacts=artifacts,
+                company_id=company_id,
+                year=year,
+                document_id=document_id,
+                stage3_result=stage3_result
+            )
         
         # 🌟 创建 AgenticExecutor
         executor = AgenticExecutor(

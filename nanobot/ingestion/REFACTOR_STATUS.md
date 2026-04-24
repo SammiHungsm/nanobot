@@ -22,6 +22,87 @@
 ### 4. 提取工具类
 - ✅ `CrossPageTableMerger` → `utils/table_merger.py`
 
+### 5. 公共模块统一
+- ✅ `LLMMixin` - 统一 LLM 客户端访问 (`utils/llm_mixin.py`)
+- ✅ `PDFParser` - 统一 PDF 解析 (`nanobot/core/pdf_core.py`)
+- ✅ `llm_core` - 统一 LLM 调用 (`nanobot/core/llm_core.py`)
+
+---
+
+## 🔴 待解决的重复代码问题 (2026-04-24)
+
+详见: [CODE_REVIEW_DUPLICATES.md](CODE_REVIEW_DUPLICATES.md)
+
+### 高优先级
+| # | 问题 | 位置 | 建议方案 | 状态 |
+|---|------|------|----------|------|
+| 1 | `_parse_json_response` 重复 | `stage4_agentic_extractor.py` + `stage4_fallback_extractor.py` | 提取到 `utils/json_utils.py` | ✅ 已完成 |
+| 2 | `Stage6Validator` 日志输出 `Stage 7` | `stages/stage6_validator.py` | 修复日志信息 | ✅ 已完成 |
+
+### 中优先级
+| # | 问题 | 位置 | 建议方案 | 状态 |
+|---|------|------|----------|------|
+| 3 | `_get_precise_context` 重复 | `stage2_enrichment.py` + `stage3_5_context_builder.py` | 提取到 `utils/rag_context.py` | ✅ 已完成 |
+| 4 | `insert_processing_history` 重复调用 | `pipeline.py` 多处 | 添加 `_record_stage()` 辅助方法 | ✅ 已完成 |
+
+### 低优先级
+| # | 问题 | 位置 | 建议方案 | 状态 |
+|---|------|------|----------|------|
+| 5 | `build_content_text` 内容拼接重复 | `stage4_*.py` | 提取到 `utils/content_builder.py` | ✅ 已完成 |
+| 6 | `run_agentic_write` 方法过长 (>400行) | `stage4_agentic_extractor.py` | 拆分为多个辅助方法 | ✅ 已完成 |
+
+---
+
+## 📂 建议新增的公共模块
+
+| 模块 | 位置 | 用途 |
+|------|------|------|
+| `json_utils.py` | `utils/json_utils.py` | JSON 解析公共函数 |
+| `rag_context.py` | `utils/rag_context.py` | RAG 上下文提取 |
+| `content_builder.py` | `utils/content_builder.py` | 内容拼接构建 |
+| `keyword_matcher.py` | `utils/keyword_matcher.py` | 关键字匹配 |
+| `artifact_helpers.py` | `utils/artifact_helpers.py` | Artifact 类型判断和处理 |
+
+---
+
+## ⚠️ 待解决的问题
+
+### 1. 重复的 connect/close 方法
+- `DocumentPipeline.connect()` 和基类重复
+- 建议：删除或改为调用基类方法
+
+### 2. 主入口不统一
+- WebUI 调用 `process_pdf_full()` 而不是 `run()`
+- 建议：保留 `process_pdf_full()` 或重构 WebUI
+
+### 3. extract_information 未实现
+- `DocumentPipeline` 应该实现 `extract_information()`
+- 当前逻辑分散在 `smart_extract()` 和 `process_pdf_full()` 中
+
+### 4. Stage6Validator 版本注释不一致
+- 注释说是 `Stage 6`，日志输出 `Stage 7`
+- 这是遗留问题，需要清理
+
+### 5. InsertArtifactRelationTool 清理
+- 注释说已移除，但仍列在 `_build_tools_registry` 的注释中
+- 需要确认是否完全清理
+
+---
+
+## 🎯 下一步建议
+
+### Phase 1: 紧急修复
+1. **修复 `Stage6Validator` 日志信息** - 修改 `Stage 7` → `Stage 6`
+2. **创建 `utils/json_utils.py`** - 消除 `_parse_json_response` 重复
+
+### Phase 2: 中期重构
+3. **创建 `utils/rag_context.py`** - 统一 RAG-Anything 上下文提取
+4. **Pipeline 辅助方法** - 添加 `_record_stage()` 减少重复调用
+
+### Phase 3: 长期优化
+5. **内容构建器** - 创建 `utils/content_builder.py`
+6. **`run_agentic_write` 拆分** - 拆分为多个辅助方法
+
 ---
 
 ## 📊 当前架构状态
@@ -42,37 +123,6 @@ BaseIngestionPipeline (基类) - 10KB
     └── AgenticPipeline (子类) - 6KB
         └── extract_information() - Agent 提取
 ```
-
----
-
-## ⚠️ 待解决的问题
-
-### 1. 重复的 connect/close 方法
-- `DocumentPipeline.connect()` 和基类重复
-- 建议：删除或改为调用基类方法
-
-### 2. 主入口不统一
-- WebUI 调用 `process_pdf_full()` 而不是 `run()`
-- 建议：保留 `process_pdf_full()` 或重构 WebUI
-
-### 3. extract_information 未实现
-- `DocumentPipeline` 应该实现 `extract_information()`
-- 当前逻辑分散在 `smart_extract()` 和 `process_pdf_full()` 中
-
----
-
-## 🎯 下一步建议
-
-### 方案 A：保守重构（推荐）
-1. 保持 `process_pdf_full()` 作为主入口（不删除）
-2. 让 `connect()` 和 `close()` 调用基类方法
-3. 逐步将 `smart_extract()` 的逻辑迁移到 `extract_information()`
-
-### 方案 B：激进重构
-1. 删除 `connect()` 和 `close()`（使用基类的）
-2. 重命名 `process_pdf_full()` → `run()`
-3. 将 `smart_extract()` → `extract_information()`
-4. 更新 WebUI 调用方式
 
 ---
 

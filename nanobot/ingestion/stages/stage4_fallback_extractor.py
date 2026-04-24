@@ -15,6 +15,7 @@ from typing import Dict, Any, List
 from loguru import logger
 
 from nanobot.core.llm_core import llm_core
+from nanobot.ingestion.utils.json_utils import parse_llm_json_response
 
 
 class Stage4FallbackExtractor:
@@ -282,34 +283,13 @@ class Stage4FallbackExtractor:
     
     @staticmethod
     def _parse_json_response(response: str) -> List[Dict]:
-        """解析 LLM 返回的 JSON"""
-        try:
-            # 嘗試從代碼塊中提取 JSON
-            json_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', response)
-            if json_match:
-                json_str = json_match.group(1)
-            else:
-                # 嘗試直接解析整個響應
-                json_str = response
-            
-            data = json.loads(json_str)
-            
-            # 檢查常見的包裝結構
-            if isinstance(data, dict):
-                for key in ['segments', 'shareholders', 'data', 'result']:
-                    if key in data:
-                        return data[key]
-                # 如果是單一對象，包裝成列表
-                return [data]
-            
-            if isinstance(data, list):
-                return data
-            
-            return []
-            
-        except json.JSONDecodeError as e:
-            logger.warning(f"   ⚠️ JSON 解析失敗: {e}")
-            return []
+        """
+        🌟 已废弃：使用 utils/json_utils.py 的 parse_llm_json_response
+        
+        此方法保留用于向后兼容，新代码应直接使用：
+        from nanobot.ingestion.utils.json_utils import parse_llm_json_response
+        """
+        return parse_llm_json_response(response)
     
     @staticmethod
     async def _insert_revenue_breakdown(

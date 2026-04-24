@@ -28,6 +28,7 @@ from typing import Dict, Any, List, Optional
 from loguru import logger
 
 from nanobot.core.llm_core import llm_core
+from nanobot.ingestion.utils.rag_context import extract_precise_context
 
 
 class Stage2Enrichment:
@@ -158,56 +159,15 @@ class Stage2Enrichment:
     @staticmethod
     def _get_precise_context(artifacts: List[Dict[str, Any]], target_idx: int) -> Dict[str, str]:
         """
-        模擬 RAG-Anything 的精準上下文提取：
+        🌟 v4.10: 已迁移到 utils/rag_context.py
+        
+        此方法保留用于向后兼容，新代码应直接使用：
+        from nanobot.ingestion.utils.rag_context import extract_precise_context
+        
+        模拟 RAG-Anything 的精準上下文提取：
         尋找最接近的標題 (Title)、前文 (Intro) 與後文 (Explanation)
         """
-        context = {
-            "closest_heading": "無明確標題",
-            "previous_text": "",
-            "caption": "",
-            "next_text": ""
-        }
-
-        # 1. 往前找 (尋找標題和前文)
-        for i in range(target_idx - 1, -1, -1):
-            artifact = artifacts[i]
-            if artifact is None or artifact.get("type") != "text":
-                continue
-
-            content = str(artifact.get("content", "")).strip()
-            if not content:
-                continue
-
-            # 判斷是否為標題 (Markdown 標題如 #, ##, 或全大寫短句)
-            if content.startswith("#") or (len(content) < 50 and content.isupper()):
-                if context["closest_heading"] == "無明確標題":
-                    context["closest_heading"] = content
-
-            # 判斷是否為圖說 (如 Figure 1:, Table 2:)
-            elif "Figure" in content[:15] or "Table" in content[:15] or "圖" in content[:10]:
-                if not context["caption"]:
-                    context["caption"] = content
-
-            # 一般前文 (只取最靠近的兩個段落)
-            elif not context["previous_text"] and len(content) > 20:
-                context["previous_text"] = content
-
-            # 如果標題和前文都找到了，就停止往前找
-            if context["closest_heading"] != "無明確標題" and context["previous_text"]:
-                break
-
-        # 2. 往後找 (尋找圖表後的解釋分析)
-        for i in range(target_idx + 1, min(target_idx + 5, len(artifacts))):
-            artifact = artifacts[i]
-            if artifact is None or artifact.get("type") != "text":
-                continue
-
-            content = str(artifact.get("content", "")).strip()
-            if content and len(content) > 20:
-                context["next_text"] = content
-                break  # 找到第一段有意義的後文就停止
-
-        return context
+        return extract_precise_context(artifacts, target_idx)
 
     @staticmethod
     async def _find_nearby_image_for_table(

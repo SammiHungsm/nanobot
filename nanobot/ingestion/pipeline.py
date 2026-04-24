@@ -64,6 +64,42 @@ class DocumentPipeline(BaseIngestionPipeline):
             await self.db.close()
     
     # ===========================================
+    # 🌟 辅助方法
+    # ===========================================
+    
+    async def _record_stage(
+        self,
+        document_id: int,
+        stage: str,
+        message: str,
+        artifacts_count: int = 0,
+        status: str = "success"
+    ):
+        """
+        🌟 记录 Stage 执行历史（v4.10）
+        
+        统一 insert_processing_history 调用，减少重复代码。
+        
+        Args:
+            document_id: 文档 ID
+            stage: Stage 名称（如 "stage0", "stage1"）
+            message: 状态消息
+            artifacts_count: artifacts 数量
+            status: 状态（success/failed）
+        """
+        if self.db and document_id:
+            try:
+                await self.db.insert_processing_history(
+                    document_id=document_id,
+                    stage=stage,
+                    status=status,
+                    message=message,
+                    artifacts_count=artifacts_count
+                )
+            except Exception as e:
+                logger.warning(f"   ⚠️ 记录 Stage {stage} 历史失败: {e}")
+    
+    # ===========================================
     # 🌟 实现抽象方法（委托给 Stage 4）
     # ===========================================
     
