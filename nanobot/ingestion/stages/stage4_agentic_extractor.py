@@ -223,6 +223,9 @@ Step 3: 动态写入 🌟 关键！（选择正确的 Tool）
    → 使用 insert_mentioned_company
    → 例子：「本集团下辖子公司 ABC Limited」、「我们的竞争对手 XYZ Corp」
    → relation_type 可选: subsidiary, competitor, partner, investor, customer, mentioned
+   → 🆕 v4.7: 如果知道该公司的股票代码，请填写 stock_code 参数（例如：1038.HK, 0700.HK）
+   → 🆕 v4.7: 如果知道该公司的行业，请填写 industry 参数（例如：Infrastructure, Retail）
+   → 🆕 v4.7: 如果知道该公司的核数师，请填写 auditor 参数
 
 8️⃣ 自定义字段（Schema 没有的）🆕
    → 使用 update_dynamic_attributes

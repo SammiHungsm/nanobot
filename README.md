@@ -20,7 +20,7 @@
 
 | 模組 | 版本 | 說明 |
 |------|------|------|
-| **Pipeline** | v4.8 | Stage 1 先行架構，移除 PyMuPDF 依賴 |
+| **Pipeline** | v4.11 | Stage 2 RAG-Anything 上下文增強：同頁擴展、heading/title 掃描、多 caption/next_text 收集 |
 | **Schema** | v2.3 | 雙軌制行業、JSONB 動態屬性、完美溯源 |
 | **Vanna Service** | v2.3.0 | Text-to-SQL 微服務 |
 
@@ -314,11 +314,16 @@ PDF 上傳
     │
     ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ Stage 2: 豐富化 (Enrichment) - RAGAnything                   │
+│ Stage 2: 豐富化 (Enrichment) - RAG-Anything v4.11              │
 │ ├─ 保存所有頁面到 document_pages 表                          │
-│ ├─ Vision 分析圖片（帶精準上下文）                           │
+│ ├─ Vision 分析圖片（帶 RAG-Anything 精準上下文）             │
+│ │   • 一次 API 調用，同時輸出 type/title/markdown/語意描述   │
+│ │   • extend_to_page_start：自動擴展到同一頁開頭             │
+│ │   • 支援 heading/title 類型 artifact                      │
+│ │   • 收集所有 caption 和 next_text（不只第一個）             │
+│ ├─ 語意 + 結構化組合：semantic_description + markdown_repr   │
 │ ├─ 圖文關聯映射                                              │
-│ └─ 防禦性表格修復（PyMuPDF 截圖重解）                        │
+│ └─ 防禦性表格修復（HTML 表格轉 Markdown）                    │
 └─────────────────────────────────────────────────────────────┘
     │
     ▼

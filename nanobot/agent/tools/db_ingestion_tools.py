@@ -2622,7 +2622,9 @@ class InsertMentionedCompanyTool(Tool):
                     "type": "string", 
                     "enum": ["subsidiary", "competitor", "partner", "investor", "customer", "mentioned"],
                     "description": "與主公司的關係分類"
-                }
+                },
+                "industry": {"type": "string", "description": "公司所屬行業 (如有)"},
+                "auditor": {"type": "string", "description": "核數師 (如有)"}
             },
             "required": ["relation_type"]
         }
@@ -2632,9 +2634,11 @@ class InsertMentionedCompanyTool(Tool):
         return False
 
     async def execute(self, name_en: str = None, name_zh: str = None, stock_code: str = None, 
-                     relation_type: str = "mentioned", context: dict = None) -> str:
+                     relation_type: str = "mentioned", industry: str = None, auditor: str = None,
+                     context: dict = None) -> str:
         """
         🌟 v4.5: 顯式添加 context 參數，讓 agentic_executor 能夠檢測並傳入
+        🌟 v4.7: 添加 industry 和 auditor 參數
         """
         context = context or {}
         document_id = context.get("document_id")
@@ -2664,12 +2668,14 @@ class InsertMentionedCompanyTool(Tool):
             stock_code = f"MENTIONED_{uuid.uuid4().hex[:6]}"
         
         try:
-            # 1. UPSERT company
+            # 1. UPSERT company (v4.7: 傳遞 industry 和 auditor)
             company_id = await db_client.upsert_company(
                 stock_code=stock_code,
                 name_en=name_en,
                 name_zh=name_zh,
-                name_source="agentic_extractor"
+                name_source="agentic_extractor",
+                industry=industry,
+                auditor=auditor
             )
             
             if not company_id:

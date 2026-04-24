@@ -295,6 +295,13 @@ class DBClient:
             # 1. 查找現有公司
             existing = await self.get_company_by_stock_code(normalized_code)
             
+            # 🆕 v4.7: 如果 stock_code 是 MENTIONED_xxx 格式，先根據公司名稱查找
+            if not existing and normalized_code.startswith("MENTIONED"):
+                if name_en or name_zh:
+                    existing = await self.search_companies_by_name(name_en or name_zh)
+                    if existing:
+                        logger.info(f"🔄 找到同名公司 {name_en or name_zh} (ID: {existing['id']})，跳過創建重複記錄")
+            
             if existing:
                 # 2. 公司已存在，執行「按需更新」
                 company_id = existing['id']
