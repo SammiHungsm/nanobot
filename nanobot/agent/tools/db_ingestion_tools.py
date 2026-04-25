@@ -1660,12 +1660,12 @@ class InsertEntityRelationTool(Tool):
             actual_target_id = target_company_id
             
             if source_company_name and not actual_source_id:
-                actual_source_id, err = await _resolve_company_id(db, company_name=source_company_name, context=context)
+                actual_source_id, err = await _resolve_company_id(db, None, company_name=source_company_name, context=context)
                 if err:
                     return json.dumps({"success": False, "error": f"Cannot resolve source company: {err}"}, indent=2)
             
             if target_company_name and not actual_target_id:
-                actual_target_id, err = await _resolve_company_id(db, company_name=target_company_name, context=context)
+                actual_target_id, err = await _resolve_company_id(db, None, company_name=target_company_name, context=context)
                 if err:
                     return json.dumps({"success": False, "error": f"Cannot resolve target company: {err}"}, indent=2)
             
