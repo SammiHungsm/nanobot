@@ -27,23 +27,16 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- 模糊搜索
 CREATE EXTENSION IF NOT EXISTS "pg_trgm";
 
--- 設置 AGE search path
-SET search_path = ag_catalog, "$user", public;
+-- ============================================================
+-- 【注意】AGE 圖譜創建已移至 01-init-age.sql
+-- 這裡只創建關係型表結構
+-- ============================================================
 
--- 創建圖譜
-SELECT create_graph('ownership_graph');
+-- 設置 AGE search path（如果 AGE 已啟用）
+SET search_path = public, "$user", ag_catalog;
 
--- 創建頂點標籤 (Vertex Labels)
-SELECT create_vlabel('ownership_graph', 'Company');
-SELECT create_vlabel('ownership_graph', 'Person');
-SELECT create_vlabel('ownership_graph', 'Trust');
-
--- 創建邊標籤 (Edge Labels)
-SELECT create_elabel('ownership_graph', 'OWNS_SHARES');
-SELECT create_elabel('ownership_graph', 'CONTROLS');
-SELECT create_elabel('ownership_graph', 'MANAGES');
-SELECT create_elabel('ownership_graph', 'SUBSIDIARY_OF');
-SELECT create_elabel('ownership_graph', 'DIRECTOR_OF');
+-- 圖譜創建已由 01-init-age.sql 處理，這裡不再重複創建
+-- SELECT create_graph('ownership_graph');
 
 -- ============================================================
 -- 【核心表結構 Core Tables】
