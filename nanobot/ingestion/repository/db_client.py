@@ -1581,6 +1581,51 @@ class DBClient:
         async with self.connection() as conn:
             return await conn.execute(sql, *args)
     
+    async def execute_age_query(self, cypher: str, graph_name: str = 'annual_report_graph', 
+                                return_columns: List[str] = None) -> List[Dict]:
+        """
+        🌟 v5.0: 執行 Apache AGE Cypher 查詢
+        
+        Apache AGE 需要 search_path 設置為 ag_catalog。
+        此方法自動處理設置並執行 Cypher 查詢。
+        
+        Args:
+            cypher: Cypher 查詢字符串（不需要 $$ 包裝）
+            graph_name: 圖譜名稱（默認 'annual_report_graph'）
+            return_columns: 返回列定義（如 ['name agtype', 'value agtype']）
+            
+        Returns:
+            List[Dict]: 查詢結果
+            
+        Example:
+            results = await db.execute_age_query(
+                cypher="MATCH (c:Company) RETURN c.name, c.stock_code",
+                return_columns=['name agtype', 'stock_code agtype']
+            )
+        """
+        if return_columns is None:
+            return_columns = ['result agtype']
+        
+        # 構建 AGE SQL 查詢
+        columns_def = ', '.join(return_columns)
+        sql = f"""SET search_path = ag_catalog, public;
+        SELECT * FROM cypher('{graph_name}', $$
+          {cypher}
+        $$) AS ({columns_def});"""
+        
+        try:
+            async with self.connection() as conn:
+                # 執行設置 search_path
+                await conn.execute("SET search_path = ag_catalog, public;")
+                # 執行 Cypher 查詢
+                rows = await conn.fetch(
+                    f"SELECT * FROM cypher('{graph_name}', $${cypher}$$) AS ({columns_def});"
+                )
+                return [dict(row) for row in rows]
+        except Exception as e:
+            logger.error(f"AGE query failed: {e}")
+            raise
+    
     async def fetch_one(self, sql: str, *args) -> Optional[Dict]:
         """獲取單行"""
         # 🌟 使用连接池（避免并发冲突）

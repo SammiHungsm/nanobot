@@ -264,12 +264,13 @@ class GetJSONBSchemaTool(Tool):
 
 class PrepareVannaPromptTool(Tool):
     """
-    [Tool] 準備帶有動態 Schema 信息的 Vanna Prompt
+    [⚠️ DEPRECATED 廢棄工具] 準備帶有動態 Schema 信息的 Prompt
     
     功能：
     - 自動注入動態 Keys 到 Prompt
     - 添加 JSONB 查詢語法提示
-    - 確保 Vanna 能正確生成 JSONB 查詢
+    
+    ⚠️ 注意：已被 DirectSQLTool 取代，不再需要 Vanna 預訓練
     """
     
     @property
@@ -279,8 +280,9 @@ class PrepareVannaPromptTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Prepare a Vanna prompt with dynamic schema information injected. "
-            "This ensures Vanna knows about all hidden JSONB attributes and can generate correct SQL."
+            "[DEPRECATED] Prepare a prompt with dynamic schema information. "
+            "⚠️ This tool is deprecated. Use DirectSQLTool with get_dynamic_keys instead. "
+            "Agent can write SQL directly without Vanna pre-training."
         )
     
     @property
@@ -290,11 +292,11 @@ class PrepareVannaPromptTool(Tool):
             "properties": {
                 "user_question": {
                     "type": "string",
-                    "description": "The user's natural language question"
+                    "description": "[DEPRECATED] The user's natural language question"
                 },
                 "additional_context": {
-                    "type": "string",
-                    "description": "Additional context to include in the prompt"
+                    "type": "string", 
+                    "description": "[DEPRECATED] Additional context to include"
                 }
             },
             "required": ["user_question"]
@@ -303,6 +305,10 @@ class PrepareVannaPromptTool(Tool):
     @property
     def read_only(self) -> bool:
         return True
+    
+    @property
+    def deprecated(self) -> bool:
+        return True  # 🌟 標記為廢棄
     
     async def execute(
         self,

@@ -48,8 +48,8 @@ from nanobot.agent.tools.db_ingestion_tools import (
 )
 from nanobot.agent.tools.dynamic_schema_tools import (
     GetDynamicKeysTool,
-    GetJSONBSchemaTool,
-    PrepareVannaPromptTool
+    GetJSONBSchemaTool
+    # ⚠️ PrepareVannaPromptTool 已廢棄，不再使用
 )
 from nanobot.core.llm_core import llm_core
 from nanobot.providers.base import LLMProvider
@@ -110,10 +110,11 @@ class AgenticPipeline(BaseIngestionPipeline):
         # 🌟 审核队列 Tools
         registry.register(CreateReviewRecordTool())
         
-        # 🌟 Vanna 相关 Tools
-        registry.register(PrepareVannaPromptTool())
+        # 🌟 Schema 查詢 Tools（取代 Vanna）
+        registry.register(GetDynamicKeysTool())
+        registry.register(GetJSONBSchemaTool())
         
-        logger.info(f"✅ Tools Registry 已构建: {len(registry.tools)} 个工具")
+        logger.info(f"✅ Tools Registry 已构建: {len(registry.tools)} 個工具")
         
         return registry
     

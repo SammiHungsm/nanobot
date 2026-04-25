@@ -340,10 +340,12 @@ class EntityResolver:
     
     def generate_vanna_training_data(self) -> str:
         """
-        生成 Vanna 訓練文檔（包含所有標準名稱）
+        [⚠️ DEPRECATED 廢棄方法] 生成 Vanna 訓練文檔
         
         Returns:
             str: 訓練文檔
+        
+        ⚠️ 注意：已被 DirectSQLTool 取代，不再需要 Vanna 預訓練
         """
         lines = [
             "# 財務指標標準名稱對照表 (v3.0)",

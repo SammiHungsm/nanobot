@@ -314,6 +314,29 @@ class AgentLoop:
             self.tools.register(AssembleMultimodalPromptTool())
             logger.info("✅ 多模態圖表檢索 Tools 註冊成功！")
             
+        # 🌟 3. 註冊數據庫查詢工具（讓 Agent 能回答財務問題）
+        try:
+            from nanobot.agent.tools.direct_sql_tool import DirectSQLTool, GetTableInfoTool
+            from nanobot.agent.tools.semantic_search_tool import SemanticSearchTool, GetDocumentContentTool
+            from nanobot.agent.tools.age_tool import (
+                AgeGraphQueryTool,
+                GetPersonNetworkTool,
+                GetCompanyControllersTool
+            )
+            from nanobot.agent.tools.db_ingestion_tools import GetDBSchemaTool
+            
+            self.tools.register(DirectSQLTool())
+            self.tools.register(GetTableInfoTool())
+            self.tools.register(SemanticSearchTool())
+            self.tools.register(GetDocumentContentTool())
+            self.tools.register(AgeGraphQueryTool())
+            self.tools.register(GetPersonNetworkTool())
+            self.tools.register(GetCompanyControllersTool())
+            self.tools.register(GetDBSchemaTool())
+            logger.info("✅ 數據庫查詢 Tools 註冊成功！ (DirectSQL, SemanticSearch, Apache AGE)")
+        except ImportError as e:
+            logger.warning(f"⚠️ 無法載入數據庫查詢 Tools: {e}")
+            
     async def _connect_mcp(self) -> None:
         """Connect to configured MCP servers (one-time, lazy)."""
         if self._mcp_connected or self._mcp_connecting or not self._mcp_servers:

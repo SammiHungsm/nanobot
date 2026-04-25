@@ -9,9 +9,11 @@ x-common-config: &common-config
     - ./data/raw:/app/data/raw
 
 services:
-  # PostgreSQL Database - Financial Metrics Storage
+  # PostgreSQL Database - Financial Metrics + Graph (Apache AGE) + Vector Search
   postgres-financial:
-    image: pgvector/pgvector:pg16
+    build:
+      context: ./storage/postgres-age
+      dockerfile: Dockerfile
     container_name: postgres-financial
     restart: unless-stopped
     ports:
@@ -36,47 +38,8 @@ services:
           memory: 1G
     command: >
       postgres 
-      -c shared_preload_libraries=vector 
+      -c shared_preload_libraries='age,vector' 
       -c max_connections=200
-
-  # Neo4j Graph Database - Entity Relations & Knowledge Graph
-  neo4j:
-    image: neo4j:5-community
-    container_name: neo4j
-    restart: unless-stopped
-    ports:
-      - "7474:7474"  # Browser UI
-      - "7687:7687"  # Bolt protocol
-    environment:
-      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:-password}
-      - BLOBS_STORAGE__ENABLED=false
-      - NEO4J_PLUGINS=["apoc"]
-      - NEO4J_dbms_memory_heap_initial__size=256M
-      - NEO4J_dbms_memory_heap_max__size=512M
-    volumes:
-      - neo4j_data:/data
-      - neo4j_logs:/logs
-      - ./storage/neo4j_import:/import
-      - ./storage/neo4j_import/init.sh:/startup/init.sh
-    environment:
-      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:-password}
-      - BLOBS_STORAGE__ENABLED=false
-      - NEO4J_PLUGINS=["apoc"]
-      - NEO4J_dbms_memory_heap_initial__size=256M
-      - NEO4J_dbms_memory_heap_max__size=512M
-      - NEO4J_dbms_security_procedures_unrestricted=apoc.*
-      - NEO4J_dbms_startup_max_wait_time=60
-    command: "/startup/init.sh"
-    healthcheck:
-      test: ["CMD", "neo4j", "status", "--health-status"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 1G
 
   # Nanobot Gateway - Main bot service
   nanobot-gateway:
@@ -99,8 +62,6 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - LLAMA_CLOUD_API_KEY=${LLAMA_CLOUD_API_KEY}
       - LLAMAPARSE_TIER=${LLAMAPARSE_TIER:-agentic}
-      - NEO4J_HOST=neo4j
-      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-password}
     volumes:
       - ./config:/app/config
       - ~/.nanobot:/root/.nanobot
@@ -108,8 +69,6 @@ services:
       - ./data/raw:/app/data/raw
     depends_on:
       postgres-financial:
-        condition: service_healthy
-      neo4j:
         condition: service_healthy
     deploy:
       resources:
@@ -147,12 +106,8 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - LLAMA_CLOUD_API_KEY=${LLAMA_CLOUD_API_KEY}
       - LLAMAPARSE_TIER=${LLAMAPARSE_TIER:-agentic}
-      - NEO4J_HOST=neo4j
-      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-password}
     depends_on:
       postgres-financial:
-        condition: service_healthy
-      neo4j:
         condition: service_healthy
     restart: unless-stopped
     deploy:
@@ -180,12 +135,8 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - LLAMA_CLOUD_API_KEY=${LLAMA_CLOUD_API_KEY}
       - LLAMAPARSE_TIER=${LLAMAPARSE_TIER:-agentic}
-      - NEO4J_HOST=neo4j
-      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-password}
     depends_on:
       postgres-financial:
-        condition: service_healthy
-      neo4j:
         condition: service_healthy
     restart: unless-stopped
     deploy:
@@ -206,10 +157,6 @@ volumes:
   postgres_data:
     driver: local
   pdf_upload_data:
-    driver: local
-  neo4j_data:
-    driver: local
-  neo4j_logs:
     driver: local
 
 networks:

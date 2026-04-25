@@ -1,10 +1,10 @@
 """
-統一工具註冊模組 (v4.9)
+統一工具註冊模組 (v4.10)
 
 功能：
 1. 註冊 DirectSQLTool（取代 Vanna）
 2. 註冊 SemanticSearchTool（向量搜索）
-3. 註冊 Neo4j Graph Query Tools
+3. 註冊 Apache AGE Graph Query Tools（商用友好 License）
 4. 確保所有工具正確註冊
 
 Usage:
@@ -57,8 +57,9 @@ def register_all_tools(registry) -> None:
         )
         registry.register(GetDynamicKeysTool())
         registry.register(GetJSONBSchemaTool())
-        registry.register(PrepareVannaPromptTool())
-        logger.info("✅ Registered dynamic schema tools")
+        # ⚠️ PrepareVannaPromptTool 已廢棄，不再註冊
+        # registry.register(PrepareVannaPromptTool())
+        logger.info("✅ Registered dynamic schema tools (prepare_vanna_prompt deprecated)")
     except ImportError as e:
         logger.warning(f"⚠️ Failed to import dynamic_schema_tools: {e}")
     
@@ -87,21 +88,25 @@ def register_all_tools(registry) -> None:
         logger.warning(f"⚠️ Failed to import semantic_search_tool: {e}")
     
     # ============================================================
-    # 3.6 註冊 Neo4j 圖譜查詢工具 🌟
+    # 3.6 註冊 Apache AGE 圖譜查詢工具 🌟
     # ============================================================
+    # 🌟 License 優勢：Apache License 2.0（商用友好）+ PostgreSQL License
+    # 無 GPL 傳染風險，適合商業產品
     try:
-        from nanobot.agent.tools.neo4j_tool import (
-            Neo4jGraphQueryTool,
-            GetPersonHoldingsTool,
-            GetCompanyControllersTool
+        from nanobot.agent.tools.age_tool import (
+            AgeGraphQueryTool,
+            GetPersonNetworkTool,
+            GetCompanyControllersTool,
+            CreateGraphRelationTool
         )
-        registry.register(Neo4jGraphQueryTool())
-        registry.register(GetPersonHoldingsTool())
+        registry.register(AgeGraphQueryTool())
+        registry.register(GetPersonNetworkTool())
         registry.register(GetCompanyControllersTool())
-        logger.info("✅ Registered Neo4j graph query tools")
+        registry.register(CreateGraphRelationTool())
+        logger.info("✅ Registered Apache AGE graph query tools (commercial-friendly license)")
         
     except ImportError as e:
-        logger.warning(f"⚠️ Failed to import neo4j_tool: {e}")
+        logger.warning(f"⚠️ Failed to import age_tool: {e}")
     
     # ============================================================
     # 4. 註冊多模態 RAG 工具 (跨模態圖文關聯) 🌟 使用新的 Tool Wrapper
@@ -348,11 +353,11 @@ TOOL_CATEGORIES = {
     ],
     "dynamic_schema": [
         "get_dynamic_keys",
-        "get_jsonb_schema",
-        "prepare_vanna_prompt"
+        "get_jsonb_schema"
+        # ⚠️ prepare_vanna_prompt 已廢棄 (被 DirectSQLTool 取代)
     ],
     "query": [
-        "vanna_sql",  # 🌟 主要查詢工具
+        "direct_sql",  # 🌟 主要查詢工具 (取代 vanna_sql)
         "query_financial_database",
         "search_documents"
     ],
@@ -363,6 +368,12 @@ TOOL_CATEGORIES = {
         "get_chart_context",
         "find_chart_by_figure_number",
         "assemble_multimodal_prompt"
+    ],
+    "graph_query": [  # 🌟 Apache AGE 圖譜查詢
+        "age_graph_query",
+        "get_person_network",
+        "get_company_controllers",
+        "create_graph_relation"
     ]
 }
 
