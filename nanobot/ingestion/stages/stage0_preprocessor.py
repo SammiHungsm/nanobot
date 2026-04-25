@@ -1,24 +1,18 @@
 """
-Stage 0: Preprocessing and Company Metadata Extraction (v4.7 - PyMuPDF Removed)
+Stage 0: Preprocessor + Registrar Combined (v1.0)
 
-Responsibilities:
-- 🌟 v4.7: 移除 PyMuPDF 依赖，完全基于 LlamaParse artifacts
-- 分析 Page 1 的 Markdown + 圖片，提取公司信息
-- 比單獨看封面圖片更準確
+合并了原有的 Stage 0 (Vision) + Stage 0.5 (Registrar)
 
-Flow:
-1. Stage 1 (LlamaParse) 解析 PDF → artifacts (包含 Markdown + 圖片)
-2. Stage 0: Vision 分析 Page 1 artifacts
-3. 提取: stock_code, year, name_en, name_zh
-4. Stage 0.5: 插入資料庫
+职责：
+- Vision 分析 Page 1，提取公司元数据
+- 计算 PDF Hash（重复检查）
+- 注册 Document 到 Database
+- 从封面 Metadata 创建 Company 记录
 
-🌟 v4.7: PyMuPDF 已移除，完全依賴 LlamaParse
+🌟 单一入口：run() 方法完成所有初始化工作
 """
 
-import os
-import json
-import re
-import base64
+import hashlib
 from pathlib import Path
 from typing import Dict, Any, Optional
 from loguru import logger
@@ -27,7 +21,11 @@ from nanobot.core.llm_core import llm_core
 
 
 class Stage0Preprocessor:
-    """Stage 0: 封面預處理與公司元數據提取（v4.6 - Vision After LlamaParse）"""
+    """Stage 0: 预处理 + 注册（合并版）"""
+    
+    # ===========================================
+    # 🌟 静态方法：Vision 提取（原有逻辑）
+    # ===========================================
     
     @staticmethod
     async def extract_company_from_page1(
@@ -37,413 +35,476 @@ class Stage0Preprocessor:
         vision_model: str = None,
         is_index_report: bool = False,
         confirmed_doc_industry: str = None,
-        images: list = None,  # 🌟 v4.7 新增：從 parse_result.images 傳入
-        raw_output_dir: str = None,  # 🌟 v4.7 新增：用於讀取下載的圖片
-        pdf_filename: str = None  # 🌟 v4.5 新增：用於 Fallback 提取公司信息
+        images: list = None,
+        raw_output_dir: str = None,
+        pdf_filename: str = None
     ) -> Dict[str, Any]:
         """
-        🌟 v4.6 新增: 從 LlamaParse artifacts 提取 Page 1 公司信息
-        🌟 v4.7 改進: 正確處理 artifacts（字典格式）和 images
+        🌟 从 LlamaParse artifacts 提取 Page 1 公司信息
         
         Args:
-            artifacts: LlamaParse 解析的 artifacts 列表（字典格式）
-            page_num: 頁碼（默認第 1 頁）
+            artifacts: LlamaParse 解析的 artifacts 列表
+            page_num: 頁碼
             doc_id: 文檔 ID
             vision_model: Vision 模型名稱
             is_index_report: 是否為指數報告
             confirmed_doc_industry: 確認的文檔行業
-            images: 🌟 從 parse_result.images 傳入的圖片列表
-            raw_output_dir: 🌟 圖片下載目錄
+            images: 從 parse_result.images 傳入的圖片列表
+            raw_output_dir: 圖片下載目錄
             
         Returns:
             Dict: {"stock_code", "year", "name_en", "name_zh"}
         """
-        logger.info(f"📋 Stage 0: Vision 分析 Page {page_num} (基於 LlamaParse artifacts)...")
+        logger.info(f"📋 Stage 0: Vision 分析 Page {page_num}...")
         
         if not artifacts:
             logger.warning("   ⚠️ 沒有 artifacts，無法分析")
             return {"stock_code": None, "year": 2025}
         
-        # Step 1: 找到 Page 1 的 Markdown（artifacts 是字典列表）
+        # Step 1: 找到 Page 1 的 Markdown
         page1_artifacts = [
             a for a in artifacts 
             if isinstance(a, dict) and a.get("page") == page_num
         ]
         
         if not page1_artifacts:
-            # 嘗試使用 page_number 屬性（向後兼容）
             page1_artifacts = [
                 a for a in artifacts 
                 if isinstance(a, dict) and a.get("page_number") == page_num
             ]
         
         if not page1_artifacts and artifacts:
-            # Fallback: 使用第一個 artifact
-            logger.warning(f"   ⚠️ 沒有找到 Page {page_num} 的 artifacts，使用第一個")
-            page1_artifacts = [artifacts[0]]
+            # 找第一頁
+            page1_artifacts = [a for a in artifacts if isinstance(a, dict)]
         
-        # Step 2: 收集 Page 1 的 Markdown 文字
+        if not page1_artifacts:
+            return {"stock_code": None, "year": 2025}
+        
+        # Step 2: 收集 Page 1 的文本内容
         page1_text = ""
         for artifact in page1_artifacts:
-            if isinstance(artifact, dict):
-                # 🌟 v4.4: 只處理 text 類型的 artifact，跳過 table/image/chart
-                art_type = artifact.get("type", "text")
-                if art_type not in ["text", "text_chunk"]:
-                    continue  # 跳過非文字類型
-                
-                content = artifact.get("content", "")
-                # 🌟 v4.4: 確保 content 是字符串
-                if isinstance(content, str):
-                    page1_text += content + "\n"
-                elif isinstance(content, dict):
-                    # 如果是 dict，轉為 JSON 字符串
-                    import json
-                    page1_text += json.dumps(content, ensure_ascii=False) + "\n"
-                else:
-                    page1_text += str(content) + "\n"
-                    
-                markdown = artifact.get("markdown", "")
-                if isinstance(markdown, str):
-                    page1_text += markdown + "\n"
-            elif hasattr(artifact, 'content'):
-                page1_text += str(artifact.content) + "\n"
-            elif hasattr(artifact, 'markdown'):
-                page1_text += str(artifact.markdown) + "\n"
+            content = artifact.get("content", "")
+            if content and isinstance(content, str):
+                page1_text += content + "\n\n"
         
-        # Step 3: 🌟 v4.7 新增：從 images 參數獲取 Page 1 的圖片
+        # Step 3: 找到 Page 1 的图片
         page1_images = []
-        
-        # 方法 1: 從傳入的 images 參數獲取
         if images:
             for img in images:
                 if isinstance(img, dict):
-                    img_page = img.get("page", 0)
-                    if img_page == page_num:
-                        # 檢查是否有本地路徑
-                        local_path = img.get("local_path")
-                        if local_path:
-                            try:
-                                with open(local_path, 'rb') as f:
-                                    img_base64 = base64.b64encode(f.read()).decode('utf-8')
-                                    page1_images.append(img_base64)
-                                    logger.info(f"   🖼️ 讀取圖片成功: {local_path}")
-                            except Exception as e:
-                                logger.warning(f"   ⚠️ 無法讀取圖片 {local_path}: {e}")
+                    img_page = img.get("page") or img.get("page_num")
+                    if img_page == page_num or img_page == 1:
+                        page1_images.append(img)
         
-        # 方法 2: 🌟 從 raw_output_dir/images/ 目錄讀取 Page 1 的圖片
-        if not page1_images and raw_output_dir:
-            import os
-            import glob as glob_module
-            
-            images_dir = os.path.join(raw_output_dir, "images")
-            if os.path.exists(images_dir):
-                # 🌟 v4.8.4 修復：精確匹配 Page 1 的圖片，避免匹配 Page 10, 11, 19 等
-                # 問題：img_p1_*.jpg 會匹配 img_p10_1.jpg, img_p19_1.jpg 等
-                # 解決：先列出所有文件，再過濾
-                
-                all_images = glob_module.glob(os.path.join(images_dir, "*.png")) + \
-                             glob_module.glob(os.path.join(images_dir, "*.jpg"))
-                
-                # 🌟 精確過濾：只保留 Page 1 的圖片
-                # 格式 1: img_p1_*.jpg (Page 1 的嵌入圖片)
-                # 格式 2: page_1_*.jpg (舊格式)
-                # 格式 3: page_1.jpg (整頁截圖)
-                import re
-                
-                # 精確匹配 Page 1：img_p1_X.jpg 而不是 img_p10_X.jpg
-                page1_pattern_1 = re.compile(rf'img_p{page_num}_(\d+)\.(png|jpg)$')  # img_p1_1.jpg
-                page1_pattern_2 = re.compile(rf'page_{page_num}_image_(\d+)\.(png|jpg)$')  # page_1_image_1.jpg
-                page1_pattern_3 = re.compile(rf'page_{page_num}\.(png|jpg)$')  # page_1.jpg
-                
-                for img_path in all_images:
-                    basename = os.path.basename(img_path)
-                    if page1_pattern_1.search(basename) or \
-                       page1_pattern_2.search(basename) or \
-                       page1_pattern_3.search(basename):
-                        try:
-                            with open(img_path, 'rb') as f:
-                                img_base64 = base64.b64encode(f.read()).decode('utf-8')
-                                page1_images.append(img_base64)
-                                logger.info(f"   🖼️ 從目錄讀取圖片: {basename}")
-                        except Exception as e:
-                            logger.warning(f"   ⚠️ 無法讀取圖片 {img_path}: {e}")
+        # Step 4: Vision 分析（如果找到图片）
+        vision_result = {"stock_code": None, "year": 2025}
         
-        logger.info(f"   📝 Page 1 Markdown 長度: {len(page1_text)} 字符")
-        logger.info(f"   🖼️ Page 1 圖片數量: {len(page1_images)}")
+        if page1_images:
+            try:
+                first_image = page1_images[0]
+                image_path = first_image.get("path") or first_image.get("local_path") or first_image.get("url")
+                
+                if image_path and Path(image_path).exists():
+                    logger.info(f"   🖼️ 分析 Page 1 图片: {image_path}")
+                    
+                    prompt = Stage0Preprocessor._build_vision_prompt(is_index_report, confirmed_doc_industry)
+                    
+                    result = await llm_core.vision(
+                        image_path=image_path,
+                        prompt=prompt,
+                        model=vision_model
+                    )
+                    
+                    vision_result = Stage0Preprocessor._parse_vision_result(result)
+                    logger.info(f"   ✅ Vision 结果: stock_code={vision_result.get('stock_code')}, year={vision_result.get('year')}")
+                    
+            except Exception as e:
+                logger.warning(f"   ⚠️ Vision 分析失败: {e}")
         
-        # Step 4: 🌟 v4.8 改進：每張圖片調用 Vision，然後合併結果
-        if not page1_images and not page1_text:
-            logger.warning("   ⚠️ 沒有圖片也沒有 Markdown，無法分析")
-            return {"stock_code": None, "year": 2025}
+        # Step 5: 文本提取 fallback（如果没有图片或 Vision 失败）
+        if not vision_result.get("stock_code") and page1_text:
+            text_result = Stage0Preprocessor._extract_from_text(page1_text)
+            if text_result.get("stock_code"):
+                vision_result.update(text_result)
+                logger.info(f"   ✅ 文本提取结果: stock_code={vision_result.get('stock_code')}")
         
-        # 構建 Vision prompt
+        # Step 6: 确保有默认值
+        vision_result.setdefault("year", 2025)
+        
+        return vision_result
+    
+    @staticmethod
+    def _build_vision_prompt(is_index_report: bool, confirmed_doc_industry: str) -> str:
+        """构建 Vision prompt"""
+        industry_hint = f"Document industry: {confirmed_doc_industry}" if confirmed_doc_industry else ""
+        
         if is_index_report:
-            prompt_template = """
-分析這份指數/行業報告，提取以下信息：
+            return f"""Analyze this index report cover page. Extract:
+1. Index name (e.g., "Hang Seng Index", "CSI 300")
+2. Report year/date
+3. Publisher
 
-## 請提取:
-1. **年份** (year): 報告年份
-2. **主題** (theme): 報告主題
-
-⚠️ 請使用繁體中文回答。只返回 JSON，不要其他文字。
-
-返回 JSON 格式：
-```json
-{{
-  "year": 2023,
-  "theme": "恆生指數成份股"
-}}
-```
-"""
+Return JSON: {{"stock_code": null, "year": 2025, "name_en": "<index_name>", "name_zh": "<index_name_cn>"}}
+{industry_hint}"""
         else:
-            prompt_template = """
-分析這份財務報告，提取公司基本信息。
+            return f"""Analyze this annual report cover page. Extract:
+1. Stock code (6-digit, e.g., "00001")
+2. Company name in English
+3. Company name in Chinese
+4. Report year (4-digit)
 
-## 請提取:
-1. **股票代碼** (stock_code): 香港股票代碼，5位數字
-2. **年份** (year): 報告年份
-3. **公司名稱英文** (name_en): 完整公司英文名稱
-4. **公司名稱中文** (name_zh): 完整公司中文名稱，使用繁體中文
-
-⚠️ 重要：
-- 從圖片和文字中提取信息
-- 如果找不到某個字段，設為 null
-- 所有中文名稱必須使用繁體中文
-- 只返回 JSON，不要其他文字
-
-返回 JSON 格式：
-```json
-{{
-  "stock_code": "00001",
-  "year": 2023,
-  "name_en": "CK Hutchison Holdings Limited",
-  "name_zh": "長江和記實業有限公司"
-}}
-```
-"""
-        
-        # 收集所有 Vision 結果
-        vision_results = []
-        
-        try:
-            # 🌟 v4.8: 對每張圖片調用 Vision API
-            if page1_images:
-                logger.info(f"   🔄 開始處理 {len(page1_images)} 張圖片...")
-                
-                for i, img_base64 in enumerate(page1_images, 1):
-                    logger.info(f"   🖼️ 處理圖片 {i}/{len(page1_images)}...")
-                    
-                    try:
-                        response = await llm_core.vision(
-                            image_base64=img_base64,
-                            prompt=prompt_template,
-                            model=vision_model
-                        )
-                        
-                        # 解析響應
-                        if isinstance(response, str):
-                            content = response
-                        elif isinstance(response, dict):
-                            content = response.get("content", "")
-                        elif hasattr(response, 'content'):
-                            content = response.content
-                        else:
-                            content = str(response)
-                        
-                        logger.debug(f"      🔍 圖片 {i} 響應: {content[:200]}...")
-                        
-                        # 解析 JSON
-                        result = Stage0Preprocessor._parse_vision_response(content)
-                        if result:
-                            vision_results.append(result)
-                            logger.info(f"      ✅ 圖片 {i} 提取成功: {result}")
-                        
-                    except Exception as e:
-                        logger.warning(f"      ⚠️ 圖片 {i} Vision 失敗: {e}")
-            
-            # 🌟 v4.8: 如果有 Markdown 但沒有圖片，用 Chat API
-            if page1_text and not page1_images:
-                logger.info(f"   📝 使用純 Markdown 分析...")
-                
-                prompt = f"""{prompt_template}
-
-## Page 1 Markdown 內容:
-```
-{page1_text[:3000]}
-```
-"""
-                try:
-                    response = await llm_core.chat([{"role": "user", "content": prompt}])
-                    
-                    if isinstance(response, str):
-                        content = response
-                    elif isinstance(response, dict):
-                        content = response.get("content", "")
-                    else:
-                        content = str(response)
-                    
-                    result = Stage0Preprocessor._parse_vision_response(content)
-                    if result:
-                        vision_results.append(result)
-                        logger.info(f"   ✅ Markdown 提取成功: {result}")
-                
-                except Exception as e:
-                    logger.warning(f"   ⚠️ Markdown Chat 失敗: {e}")
-            
-            # 🌟 v4.8: 合併多個 Vision 結果
-            if not vision_results:
-                logger.warning("   ⚠️ 所有 Vision 調用都失敗")
-                return {"stock_code": None, "year": 2025}
-            
-            # 合併策略：優先選擇非空值
-            merged_result = Stage0Preprocessor._merge_vision_results(vision_results)
-            
-            logger.info(f"   ✅ Vision 合併結果: {merged_result}")
-            return merged_result
-            
-        except Exception as e:
-            logger.error(f"   ❌ Vision API 失敗: {e}")
-            return {"stock_code": None, "year": 2025}
+Return JSON: {{"stock_code": "00001", "year": 2023, "name_en": "...", "name_zh": "..."}}
+{industry_hint}"""
     
     @staticmethod
-    def _merge_vision_results(results: list) -> Dict[str, Any]:
-        """
-        🌟 v4.8 新增：合併多個 Vision 結果
-        
-        策略：
-        1. 對於每個字段，優先選擇非空值
-        2. 如果多個結果都有值，選擇最常見的
-        
-        Args:
-            results: Vision 結果列表
-            
-        Returns:
-            合併後的結果
-        """
-        if not results:
-            return {}
-        
-        if len(results) == 1:
-            return results[0]
-        
-        # 合併邏輯
-        merged = {}
-        fields = ['stock_code', 'year', 'name_en', 'name_zh', 'theme']
-        
-        for field in fields:
-            # 收集所有非空值
-            values = [r.get(field) for r in results if r.get(field)]
-            
-            if not values:
-                merged[field] = None
-            elif len(values) == 1:
-                merged[field] = values[0]
-            else:
-                # 多個值：選擇最常見的
-                from collections import Counter
-                counter = Counter(str(v) for v in values)
-                most_common = counter.most_common(1)[0][0]
-                # 找到原始值（保持類型）
-                for v in values:
-                    if str(v) == most_common:
-                        merged[field] = v
-                        break
-        
-        return merged
-    
-    @staticmethod
-    def _parse_vision_response(content: str) -> Dict[str, Any]:
-        """解析 Vision/Chat 響應，支持 JSON 和 Markdown 格式"""
+    def _parse_vision_result(result: str) -> Dict[str, Any]:
+        """解析 Vision 结果"""
         import json
         import re
         
-        # 方法 1: 提取 ```json ... ``` 中的內容
-        json_block_match = re.search(r'```(?:json)?\s*\n?([\s\S]*?)\n?```', content)
-        if json_block_match:
-            try:
-                result = json.loads(json_block_match.group(1).strip())
-                # 🌟 Bug fix: 確保 year 是整數
-                if 'year' in result and result['year'] is not None:
-                    try:
-                        result['year'] = int(result['year'])
-                    except (ValueError, TypeError):
-                        pass
-                return result
-            except json.JSONDecodeError:
-                pass
-        
-        # 方法 2: 直接提取 JSON 對象
-        json_match = re.search(r'\{[\s\S]*\}', content)
+        # 尝试 JSON 解析
+        json_match = re.search(r'\{[^{}]*\}', result, re.DOTALL)
         if json_match:
             try:
-                result = json.loads(json_match.group().strip())
-                # 🌟 Bug fix: 確保 year 是整數
-                if 'year' in result and result['year'] is not None:
-                    try:
-                        result['year'] = int(result['year'])
-                    except (ValueError, TypeError):
-                        pass
-                return result
-            except json.JSONDecodeError:
+                data = json.loads(json_match.group())
+                return {
+                    "stock_code": data.get("stock_code"),
+                    "year": int(data.get("year", 2025)),
+                    "name_en": data.get("name_en"),
+                    "name_zh": data.get("name_zh"),
+                    "industry": data.get("industry")
+                }
+            except:
                 pass
         
-        # 方法 3: 解析 Markdown 格式
-        markdown_pattern = r'\*\*([^*]+):\*\*\s*(.+?)(?=\n|\*\*|$)'
-        markdown_matches = re.findall(markdown_pattern, content)
+        # 备用解析
+        stock_match = re.search(r'stock_code["\s:]+([0-9A-Za-z]+)', result, re.IGNORECASE)
+        year_match = re.search(r'year["\s:]+(20\d{2})', result)
         
-        if markdown_matches:
-            field_mapping = {
-                'stock code': 'stock_code',
-                '股票代碼': 'stock_code',
-                'year': 'year',
-                '年份': 'year',
-                'company name (english)': 'name_en',
-                '公司名稱英文': 'name_en',
-                'company name (chinese)': 'name_zh',
-                '公司名稱中文': 'name_zh',
-            }
-            
-            result = {}
-            for key, value in markdown_matches:
-                key_lower = key.lower().strip()
-                if key_lower in field_mapping:
-                    result[field_mapping[key_lower]] = value.strip()
-            
-            if result:
-                # 🌟 Bug fix: 確保 year 是整數
-                if 'year' in result and result['year'] is not None:
-                    try:
-                        result['year'] = int(result['year'])
-                    except (ValueError, TypeError):
-                        pass
-                return result
-        
-        return {}
+        return {
+            "stock_code": stock_match.group(1) if stock_match else None,
+            "year": int(year_match.group(1)) if year_match else 2025
+        }
     
     @staticmethod
-    async def extract_cover_metadata(
-        pdf_path: str,
-        doc_id: str = None,
-        vision_model: str = None,
+    def _extract_from_text(text: str) -> Dict[str, Any]:
+        """从文本中提取公司信息"""
+        import re
+        
+        result = {"stock_code": None, "year": None, "name_en": None, "name_zh": None}
+        
+        # 股票代码
+        code_patterns = [
+            r'stock\s*code[:\s]+([0-9]{4,6})',
+            r'股份[代号碼][:：\s]+([0-9]{4,6})',
+            r'Stock\s*Code[:\s]+([0-9]{4,6})',
+        ]
+        for pattern in code_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                result["stock_code"] = match.group(1)
+                break
+        
+        # 年份
+        year_patterns = [
+            r'(20\d{2})\s*年',
+            r'Annual\s*Report\s*(20\d{2})',
+            r'(20\d{2})\s*年度',
+        ]
+        for pattern in year_patterns:
+            match = re.search(pattern, text)
+            if match:
+                result["year"] = int(match.group(1))
+                break
+        
+        return result
+    
+    # ===========================================
+    # 🌟 静态方法：Registrar（原有逻辑）
+    # ===========================================
+    
+    @staticmethod
+    def compute_file_hash(file_path: str, algorithm: str = "sha256") -> str:
+        """计算文件 Hash"""
+        hash_func = hashlib.new(algorithm)
+        
+        with open(file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                hash_func.update(chunk)
+        
+        return hash_func.hexdigest()
+    
+    @staticmethod
+    async def check_duplicate(file_hash: str, db_client: Any) -> Optional[Dict[str, Any]]:
+        """检查文件是否已存在"""
+        if not db_client:
+            return None
+        
+        try:
+            existing_doc = await db_client.check_document_exists(doc_id="", file_hash=file_hash)
+            if existing_doc:
+                logger.info(f"   ⚠️ 文件已存在: doc_id={existing_doc.get('doc_id')}")
+                return existing_doc
+            return None
+        except Exception as e:
+            logger.warning(f"   ⚠️ 检查重复失败: {e}")
+            return None
+    
+    @staticmethod
+    async def register_document(
+        doc_id: str,
+        file_path: str,
+        file_hash: str,
+        company_id: Optional[int] = None,
+        original_filename: str = None,
         db_client: Any = None,
+        metadata: Dict[str, Any] = None
+    ) -> Dict[str, Any]:
+        """注册文档到 Database"""
+        if not db_client:
+            logger.warning("   ⚠️ DB 客户端未初始化，跳过注册")
+            return {"status": "skipped", "reason": "no_db_client"}
+        
+        try:
+            file_size = Path(file_path).stat().st_size if Path(file_path).exists() else 0
+            filename_to_save = original_filename or Path(file_path).name
+            
+            year = metadata.get("year") if metadata else None
+            if year is not None:
+                try:
+                    year = int(year)
+                except (ValueError, TypeError):
+                    year = None
+            
+            doc_result = await db_client.create_document(
+                doc_id=doc_id,
+                filename=filename_to_save,
+                file_path=file_path,
+                file_hash=file_hash,
+                file_size=file_size,
+                company_id=company_id,
+                document_type=(metadata or {}).get("doc_type", "annual_report"),
+                year=year
+            )
+            
+            document_id = await db_client.get_document_internal_id(doc_id) if doc_result else None
+            
+            # 更新 owner_company_id
+            if company_id:
+                try:
+                    await db_client.update_document_company_id(
+                        doc_id=doc_id,
+                        company_id=company_id,
+                        year=year
+                    )
+                    logger.info(f"   ✅ owner_company_id 已更新: doc_id={doc_id}, company_id={company_id}")
+                except Exception as e:
+                    logger.warning(f"   ⚠️ update_document_company_id 失败: {e}")
+                
+                # 写入 document_companies
+                try:
+                    if not document_id:
+                        document_id = await db_client.get_document_internal_id(doc_id)
+                    
+                    if document_id:
+                        await db_client.add_mentioned_company(
+                            document_id=document_id,
+                            company_id=company_id,
+                            relation_type="primary",
+                            extracted_industries=[metadata.get("industry")] if metadata and metadata.get("industry") else [],
+                            extraction_source="vision_cover"
+                        )
+                        logger.info(f"   ✅ 文档-公司关联已建立: doc={document_id}, company={company_id}")
+                except Exception as e:
+                    logger.warning(f"   ⚠️ 文档-公司关联失败: {e}")
+            
+            logger.info(f"   ✅ 文档注册成功: doc_id={doc_id}, id={document_id}")
+            
+            return {
+                "status": "success",
+                "document_id": document_id,
+                "doc_id": doc_id,
+                "file_hash": file_hash,
+                "file_size": file_size
+            }
+            
+        except Exception as e:
+            logger.error(f"   ❌ 文档注册失败: {e}")
+            return {"status": "failed", "error": str(e)}
+    
+    @staticmethod
+    async def register_company_from_metadata(
+        metadata: Dict[str, Any],
+        db_client: Any = None
+    ) -> Optional[int]:
+        """从封面 Metadata 创建/更新公司记录"""
+        if not db_client:
+            logger.warning("   ⚠️ DB 客户端未初始化，跳过公司注册")
+            return None
+        
+        stock_code = metadata.get("stock_code")
+        name_en = metadata.get("name_en") or metadata.get("company_name")
+        name_zh = metadata.get("name_zh") or metadata.get("company_name_zh")
+        
+        logger.info(f"   📋 register_company_from_metadata: stock_code={stock_code}, name_en={name_en}")
+        
+        if not stock_code and not name_en:
+            logger.warning("   ⚠️ 缺少 stock_code 和 name_en，无法创建公司")
+            return None
+        
+        try:
+            if not stock_code:
+                import uuid
+                stock_code = f"UNKNOWN_{uuid.uuid4().hex[:6]}"
+                logger.warning(f"   ⚠️ 使用临时 stock_code: {stock_code}")
+            
+            company_result = await db_client.upsert_company(
+                stock_code=stock_code,
+                name_en=name_en,
+                name_zh=name_zh,
+                industry=metadata.get("industry")
+            )
+            
+            company_id = company_result if company_result else None
+            logger.info(f"   ✅ 公司注冊成功: stock_code={stock_code}, id={company_id}")
+            
+            return company_id
+            
+        except Exception as e:
+            logger.error(f"   ❌ 公司注冊失敗: {e}")
+            return None
+    
+    # ===========================================
+    # 🌟 合并后的 run() 方法
+    # ===========================================
+    
+    @staticmethod
+    async def run(
+        artifacts: list,
+        pdf_path: str,
+        doc_id: str,
+        original_filename: str = None,
+        db_client: Any = None,
+        skip_duplicate: bool = True,
         is_index_report: bool = False,
         confirmed_doc_industry: str = None,
-        parser: Any = None,  # 🌟 不再需要，保留兼容
-        artifacts: list = None,  # 🌟 不再需要，保留兼容
-        raw_output_dir: str = None  # 🌟 不再需要，保留兼容
+        images: list = None,
+        raw_output_dir: str = None,
+        pdf_filename: str = None
     ) -> Dict[str, Any]:
         """
-        🌟 v4.7: 此方法已廢棄 (Deprecated)
+        🌟 合并后的 Stage 0 执行流程
         
-        PyMuPDF 已移除，請使用 extract_company_from_page1() 代替。
-        該方法基於 LlamaParse artifacts 提取公司信息，無需 PyMuPDF。
+        步骤：
+        1. Vision 提取 Page 1 公司信息
+        2. 计算 Hash
+        3. 检查重复
+        4. 注册公司
+        5. 注册文档
         
-        Raises:
-            RuntimeError: 始終拋出，提示使用新方法
+        Args:
+            artifacts: LlamaParse artifacts
+            pdf_path: PDF 文件路径
+            doc_id: 文档 ID
+            original_filename: 原始文件名
+            db_client: DB 客户端
+            skip_duplicate: 是否跳过重复文件
+            is_index_report: 是否为指数报告
+            confirmed_doc_industry: 确认的行业
+            images: 图片列表
+            raw_output_dir: 图片目录
+            pdf_filename: PDF 文件名
+            
+        Returns:
+            Dict: {
+                "stage0_vision": {...},
+                "file_hash": str,
+                "is_duplicate": bool,
+                "document_id": int,
+                "company_id": int,
+                "status": str
+            }
         """
-        raise RuntimeError(
-            "❌ extract_cover_metadata() 已廢棄！\n"
-            "   PyMuPDF 依賴已移除，請使用 extract_company_from_page1() 代替。\n"
-            "   新方法基於 LlamaParse artifacts 提取公司信息，更加準確。\n"
-            "   Pipeline 已自動使用新方法，請檢查是否使用了舊的備份文件。"
+        logger.info(f"🎯 Stage 0: Preprocessor + Registrar 开始...")
+        
+        result = {
+            "stage0_vision": None,
+            "file_hash": None,
+            "is_duplicate": False,
+            "document_id": None,
+            "company_id": None,
+            "status": "success"
+        }
+        
+        # ===== Step 1: Vision 提取 =====
+        vision_result = await Stage0Preprocessor.extract_company_from_page1(
+            artifacts=artifacts,
+            page_num=1,
+            doc_id=doc_id,
+            is_index_report=is_index_report,
+            confirmed_doc_industry=confirmed_doc_industry,
+            images=images,
+            raw_output_dir=raw_output_dir,
+            pdf_filename=pdf_filename
         )
+        result["stage0_vision"] = vision_result
+        logger.info(f"   ✅ Vision 提取完成: stock_code={vision_result.get('stock_code')}, year={vision_result.get('year')}")
+        
+        # ===== Step 2: 计算 Hash =====
+        file_hash = Stage0Preprocessor.compute_file_hash(pdf_path)
+        result["file_hash"] = file_hash
+        logger.info(f"   📄 文件 Hash: {file_hash[:16]}...")
+        
+        # ===== Step 3: 检查重复 =====
+        existing_doc = None
+        if db_client:
+            existing_doc = await Stage0Preprocessor.check_duplicate(file_hash, db_client)
+        
+        if existing_doc:
+            if skip_duplicate:
+                result["is_duplicate"] = True
+                result["document_id"] = existing_doc.get("id")
+                result["status"] = "duplicate"
+                logger.info(f"   ⚠️ 文件已处理过，中止后续 Pipeline (skip_duplicate=True)")
+                return result
+            else:
+                logger.info(f"   ♻️ 发现重复文件，启动【重新处理模式】！沿用旧 DB 记录 ID: {existing_doc.get('id')}")
+                result["is_duplicate"] = True
+                result["document_id"] = existing_doc.get("id")
+                
+                # 依然更新公司资料
+                company_id = await Stage0Preprocessor.register_company_from_metadata(
+                    metadata=vision_result,
+                    db_client=db_client
+                )
+                result["company_id"] = company_id
+                
+                logger.info(f"✅ Stage 0 完成 (继承旧档): document_id={result['document_id']}, company_id={result['company_id']}")
+                return result
+        
+        # ===== Step 4: 注册公司 =====
+        company_id = await Stage0Preprocessor.register_company_from_metadata(
+            metadata=vision_result,
+            db_client=db_client
+        )
+        result["company_id"] = company_id
+        
+        # ===== Step 5: 注册文档 =====
+        doc_result = await Stage0Preprocessor.register_document(
+            doc_id=doc_id,
+            file_path=pdf_path,
+            file_hash=file_hash,
+            company_id=company_id,
+            original_filename=original_filename,
+            db_client=db_client,
+            metadata=vision_result
+        )
+        result["document_id"] = doc_result.get("document_id")
+        
+        if doc_result.get("status") != "success":
+            result["status"] = "failed"
+            result["error"] = doc_result.get("error")
+        
+        logger.info(f"✅ Stage 0 完成: document_id={result['document_id']}, company_id={result['company_id']}")
+        
+        return result

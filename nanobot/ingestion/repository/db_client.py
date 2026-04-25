@@ -327,12 +327,18 @@ class DBClient:
             )
             return dict(row) if row else None
     
-    async def search_companies_by_name(self, company_name: str) -> Optional[Dict[str, Any]]:
+    async def search_companies_by_name(self, company_name: str, document_id: int = None) -> Optional[Dict[str, Any]]:
         """
-        🌟 v1.4: 根據公司名稱搜尋公司（英文或中文名稱）
+        🌟 v1.5: 根據公司名稱搜尋公司（英文或中文名稱）
+        
+        增強搜尋策略：
+        1. 精確匹配（LOWER(name_en) = LOWER($1)）
+        2. 模糊匹配（ILIKE '%name%'）- 用於部分名稱匹配
+        3. document_companies 回退 - 如果公司不在 companies 表但在 document_companies 中
         
         Args:
             company_name: 公司名稱（英文或中文）
+            document_id: 可選的文檔 ID，用於 document_companies 回退
             
         Returns:
             Dict: 第一個匹配的公司信息，或 None
@@ -342,7 +348,7 @@ class DBClient:
         
         try:
             async with self.connection() as conn:
-                # 搜尋 name_en 或 name_zh 中完全匹配的公司
+                # 🌟 策略 1: 精確匹配
                 row = await conn.fetchrow(
                     """
                     SELECT * FROM companies 
@@ -351,7 +357,42 @@ class DBClient:
                     """,
                     company_name.strip()
                 )
-                return dict(row) if row else None
+                if row:
+                    return dict(row)
+                
+                # 🌟 策略 2: 模糊匹配 (ILIKE)
+                fuzzy_pattern = f"%{company_name}%"
+                row = await conn.fetchrow(
+                    """
+                    SELECT * FROM companies 
+                    WHERE name_en ILIKE $1 OR name_zh ILIKE $1
+                    LIMIT 1
+                    """,
+                    fuzzy_pattern
+                )
+                if row:
+                    logger.info(f"   🔍 Fuzzy match found: '{company_name}' -> {row['name_en']}")
+                    return dict(row)
+                
+                # 🌟 策略 3: document_companies 回退
+                if document_id:
+                    row = await conn.fetchrow(
+                        """
+                        SELECT c.* FROM companies c
+                        JOIN document_companies dc ON c.id = dc.company_id
+                        WHERE dc.document_id = $1 AND (
+                            c.name_en ILIKE $2 OR c.name_zh ILIKE $2
+                        )
+                        LIMIT 1
+                        """,
+                        document_id,
+                        fuzzy_pattern
+                    )
+                    if row:
+                        logger.info(f"   🔍 Document companies fallback: '{company_name}' -> {row['name_en']}")
+                        return dict(row)
+                
+                return None
         except Exception as e:
             logger.warning(f"⚠️ 搜尋公司 '{company_name}' 失敗: {e}")
             return None

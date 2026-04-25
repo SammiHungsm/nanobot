@@ -16,7 +16,7 @@ class ImageTextLinker:
             async with self.db.connection() as conn:
                 # 1. 找出這份文件所有的圖片/圖表
                 images = await conn.fetch("""
-                    SELECT artifact_id, content, metadata, page_num
+                    SELECT artifact_id, content, metadata, source_page
                     FROM raw_artifacts
                     WHERE document_id = $1 AND artifact_type IN ('image', 'chart')
                 """, document_id)
@@ -27,7 +27,7 @@ class ImageTextLinker:
 
                 # 2. 找出這份文件所有的文字 Chunk
                 text_chunks = await conn.fetch("""
-                    SELECT artifact_id, content, page_num
+                    SELECT artifact_id, content, source_page
                     FROM raw_artifacts
                     WHERE document_id = $1 AND artifact_type IN ('text', 'text_chunk')
                 """, document_id)
@@ -127,7 +127,7 @@ class ImageTextLinker:
                         image_pages = {}
                         for img in images:
                             img_id = img['artifact_id']
-                            page_num = img.get('page_num') or img.get('page')
+                            page_num = img.get('source_page') or img.get('page_num') or img.get('page')
                             logger.debug(f"      圖片 {img_id} 在第 {page_num} 頁")
                             if page_num:
                                 if page_num not in image_pages:
@@ -140,7 +140,7 @@ class ImageTextLinker:
                         text_pages = {}
                         for chunk in text_chunks:
                             chunk_id = chunk['artifact_id']
-                            page_num = chunk.get('page_num')
+                            page_num = chunk.get('source_page') or chunk.get('page_num')
                             logger.debug(f"      文字 {chunk_id} 在第 {page_num} 頁")
                             if page_num:
                                 if page_num not in text_pages:
