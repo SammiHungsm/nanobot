@@ -1,20 +1,23 @@
 """
-Document Pipeline - Main Workflow Coordinator (v4.0)
+Document Pipeline - Main Workflow Coordinator (v4.18)
 
 🌟 Pure Orchestrator: Only handles workflow orchestration, no business logic
 
-Pipeline Flow (Linear):
-- Stage 0: Preprocessor (Cover Vision Extraction)
-- Stage 0.5: Registrar (Hash + Document Registration + Company Creation)
+Pipeline Flow (v4.18 - 簡化版):
+- Stage 0: Preprocessor + Registrar (Cover Vision + Doc Registration)
 - Stage 1: Parser (LlamaParse)
-- Stage 2: Enrichment (Save Artifacts + RAGAnything Vision)
-- Stage 3: Router (Keyword Routing)
-- Stage 4: Agentic Extractor (Tool Calling Extraction) 🌟 Single extraction entry point
-- Stage 5: Validator (Data Validation + Unit Conversion)
-- Stage 6: Vector Indexer (Chunking + Embedding)
-- Stage 7: Archiver (Archive + Cleanup + Report) 🆕
+- Stage 2: Enrichment (Save Artifacts + Vision Analysis)
+- Stage 3: REMOVED (Agent 自己規劃 - Path A + B)
+- Stage 4: Agentic Extractor 🌟 Single extraction entry point
+- Stage 5: Validate + Vector Index + Archive
 
-Architecture: Minimalist orchestrator pattern (~250 lines)
+🌟 True Agentic Loop (v4.17):
+- Phase 1: Planning → Agent 自己創建任務清單
+- Phase 2: Execute → Tool Calling Loop
+- Phase 3: Mid-Verification (60%)
+- Phase 4: Final-Verification
+
+Architecture: Minimalist orchestrator pattern
 """
 
 import os
@@ -27,7 +30,6 @@ from nanobot.ingestion.stages import (
     Stage0Preprocessor,
     Stage0_5_Registrar,
     Stage2Enrichment,
-    Stage3Router,
     Stage4AgenticExtractor,  # 🌟 True Agentic Loop - 包含 KG + Trends Tools
     Stage6Validator,
     Stage7VectorIndexer,
@@ -207,63 +209,49 @@ class DocumentPipeline(BaseIngestionPipeline):
                 "images_count": len(parse_result.images) if parse_result.images else 0
             }
             
-            # ===== Stage 0: Vision 提取 Page 1 (重構後移到 Stage 1 之後) =====
+            # ===== Stage 0: Vision + Registrar (Combined) =====
             if progress_callback:
-                progress_callback(15.0, "Stage 0: Vision 分析 Page 1")
+                progress_callback(15.0, "Stage 0: Vision + Registrar")
             
-            # 🌟 v4.7: 傳遞 parse_result.images 和 raw_output_dir 給 Stage 0
-            stage0_result = await Stage0Preprocessor.extract_company_from_page1(
-                artifacts=all_artifacts,  # 🌟 v4.4: 使用合併後的 artifacts
-                page_num=1,
+            # 🌟 v4.6: 使用合并后的 Stage 0 run() 方法
+            stage0_result = await Stage0Preprocessor.run(
+                artifacts=all_artifacts,
+                pdf_path=str(pdf_path),
                 doc_id=doc_id,
+                original_filename=original_filename,
+                db_client=self.db,
+                skip_duplicate=False,
                 is_index_report=is_index_report,
                 confirmed_doc_industry=confirmed_doc_industry,
-                images=parse_result.images,  # 🌟 v4.7 新增：傳遞圖片列表
-                raw_output_dir=parse_result.raw_output_dir  # 🌟 v4.7 新增：圖片目錄
+                images=parse_result.images,
+                raw_output_dir=parse_result.raw_output_dir,
+                pdf_filename=pdf_filename
             )
             
             if stage0_result is None:
-                stage0_result = {"stock_code": None, "year": 2025}
+                stage0_result = {"stage0_vision": {"stock_code": None, "year": 2025}, "file_hash": None}
             
             result["stages"]["stage0"] = stage0_result
             
-            # ===== Stage 0.5: Registrar =====
-            if progress_callback:
-                progress_callback(20.0, "Stage 0.5: Registrar")
+            company_id = stage0_result.get("company_id")
+            document_id = stage0_result.get("document_id")
+            year = stage0_result.get("stage0_vision", {}).get("year") or 2025
             
-            registrar_result = await Stage0_5_Registrar.run(
-                pdf_path=str(pdf_path),
-                doc_id=doc_id,
-                original_filename=original_filename,  # 🌟 v4.3: 传递原始文件名
-                metadata=stage0_result,
-                db_client=self.db,
-                skip_duplicate=False
-            )
-            result["stages"]["stage0_5"] = registrar_result
+            # 如果是重复文件，直接返回（Pipeline 结束）
+            if stage0_result.get("is_duplicate"):
+                logger.info(f"   ⚠️ 重复文件，跳过后续处理")
+                result["status"] = "duplicate"
+                return result
             
-            company_id = registrar_result.get("company_id")
-            document_id = registrar_result.get("document_id")  # 🌟 获取 document_id
-            
-            # 🌟 v4.4: 记录 processing history (Stage 0 + Stage 0.5)
+            # 🌟 v4.5: 记录 processing history (Stage 0)
             if self.db and document_id:
-                # Stage 0
-                await self.db.insert_processing_history(  # 🌟 v4.5: 修正方法名
+                await self.db.insert_processing_history(
                     document_id=document_id,
                     stage="stage0",
                     status="success",
-                    message="Vision 提取封面完成",
-                    artifacts_count=1
-                )
-                # Stage 0.5
-                await self.db.insert_processing_history(
-                    document_id=document_id,
-                    stage="stage0_5",
-                    status="success",
-                    message="文档和公司注册完成",
+                    message="Vision + Registrar 完成",
                     artifacts_count=2  # document + company
                 )
-            document_id = registrar_result.get("document_id")
-            year = stage0_result.get("year") or 2025
             
             # ===== Stage 2: Enrichment =====
             if progress_callback:
@@ -307,58 +295,13 @@ class DocumentPipeline(BaseIngestionPipeline):
                     artifacts_count=stage2_result.get("pages_saved", 0) + stage2_result.get("images_saved", 0)
                 )
             
-            # ===== Stage 3: Router =====
-            if progress_callback:
-                progress_callback(50.0, "Stage 3: Router")
-            
-            # 🌟 v4.9: 路由所有目標類型，不限於 revenue_breakdown
-            stage3_result = await Stage3Router.find_target_pages(
-                artifacts=all_artifacts,  # 🌟 v4.4: 使用合併後的 artifacts
-                target_types=[
-                    "revenue_breakdown",
-                    "financial_metrics",
-                    "key_personnel",
-                    "shareholding",
-                    "market_data"
-                ]
-            )
-            result["stages"]["stage3"] = stage3_result
-            
-            # ===== Stage 3.5: Context Builder 🌟 結構化上下文 =====
-            if progress_callback:
-                progress_callback(55.0, "Stage 3.5: Context Builder")
-            
-            from nanobot.ingestion.stages.stage3_5_context_builder import Stage3_5_ContextBuilder
-            
-            # 🌟 讀取 raw output
-            raw_output = {}
-            if parse_result and parse_result.raw_output_dir:
-                import json
-                raw_output_path = Path(parse_result.raw_output_dir) / f"{parse_result.job_id}.json"
-                if raw_output_path.exists():
-                    with open(raw_output_path, 'r', encoding='utf-8') as f:
-                        raw_output = json.load(f)
-                    logger.info(f"   ✅ 讀取 raw output: {raw_output_path}")
-            
-            # 🌟 構建結構化上下文（利用 LlamaParse items）
-            context_result = await Stage3_5_ContextBuilder.build_context(
-                raw_output=raw_output,
-                candidate_pages=stage3_result,
-                max_pages=50,
-                pdf_path=str(pdf_path)  # 🌟 v4.13: 用於 PyMuPDF TOC Fallback
-            )
-            result["stages"]["stage3_5"] = {
-                "stats": context_result.get("stats", {}),
-                "sections_count": len(context_result.get("sections", [])),
-                "tables_count": len(context_result.get("tables", []))
-            }
-            
             # ===== Stage 4: Agentic Extractor 🌟 唯一的入口 =====
+            # 🌟 v4.18: 移除 Stage 3 Router，Agent 自己規劃（Path A + B）
             if progress_callback:
                 progress_callback(60.0, "Stage 4: Agentic Extractor")
             
             stage4_result = await Stage4AgenticExtractor.run_agentic_write(
-                artifacts=all_artifacts,  # 🌟 v4.4: 使用合併後的 artifacts
+                artifacts=all_artifacts,  # 直接接收 Stage 2 artifacts
                 company_id=company_id,
                 year=year,
                 doc_id=doc_id,
@@ -374,67 +317,42 @@ class DocumentPipeline(BaseIngestionPipeline):
                     "shareholding",
                     "market_data"
                 ],
-                stage3_result=stage3_result,  # 🌟 v4.8: 传入 Stage 3 路由结果
-                context_result=context_result  # 🌟 v4.10: 传入 Stage 3.5 結構化上下文
+                stage3_result=None,  # 🌟 v4.18: 已移除
+                context_result=None   # 🌟 v4.18: 已移除
             )
             result["stages"]["stage4"] = stage4_result
             
-            # ===== Stage 5: Validator =====
+            # ===== Stage 5: Validate + Vector Index + Archive =====
             if progress_callback:
-                progress_callback(80.0, "Stage 5: Validator")
+                progress_callback(80.0, "Stage 5: Validate + Vector Index + Archive")
             
-            extraction_result = result["stages"].get("stage4", {}).get("extracted_data", {})
-            
-            if extraction_result and document_id:
-                stage6_result = await Stage6Validator(db_client=self.db).run(
-                    extraction_result=extraction_result,
-                    company_id=company_id,
-                    year=year,
-                    document_id=document_id
-                )
-                result["stages"]["stage6"] = stage6_result
-            
-            # ===== Stage 7: Vector Indexer =====
-            if progress_callback:
-                progress_callback(90.0, "Stage 7: Vector Indexer")
-            
-            if document_id:
-                stage7_result = await Stage7VectorIndexer(db_client=self.db).run(
-                    document_id=document_id,
-                    stage2_result=stage2_result
-                )
-                result["stages"]["stage7"] = stage7_result
-            
-            # ===== Stage 8: Archiver =====
-            if progress_callback:
-                progress_callback(95.0, "Stage 8: Archiver (归档与清理)")
-            
-            stage8_result = await Stage8Archiver.run(
-                artifacts=all_artifacts,  # 🌟 v4.4: 使用合併後的 artifacts
-                doc_id=doc_id,
+            stage5_result = await Stage5ValidateArchive(db_client=self.db).run(
+                extraction_result=stage4_result.get("extracted_data", {}),
+                company_id=company_id,
+                year=year,
                 document_id=document_id,
+                doc_id=doc_id,
+                stage2_result=stage2_result,
                 stages_result=result["stages"],
-                db_client=self.db,
                 data_dir=str(self.data_dir) if getattr(self, 'data_dir', None) else "/app/data"
             )
-            result["stages"]["stage8"] = stage8_result
+            result["stages"]["stage5"] = stage5_result
             
-            # ===== Stage 9: Entity Resolver (圖文關聯) 🆕 =====
+            # ===== Stage 6: Entity Resolver (圖文關聯) =====
             if progress_callback:
-                progress_callback(98.0, "Stage 9: Image Text Linker")
+                progress_callback(95.0, "Stage 6: Image Text Linker")
             
             if self.db and document_id:
                 try:
-                    # 改為 import 新的 ImageTextLinker
                     from nanobot.ingestion.extractors.image_text_linker import ImageTextLinker
                     linker = ImageTextLinker(db_client=self.db)
                     links_count = await linker.link_image_and_text_context(document_id=document_id)
                     logger.info(f"   ✅ 圖文關聯完成: 成功寫入 {links_count} 條關聯到 artifact_relations")
-                    result["stages"]["stage9"] = {"links_count": links_count}
+                    result["stages"]["stage6"] = {"links_count": links_count}
                 except Exception as e:
                     logger.warning(f"   ⚠️ 圖文關聯失敗: {e}")
             
-            # 🌟 v4.4: 记录 processing history (Stage 4 + Stage 7 + Stage 8)
+            # 🌟 v4.5: 记录 processing history (Stage 4 + Stage 5 + Stage 6)
             if self.db and document_id:
                 # Stage 4
                 extracted_count = len(stage4_result.get("extracted_data", {}))
@@ -442,26 +360,27 @@ class DocumentPipeline(BaseIngestionPipeline):
                     document_id=document_id,
                     stage="stage4",
                     status="success",
-                    message=f"Agentic 提取完成",
+                    message="Agentic 提取完成",
                     artifacts_count=extracted_count
                 )
-                # Stage 7
-                if result["stages"].get("stage7"):
+                # Stage 5
+                if result["stages"].get("stage5"):
                     await self.db.insert_processing_history(
                         document_id=document_id,
-                        stage="stage7",
+                        stage="stage5",
                         status="success",
-                        message=f"向量索引完成",
-                        artifacts_count=result["stages"]["stage7"].get("total_vectors", 0)
+                        message="Validate + Vector + Archive 完成",
+                        artifacts_count=result["stages"]["stage5"].get("vector_index", {}).get("total_vectors", 0)
                     )
-                # Stage 8
-                await self.db.insert_processing_history(
-                    document_id=document_id,
-                    stage="stage8",
-                    status="success",
-                    message="处理完成，已归档",
-                    artifacts_count=0
-                )
+                # Stage 6
+                if result["stages"].get("stage6"):
+                    await self.db.insert_processing_history(
+                        document_id=document_id,
+                        stage="stage6",
+                        status="success",
+                        message="圖文關聯完成",
+                        artifacts_count=result["stages"]["stage6"].get("links_count", 0)
+                    )
             
             if progress_callback:
                 progress_callback(100.0, "处理完成")
@@ -538,8 +457,8 @@ class DocumentPipeline(BaseIngestionPipeline):
         year = doc_info.get("year") or 2025
         
         # 🌟 Step 3: 根據 last_stage 決定從哪裡繼續
-        # Stage 順序: stage0, stage0_5, stage1, stage2, stage3, stage4, stage5, stage6, stage7
-        stage_order = ["stage0", "stage0_5", "stage1", "stage2", "stage3", "stage4", "stage5", "stage6", "stage7"]
+        # Stage 順序: stage0, stage0_5, stage1, stage2, stage4, stage5, stage6, stage7
+        stage_order = ["stage0", "stage0_5", "stage1", "stage2", "stage4", "stage5", "stage6", "stage7"]
         
         try:
             last_idx = stage_order.index(last_stage)
@@ -554,38 +473,13 @@ class DocumentPipeline(BaseIngestionPipeline):
         logger.info(f"   🔄 從 {resume_from} 繼續...")
         
         # 🌟 Step 4: 根據 resume_from 執行後續 stages
-        # 這裡需要根據具體 stage 邏輯來實現
-        # 簡化版：只支援從 stage3, stage4, stage5 恢復
+        # 🌟 v4.18: 移除 stage3，簡化為只支援 stage4, stage5, stage6, stage7
         
-        if resume_from in ["stage3", "stage4", "stage5", "stage6", "stage7"]:
+        if resume_from in ["stage4", "stage5", "stage6", "stage7"]:
             # 這些 stages 可以直接從 DB 讀取 artifacts
             result = {"doc_id": doc_id, "document_id": document_id, "company_id": company_id, "status": "resumed", "stages": {}}
             
-            if resume_from == "stage3":
-                # Stage 3: Router
-                if progress_callback:
-                    progress_callback(50.0, "Stage 3: Router (Resumed)")
-                
-                # 讀取 raw_artifacts
-                artifacts = await self.db.get_raw_artifacts_by_document(document_id)
-                
-                from nanobot.ingestion.stages.stage3_router import Stage3Router
-                stage3_result = await Stage3Router.find_target_pages(
-                    artifacts=artifacts,
-                    db_client=self.db,
-                    document_id=document_id
-                )
-                result["stages"]["stage3"] = stage3_result
-                
-                # 更新 history
-                await self.db.insert_processing_history(
-                    document_id=document_id,
-                    stage="stage3",
-                    status="success",
-                    message="Router 完成 (Resumed)"
-                )
-            
-            if resume_from in ["stage3", "stage4"]:
+            if resume_from == "stage4":
                 # Stage 4: Agentic Extractor
                 if progress_callback:
                     progress_callback(60.0, "Stage 4: Agentic Extractor (Resumed)")
