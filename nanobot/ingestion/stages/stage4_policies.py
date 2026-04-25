@@ -207,32 +207,36 @@ class MultiYearExtractionPolicy(Policy):
     
     def to_prompt(self) -> str:
         return f"""
-📅 多年數據提取規則（非常重要！）
+📅 多年數據提取規則（非常重要！❌ 禁止只提取部分年份！）
 
-⚠️ 【關鍵】這個 PDF 的主要年份是 {self.primary_year}
-但請提取文檔中【所有年份】的數據！
+⚠️ 【關鍵】這個 PDF 的主要年份是 {self.primary_year}，但这只是参考值！
+千萬不要只提取 {self.primary_year} 一年！
 
-常見場景：
+❌ 禁止行為（必讀）：
+- 禁止只插入 2023 和 2022 兩年！
+- 禁止只提取 {self.primary_year} 和相鄰一年！
+- 禁止跳過任何出現在文檔中的年份！
+
+✅ 正確行為：
 1. 「2023 | 2022 | 2021」多列數據
-   → 必須分別 insert 2023、2022、2021 的數據
+   → 必須分別 insert 所有年份：2023、2022、2021
 
 2. 「Revenue 40,851 (2023) vs 44,141 (2022)」
-   → 要同時寫入 2023 和 2022 的數據
+   → 要同時寫入所有涉及的年份：2023 和 2022
 
 3. 「Five-year summary 2019-2023」
-   → 全部提取 2019, 2020, 2021, 2022, 2023
+   → 全部提取：2019, 2020, 2021, 2022, 2023（每一個年都要！）
 
-4. 表格中的「同上」或「Same as above」
+4. 「Ten-year summary 2014-2023」
+   → 全部提取：2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023
+
+5. 表格中的「同上」或「Same as above」
    → 需要根據上下文推斷實際數值
 
-絕對禁止：
-- 只 insert {self.primary_year} 一年！
-- 看到多年數據但只提取最後一年
-- 跳過任何年份
-
-正確做法：
+【核心原則】
 - 有幾年就 insert 幾年
-- 即使是同一家公司，也要按年份分開記錄
+- 文檔中出現的每一個年份都必須記錄
+- 即使落後幾年數據不完整，也要嘗試提取並記錄
 """
 
 
@@ -252,47 +256,46 @@ class ExtractionChecklistPolicy(Policy):
     
     def to_prompt(self) -> str:
         return """
-📋 強制提取清單
+📋 強制提取清單 + 完成狀態聲明
 
-在你宣佈任務完成之前，請檢查是否已經嘗試提取以下 7 類數據：
+在你宣布「完成」之前，你必須：
+1️⃣ 對照以下清單檢查每個數據類型
+2️⃣ 明確聲明每個項目的狀態
 
-[ ] 財務指標 (insert_financial_metrics)
-    - 營收、淨利潤、資產、負債
-    - EPS、ROE、負債比率
+任務清單（請在執行過程中不斷更新狀態）：
 
-[ ] 收入分解 (insert_revenue_breakdown)
-    - 按地區（香港/中國/歐洲/北美）
-    - 按業務（零售/港口/基建）
-    - 百分比 + 金額
+| 數據類型 | Tool | 狀態 | 備註 |
+|---------|------|------|------|
+| 財務指標 | insert_financial_metrics | ⬜ 未做 | |
+| 收入分解 | insert_revenue_breakdown | ⬜ 未做 | |
+| 關鍵人員 | insert_key_personnel | ⬜ 未做 | |
+| 股東結構 | insert_shareholding | ⬜ 未做 | |
+| 市場數據 | insert_market_data | ⬜ 未做 | |
+| 提及的公司 | insert_mentioned_company | ⬜ 未做 | |
+| 實體關係 | insert_entity_relation | ⬜ 未做 | |
+| 多年數據 | 各Tool+多年參數 | ⬜ 未做 | |
 
-[ ] 關鍵人員 (insert_key_personnel)
-    - 董事名單（Executive/Non-Executive/Independent）
-    - 高級管理層
-    - 委員會成員
 
-[ ] 股東結構 (insert_shareholding 或 ExtractShareholdersFromTextTool)
-    - 控股股東
-    - 主要機構投資者
-    - 持股比例
+完成聲明格式（在開始調用 Tool 之後，每完成一項就更新）：
 
-[ ] 市場數據 (insert_market_data)
-    - PE ratio、市盈率
-    - 市值、股價
-    - 成交量
+```
+進度報告：
+✅ 財務指標 - 已完成（insert 20 records，包含 2019-2023 所有年份）
+✅ 收入分解 - 已完成（insert 5 segments，按地區分類）
+⬜ 關鍵人員 - 進行中（見到董事名單頁面 pXX，正在提取）
+❌ 市場數據 - 失敗（PDF 中未找到 PE ratio）
+✅ 提及的公司 - 已完成（insert 8 companies，包含子公司及聯營公司）
+```
 
-[ ] 提及的公司 (insert_mentioned_company)
-    - 子公司
-    - 聯營公司、合營企業
-    - 競爭對手、合作夥伴
+⚠️ 如果某項沒有找到：
+- 明確標記 ❌
+- 創建 Review Record 說明原因
+- 但不要放棄！繼續處理其他項目
 
-[ ] 實體關係 (insert_entity_relation)
-    - 收購/併購事件
-    - 派息公告
-    - 分拆/重組
-    - 減值/撇銷
-    - 法律訴訟
-
-如果某項沒有找到，請明確創建 Review Record 說明原因！
+❌ 禁止行為：
+- 沒有明確聲明狀態就宣布「完成」
+- 跳過某些數據類型而不說明
+- 只處理 1-2 項就結束（你有 40 次迭代！）
 """
 
 
@@ -355,7 +358,7 @@ class ContinuousLearningPolicy(Policy):
     
     def to_prompt(self) -> str:
         return """
-🔄 持續學習規則
+🔄 持續學習規則 + 自我驗證
 
 1️⃣ 發現新關鍵字：
    - 如果看到新的標題關鍵字（如「營運地區收益剖析」）
@@ -374,6 +377,24 @@ class ContinuousLearningPolicy(Policy):
 4️⃣ 錯誤處理：
    - Tool 調用失敗 → 記錄錯誤，繼續其他任務
    - 不要因為一個 Tool 失敗而放棄整個流程
+
+5️⃣ 自我驗證（每次迭代後執行）：
+   - 在每個 Tool 調用後，快速回顧：「我還有什麼未做？」
+   - 對照任務清單，確保沒有遺漏
+   - 如果發現遺漏，立即補充
+
+6️⃣ 最終確認（在宣布完成之前）：
+   - 拿出你的任務清單
+   - 逐項確認：
+     ✅ 這項真的完成了嗎？有多少記錄？
+     ✅ 這項真的失敗了嗎？原因合理嗎？
+     ✅ 有沒有遺漏任何年份？（2019-2023 都要！）
+   - 如果有任何遺漏，立即回頭處理！
+
+【核心原則】
+- 你有 40 次迭代，不要浪費在無效的重複操作上
+- 但也不要還沒做完就結束！
+- 每個 Tool 調用都要有意義：要么推進任務，要么標記失敗
 """
 
 
@@ -422,6 +443,49 @@ class CompanyNameResolutionPolicy(Policy):
 
 
 # ============================================================
+# PlanningPhasePolicy - 計劃階段 (Path A 新增)
+# ============================================================
+
+class PlanningPhasePolicy(Policy):
+    """
+    計劃階段策略 - 真正 Agentic Loop 既第一步
+    
+    要求 Agent 首先創建任務清單，再執行
+    """
+    
+    def to_prompt(self) -> str:
+        return """
+📌 Phase 1: 創建執行計劃（必須首先執行！）
+
+在你開始調用任何 Tool 之前，你必須：
+
+1️⃣ 閱讀並理解 PDF 內容
+2️⃣ 創建任務清單（用自然語言描述，不需要 JSON）
+
+任務清單格式：
+```
+我發現以下需要提取的數據：
+1. 財務指標 - 需要提取：revenue, net_profit, EPS, ROE 等（涉及頁面：p50, p273）
+2. 收入分解 - 需要按地區分類：香港、中國、歐洲等（涉及頁面：p23）
+3. 關鍵人員 - 董事名單及高管（涉及頁面：pXX）
+4. 股東結構 - 控股股東及持股比例（涉及頁面：pXX）
+5. 市場數據 - PE ratio、股價、市值（涉及頁面：pXX）
+6. 提及的公司 - 子公司、聯營公司（涉及頁面：pXX）
+7. 實體關係 - 收購、派息、重組等事件（涉及頁面：pXX）
+8. 多年數據 - 需要提取所有年份（涉及頁面：p273, p274）
+```
+
+⚠️ 重要：
+- 這個清單是你的【執行地圖】
+- 完成每個任務後，在清單中標記 ✅
+- 如果某個任務失敗或找不到數據，在清單中標記 ❌ 並說明原因
+- 在你宣布「完成」之前，必須對照清單確認所有項目都已處理
+
+完成創建計劃後，請開始執行！
+"""
+
+
+# ============================================================
 # Policy Registry
 # ============================================================
 
@@ -465,6 +529,8 @@ class PolicyRegistry:
         rule = "A" if is_index_report else "B"
         
         registry = cls()
+        # 🌟 Path A: PlanningPhasePolicy 放在最前面！
+        registry.add(PlanningPhasePolicy())
         registry.add(ReportTypePolicy(
             is_index_report=is_index_report,
             index_theme=index_theme,

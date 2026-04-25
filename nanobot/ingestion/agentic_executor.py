@@ -49,7 +49,11 @@ class AgenticExecutor:
         max_llm_attempts: int = 3,
         max_tool_attempts: int = 2,
         llm_backoff_factor: float = 2.0,
-        tool_backoff_factor: float = 0.5
+        tool_backoff_factor: float = 0.5,
+        # 🌟 Path B: Planning + Verification 配置
+        enable_planning_phase: bool = True,  # 是否在開始前要求創建計劃
+        enable_verification_phase: bool = True,  # 是否在中間/結束時進行驗證
+        verification_threshold: float = 0.6  # 在 60% 迭代時進行驗證
     ):
         """
         初始化
@@ -62,6 +66,9 @@ class AgenticExecutor:
             max_tool_attempts: 🌟 v4.16 Tool 最大嘗試次數
             llm_backoff_factor: 🌟 v4.16 LLM 退避因子（秒）
             tool_backoff_factor: 🌟 v4.16 Tool 退避因子（秒）
+            enable_planning_phase: 🌟 Path B 是否在開始前要求創建計劃
+            enable_verification_phase: 🌟 Path B 是否在中間/結束時進行驗證
+            verification_threshold: 🌟 Path B 在 60% 迭代時進行驗證
         """
         self.tools_registry = tools_registry
         self.max_iterations = max_iterations
@@ -72,6 +79,82 @@ class AgenticExecutor:
         self.max_tool_attempts = max_tool_attempts
         self.llm_backoff_factor = llm_backoff_factor
         self.tool_backoff_factor = tool_backoff_factor
+        # 🌟 Path B: Planning + Verification
+        self.enable_planning_phase = enable_planning_phase
+        self.enable_verification_phase = enable_verification_phase
+        self.verification_threshold = verification_threshold
+        self._has_verified_mid = False  # 追蹤是否已做中期驗證
+    
+    # 🌟 Path B: Planning + Verification 輔助方法
+    
+    def _should_inject_mid_verification(self, iteration: int, max_iter: int) -> bool:
+        """
+        判斷是否應該注入中期驗證消息
+        
+        在 60% 迭代時進行驗證（例如 40 次迭代中，第 24 次時）
+        """
+        if not self.enable_verification_phase or self._has_verified_mid:
+            return False
+        threshold_iter = int(max_iter * self.verification_threshold)
+        return iteration >= threshold_iter
+    
+    def _get_verification_message(self, phase: str = "mid") -> str:
+        """
+        獲取驗證消息
+        
+        Args:
+            phase: "mid" (中期驗證) 或 "final" (最終驗證)
+        """
+        if phase == "mid":
+            return """
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📋 【中期驗證】請檢查你的執行進度！
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+到你目前為止，你已經完成了哪些任務？請對照一開始的計劃：
+
+1. **已完成的任務**：
+   - 列出你已成功 insert 的數據類型
+   - 每種數據有多少記錄？覆蓋哪些年份？
+
+2. **還在進行中的任務**：
+   - 哪些任務還未完成？
+   - 阻礙是什麼？
+
+3. **是否有遺漏？**
+   - 檢查你的任務清單，確保每項都有進展
+   - 如果發現遺漏，立即补充！
+
+4. **後續行動**：
+   - 明確說出你接下來要做什麼
+   - 剩餘迭代次數不多，請抓緊時間！
+
+請回复你的進度報告，並繼續執行！
+"""
+        else:  # final
+            return """
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📋 【最終驗證】請確認所有任務已完成！
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+在你宣布「完成」之前，請最後一次對照任務清單：
+
+| 數據類型 | 狀態 | 記錄數 | 年份覆蓋 |
+|---------|------|--------|----------|
+| 財務指標 | ? | | |
+| 收入分解 | ? | | |
+| 關鍵人員 | ? | | |
+| 股東結構 | ? | | |
+| 市場數據 | ? | | |
+| 提及的公司 | ? | | |
+| 實體關係 | ? | | |
+| 多年數據 | ? | | |
+
+⚠️ 如果有任何項目是 ❌ 或 ⬜，請立即處理！
+✅ 所有項目都完成後，才能宣布結束。
+"""
     
     def _build_tools_schema(self) -> List[Dict[str, Any]]:
         """
@@ -336,8 +419,47 @@ class AgenticExecutor:
             {"role": "user", "content": user_message}
         ]
         
+        # 🌟 Path B: Planning Phase - 在開始前要求創建計劃
+        if self.enable_planning_phase:
+            planning_msg = {
+                "role": "user",
+                "content": "\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📋 【規劃階段】請先創建執行計劃！\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n在你開始調用任何 Tool 之前，請：\n\n1️⃣ 先說出你的計劃：\n   - 你在 PDF 中見到了哪些數據類型？\n   - 你打算按什麼順序處理？\n   - 預計會找到多少記錄？\n\n2️⃣ 創建任務清單（用自然語言），例如：\n   - 財務指標：預計在 p273 的十年總結表\n   - 收入分解：預計在 p23 的地區收益表\n   - ...\n\n完成計劃後，請開始執行！\n"
+            }
+            messages.append(planning_msg)
+            
+            # 🌟 先執行一次 LLM 讓它創建計劃
+            logger.info(f"   📋 Path B: Planning Phase 執行中...")
+            response: LLMResponse = await llm_core.chat(
+                messages=messages,
+                tools=tools_schema,
+                tool_choice="auto",
+                return_response=True,
+                model=self.model
+            )
+            
+            # 如果 LLM 有 Tool Calls，執行們
+            if response.has_tool_calls:
+                messages.append({
+                    "role": "assistant",
+                    "content": response.content,
+                    "tool_calls": [tc.to_openai_tool_call() for tc in response.tool_calls]
+                })
+                
+                for tool_call in response.tool_calls:
+                    result = await self._execute_tool(tool_call)
+                    all_tool_calls.append({"name": tool_call.name, "arguments": tool_call.arguments, "result": result})
+                    if on_tool_call:
+                        on_tool_call(tool_call.name, tool_call.arguments)
+                    messages.append({"role": "tool", "tool_call_id": tool_call.id, "content": result})
+            elif response.content:
+                # 如果 LLM 沒有 Tool Calls 但有 content，加入並繼續
+                messages.append({"role": "assistant", "content": response.content})
+        
         # 🌟 构建 Tools Schema
         tools_schema = self._build_tools_schema()
+        
+        # 🌟 重置驗證追蹤
+        self._has_verified_mid = False
         
         # 🌟 Tool Calling Loop
         iterations = 0
@@ -346,6 +468,12 @@ class AgenticExecutor:
         while iterations < self.max_iterations:
             iterations += 1
             logger.debug(f"   🔄 Iteration {iterations}/{self.max_iterations}")
+            
+            # 🌟 Path B: Mid-Verification - 在 60% 迭代時注入驗證
+            if self._should_inject_mid_verification(iterations, self.max_iterations):
+                logger.info(f"   📋 Path B: Mid-Verification 執行中 (iteration={iterations})...")
+                self._has_verified_mid = True
+                messages.append({"role": "user", "content": self._get_verification_message("mid")})
             
             # 🌟 v4.16: 调用 LLM（带重試機制）
             async with AsyncRetry(
@@ -376,6 +504,41 @@ class AgenticExecutor:
             # 🌟 如果没有 Tool Calls，返回结果
             if not response.has_tool_calls:
                 logger.info(f"✅ Agentic Workflow 完成 (iterations={iterations})")
+                
+                # 🌟 Path B: Final Verification - 在結束前要求最終確認
+                if self.enable_verification_phase:
+                    logger.info(f"   📋 Path B: Final Verification 執行中...")
+                    messages.append({"role": "user", "content": self._get_verification_message("final")})
+                    
+                    final_response: LLMResponse = await llm_core.chat(
+                        messages=messages,
+                        tools=tools_schema,
+                        tool_choice="auto",
+                        return_response=True,
+                        model=self.model
+                    )
+                    
+                    # 如果最終驗證有新的 Tool Calls，執行們
+                    if final_response.has_tool_calls:
+                        logger.info(f"   📋 Path B: Final Verification 發現新任務，繼續執行...")
+                        messages.append({
+                            "role": "assistant",
+                            "content": final_response.content,
+                            "tool_calls": [tc.to_openai_tool_call() for tc in final_response.tool_calls]
+                        })
+                        
+                        for tool_call in final_response.tool_calls:
+                            result = await self._execute_tool(tool_call)
+                            all_tool_calls.append({"name": tool_call.name, "arguments": tool_call.arguments, "result": result})
+                            if on_tool_call:
+                                on_tool_call(tool_call.name, tool_call.arguments)
+                            messages.append({"role": "tool", "tool_call_id": tool_call.id, "content": result})
+                        
+                        # 驗證完成後，繼續下一輪讓 LLM 結束
+                        continue
+                    elif final_response.content:
+                        logger.info(f"   📋 Path B: Final Verification 確認完成")
+                
                 logger.debug(f"   📝 LLM Response (no tool_calls): {response.content[:500] if response.content else 'None'}...")
                 logger.debug(f"   🏁 Finish Reason: {response.finish_reason}")
                 return {
@@ -418,6 +581,28 @@ class AgenticExecutor:
             
             # 🌟 添加 Tool Results
             messages.extend(tool_results)
+        
+        # 🌟 Path B: Final Verification - 在達到最大迭代前最後一次驗證
+        if self.enable_verification_phase:
+            logger.info(f"   📋 Path B: Max-Iter Verification 執行中...")
+            messages.append({"role": "user", "content": self._get_verification_message("final")})
+            
+            final_response: LLMResponse = await llm_core.chat(
+                messages=messages,
+                tools=tools_schema,
+                tool_choice="auto",
+                return_response=True,
+                model=self.model
+            )
+            
+            # 如果最終驗證有新的 Tool Calls，執行們
+            if final_response.has_tool_calls:
+                logger.info(f"   📋 Path B: Max-Iter Verification 發現新任務，執行後結束...")
+                for tool_call in final_response.tool_calls:
+                    result = await self._execute_tool(tool_call)
+                    all_tool_calls.append({"name": tool_call.name, "arguments": tool_call.arguments, "result": result})
+                    if on_tool_call:
+                        on_tool_call(tool_call.name, tool_call.arguments)
         
         logger.warning(f"⚠️ Agentic Workflow 达到最大迭代次数 ({self.max_iterations})")
         return {

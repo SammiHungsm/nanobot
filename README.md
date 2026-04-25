@@ -21,7 +21,7 @@
 
 | 模組 | 版本 | 說明 |
 |------|------|------|
-| **Pipeline** | v4.9 | Checkpoint 恢復 + Tool Validation Layer |
+| **Pipeline** | v4.17 | True Agentic Loop (Path A + Path B) |
 | **Schema** | v2.3 | 橋樑表設計、JSONB 動態屬性、規則分配 |
 | **Apache AGE** | v1.0 | 圖譜查詢服務（關係查詢、控制權追溯） |
 
@@ -177,6 +177,60 @@ Stage 8: 歸檔層 (Archive + Cleanup)
 | `web` | 網頁搜索/抓取 |
 | `apache_age_tool` | 🌟 Apache AGE 圖譜查詢 |
 | `db_ingestion_tools` | 數據庫寫入工具 |
+
+---
+
+## 🔄 True Agentic Loop (Path A + Path B)
+
+### 問題背景
+
+傳統的 Agentic Workflow 係「單次執行」模式：
+
+```
+輸入：PDF + Tools → LLM 盲目調用 → max_iterations 結束
+```
+
+缺點：
+- LLM 隨機順序調用 Tools，沒有計劃
+- 沒有自我檢查機制
+- 容易漏掉數據類型
+
+### Path A: System Prompt 增強
+
+在 System Prompt 中加入三個 Policy：
+
+| Policy | 功能 |
+|--------|------|
+| `PlanningPhasePolicy` | 要求 Agent 第一步創建任務清單 |
+| `ExtractionChecklistPolicy` | 加入「狀態聲明」機制，每完成一項要標記 ✅/❌ |
+| `ContinuousLearningPolicy` | 加入「自我驗證」步驟 |
+
+### Path B: AgenticExecutor 架構改動
+
+| 新功能 | 說明 |
+|--------|------|
+| **Planning Phase** | 在第一輪 Tool 執行前，要求 Agent 先創建執行計劃 |
+| **Mid-Verification** | 在 60% 迭代時（例如第 24 次），注入驗證消息 |
+| **Final-Verification** | 當 LLM 準備結束時，注入最終驗證表格 |
+
+### Agent Loop 執行流程
+
+```
+Phase 1: PLANNING
+  ↓ Agent 先創建任務清單
+
+Phase 2: EXECUTE LOOP
+  ↓ 每個 iteration
+  ↓ 60% 位置 → Mid-Verification
+  ↓ Tool 執行
+
+Phase 3: FINAL VERIFICATION
+  ↓ 準備結束前 → 最終驗證表格
+  ↓ 如果有新任務 → 繼續執行
+
+完成
+```
+
 
 ---
 

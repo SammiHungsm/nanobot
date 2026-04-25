@@ -2,21 +2,20 @@
 Stage 4: Agentic 提取与动态写入 (v4.0 - 真正的 Tool Calling)
 
 职责：
-- 🌟 真正的 Agentic Workflow（Tool Calling Loop）
+- 真正的 Agentic Workflow（Tool Calling Loop）
 - LLM 自己决定调用哪个 Tool
 - 行业分配规则执行（规则 A/B）
-- Continuous Learning Loop（搜索包底库 → 注册关键词 → 回填）
+- Continuous Learning Loop（搜索 → 回填）
 
-🌟 v4.0 架构：
-1. 从 db_ingestion_tools.py 导入 12 个 Tools
+架构：
+1. 从 db_ingestion_tools.py 导入 Tools
 2. 构建 Tools Registry + Schema
 3. 调用 AgenticExecutor.run()
 4. LLM 自己决定：
    - search_document_pages 找遗漏数据
-   - register_new_keyword 注册新关键词
    - backfill_from_fallback 回填数据
 
-🌟 Single Source of Truth: 
+Single Source of Truth: 
 这是系统中唯一的提取入口，不再有旧版 Stage 4 或 Toggle 机制
 """
 
@@ -58,45 +57,52 @@ class Stage4AgenticExtractor:
         Returns:
             Dict[str, Callable]: Tool 名称 → execute 函数
         """
+        # Import Apache AGE Tools
+        from nanobot.agent.tools.apache_age_tools import (
+            InsertGraphNodeTool,
+            InsertGraphEdgeTool,
+            QueryGraphTool,
+            SyncToGraphTool,
+        )
+        
         from nanobot.agent.tools.db_ingestion_tools import (
             GetDBSchemaTool,
-            # ❌ UpdateDocumentStatusTool 已移除 - Status 由 pipeline 在所有 stages 完成后统一设置，不应由 Agent 提前标记
             UpdateDynamicAttributesTool,
             CreateReviewRecordTool,
-            RegisterNewKeywordTool,
-            GetKeywordStatsTool,
             InsertKeyPersonnelTool,
             InsertFinancialMetricsTool,
             InsertShareholdingTool,
-            InsertRevenueBreakdownTool,  # 🆕 致命遗漏修复
-            InsertEntityRelationTool,    # 🆕 知识图谱修复
-            InsertMarketDataTool,        # 🆕 市场数据修复
-            ExtractShareholdersFromTextTool,  # 🆕 v4.11: 專門提取股東
-            InsertMentionedCompanyTool,  # 🆕 v4.12: 提及公司
-            SearchDocumentPagesTool,     # 🌟 Continuous Learning
-            BackfillFromFallbackTool,    # 🌟 Continuous Learning
+            InsertRevenueBreakdownTool,
+            InsertEntityRelationTool,
+            InsertMarketDataTool,
+            ExtractShareholdersFromTextTool,
+            InsertMentionedCompanyTool,
+            SearchDocumentPagesTool,
+            BackfillFromFallbackTool,
         )
-        # ❌ 移除 InsertArtifactRelationTool - Agent 无法看到 UUID，改用 entity_resolver.py 的 Regex 处理
+        # 已移除 RegisterNewKeywordTool, GetKeywordStatsTool - 改為純 Agentic 指令模式
+        # 移除 InsertArtifactRelationTool - Agent 无法看到 UUID
         
-        # 🌟 构建 Tools Registry
-        # ❌ SmartInsertDocumentTool 已移除 - 文档在上传时已创建
+        # 构建 Tools Registry
         tool_classes = [
             GetDBSchemaTool,
-            # UpdateDocumentStatusTool,  # 已移除 - Status 由 pipeline 统一管理
             UpdateDynamicAttributesTool,
             CreateReviewRecordTool,
-            RegisterNewKeywordTool,
-            GetKeywordStatsTool,
             InsertKeyPersonnelTool,
             InsertFinancialMetricsTool,
             InsertShareholdingTool,
-            InsertRevenueBreakdownTool,  # 🆕
-            InsertEntityRelationTool,    # 🆕
-            InsertMarketDataTool,        # 🆕
-            ExtractShareholdersFromTextTool,  # 🆕 v4.11
-            InsertMentionedCompanyTool,  # 🆕 v4.12
-            SearchDocumentPagesTool,     # 🌟 Continuous Learning
-            BackfillFromFallbackTool,    # 🌟 Continuous Learning
+            InsertRevenueBreakdownTool,
+            InsertEntityRelationTool,
+            InsertMarketDataTool,
+            ExtractShareholdersFromTextTool,
+            InsertMentionedCompanyTool,
+            SearchDocumentPagesTool,
+            BackfillFromFallbackTool,
+            # Apache AGE Graph Tools
+            InsertGraphNodeTool,
+            InsertGraphEdgeTool,
+            QueryGraphTool,
+            SyncToGraphTool,
         ]
         
         return build_tools_registry_from_classes(tool_classes)
@@ -138,26 +144,30 @@ class Stage4AgenticExtractor:
             primary_year=year
         )
         
-        # 🌟 工具列表（Policy 類不包含這個）
+        # 工具列表（Policy 類不包含這個）
         tools_section = f"""
-🛠️ 可用的 Tools（你可以自由调用）：
-1. get_db_schema - 查看数据库结构（🌟 第一步必须调用！）
+可用的 Tools（你可以自由调用）：
+1. get_db_schema - 查看数据库结构（第一步必须调用！）
 2. insert_financial_metrics - 写入财务指标（利润、资产）
 3. insert_key_personnel - 写入关键人员（董事、高管）
 4. insert_shareholding - 写入股东结构（持股比例）
 5. insert_revenue_breakdown - 写入收入分解（按地区/业务划分）
-6. insert_entity_relation - 写入实体关系（知识图谱）
+6. insert_entity_relation - 写入实体关系（公司对公司的关系）
 7. insert_market_data - 写入市场数据（PE、市值、股价）
 8. insert_mentioned_company - 写入提及的其他公司
 9. register_new_keyword - 注册新关键词
 10. search_document_pages - 搜索包底库找遗漏数据
 11. backfill_from_fallback - 回填数据到结构化表
 12. update_dynamic_attributes - 更新 JSONB 动态属性
-13. update_document_status - 更新文档状态
-14. create_review_record - 创建审核记录
-15. insert_artifact_relation - 写入跨模态图文关联
+13. create_review_record - 创建审核记录
 
-⚠️ 重要：文档记录已在上传时创建，document_id={document_id} 已存在，无需创建新文档！
+Apache AGE Graph Tools (知识图谱)：
+14. insert_graph_node - 在知识图谱中创建节点（Company、Person等）
+15. insert_graph_edge - 在知识图谱中创建关系（SUBSIDIARY_OF、INVESTED_IN等）
+16. query_graph - 用Cypher查询知识图谱
+17. sync_to_graph - 将现有的公司关系和董事数据同步到图谱
+
+重要：文档记录已在上传时创建，document_id={document_id} 已存在，无需创建新文档！
 """
         
         # 🌟 拼接所有 Policy
@@ -165,7 +175,7 @@ class Stage4AgenticExtractor:
         
         # 🌟 執行流程（簡化版）
         execution_flow = """
-🚀 執行流程：
+執行流程：
 
 Step 1: 摸清底细
    - 調用 get_db_schema 了解數據庫結構
@@ -176,7 +186,7 @@ Step 2: 分析 PDF 内容
 
 Step 3: 動態寫入
    - 根據數據類型選擇正確的 Tool
-   - 嚴格遵守 Policy 中的規則
+   - 嚴格遵守本提示中的規則
 
 Step 4: 持續學習
    - 如果找不到數據 → search_document_pages
@@ -185,9 +195,8 @@ Step 4: 持續學習
 Step 5: 完成
    - update_document_status 標記完成
 
-⚠️ 重要：
+重要：
 - 不要返回大 JSON，而是**逐一調用 Tools**
-- 發現新字段時，先註冊關鍵詞，再寫入 JSONB
 - 不確定時，創建審核記錄
 """
         
@@ -273,47 +282,87 @@ Step 5: 完成
 主要年份: {year}
 文檔 ID: {document_id}
 
-⚠️ **【關鍵】提取所有年份的數據！**
-- 這個 PDF 的【主要年份】是 {year}
-- 但請提取文檔中【所有年份】的數據！(2023, 2022, 2021, 2020, 2019...)
-- 如果見到「Revenue 40,851 (2023) vs 44,141 (2022)」，要分别insert 2023 和 2022 的數據
-- 如果見到「Five-year summary 2019-2023」，要全部提取 2019, 2020, 2021, 2022, 2023 的數據
-- 絕對不要只insert {year}一年！有幾年就insert 幾年！
+重要：提取【所有年份】的數據，絕對不能只提取部分年份！
+- 這個 PDF 的主要年份是 {year}，但这只是参考，不要限制自己！
+- ❌ 禁止只插入 2023 和 2022 兩年！
+- ✅ 必須提取文檔中【每一個】年份的數據！(2019, 2020, 2021, 2022, 2023, 2024... 所有見到的年都要！)
+- 如果見到「Revenue 40,851 (2023) vs 44,141 (2022)」→ 要【同時】insert 2023 和 2022 的數據
+- 如果見到「Five-year summary 2019-2023」→ 要【全部】提取 2019, 2020, 2021, 2022, 2023
+- 如果見到「Ten-year summary 2014-2023」→ 要【全部】提取 2014 到 2023 的每一年！
 
-🌟 **重要執行規則 (嚴格遵守)：**
+【關鍵原則】有幾年就 insert 幾年，不要選擇性忽略任何年份！
+
+重要執行規則：
 
 1. **雙軌提取策略 (Table + Text)**：
    - 數據可能在【表格】中，也可能在【純文字段落】中。
-   - 如果在表格中找到：直接調用 `insert_*` 系列 Tool。
-   - 如果在表格中找不到 Key Personnel 或 Shareholder：你【必須】調用 `ExtractShareholdersFromTextTool` 或閱讀純文字內容進行提取！絕對不能直接放棄！
+   - 如果在表格中找到：直接調用 insert_* 系列 Tool。
+   - 如果在表格中找不到 Key Personnel 或 Shareholder：必須調用 ExtractShareholdersFromTextTool 或閱讀純文字內容！
 
-2. **必須完成的強制清單 (Checklist)**：
-   在你宣佈任務完成之前，請檢查是否已經嘗試提取以下 7 類數據。如果某項沒有找到，請明確創建 Review Record 說明原因：
+2. **必須完成的強制清單**：
    [ ] 財務指標 (insert_financial_metrics)
    [ ] 收入分解 (insert_revenue_breakdown)
-   [ ] 關鍵人員 (insert_key_personnel) - 💡 提示：常出現在「董事及高級管理層」文字段落中
+   [ ] 關鍵人員 (insert_key_personnel) - 常出現在「董事及高級管理層」文字段落中
    [ ] 股東結構 (insert_shareholding 或 ExtractShareholdersFromTextTool)
    [ ] 市場數據 (insert_market_data)
-   [ ] 提及的其他公司 (insert_mentioned_company) - 💡 **主動狩獵模式**：子公司和聯營公司通常在文件較後方（可能在第 100+ 頁的「附註」中）。如果你在目前的文本中找不到，【必須】呼叫 `search_document_pages` 工具，搜尋關鍵字如 "subsidiary", "joint venture", "associate", "附屬公司", "聯營公司", "子公司"，然後再提取！
-   [ ] **重大事件 (insert_entity_relation)** - 💡 **必須提取！** 請特別注意以下關鍵字：
-       - 收購/併購 (acquisition/merger)：例如「本公司已完成收購 ABC」
-       - 派息 (dividend)：例如「宣派末期股息每股 5 元」
-       - 分拆/重組 (spin-off/restructuring)：例如「本公司將分拆 XYZ 業務」
-       - 合營/聯營 (joint venture/associate)：例如「與 ABC 合營 XYZ」
-       - 法律訴訟 (litigation)：例如「本公司涉及與 XYZ 的訴訟」
-       - 監管/調查 (regulatory/investigation)：例如「遭監管機構罰款」
-       - 減值/撇銷 (impairment/write-off)：例如「就 XYZ 資產減值」
-       - 回購/集資 (buyback/capital raising)：例如「股份回購計劃」
+   [ ] 提及的其他公司 (insert_mentioned_company) - 主動狩獵模式
+   [ ] **重大事件 (insert_entity_relation)** - 必須提取！
 
-3. **不要重複搜索**，請善用上面已經提供的上下文內容。
+3. **公司關係識別關鍵字 patterns**：
 
-## 📝 文本段落 - 用於提取實體關係 (Entity Relations) 及關鍵人員
+   子公司/附屬公司：
+   - "本公司的附屬公司"、"附屬公司包括"、"our subsidiaries"
+   - "held directly/indirectly"、"owned as to"
+   
+   收購/併購：
+   - "已完成收購"、"acquired"、"merger"、"併購"
+   - "收購代價"、"收購事項"
+   
+   合作夥伴/合營：
+   - "與...合營"、"joint venture"、"合營企業"
+   - "策略聯盟"、"strategic partnership"
+   
+   投資/持股：
+   - "持有...%權益"、"own stake"、"invested in"
+   - "持股量"、"shareholding"
 
-以下係純文本內容，請從中提取【公司併購】、【人事任命】、【股東關係】、【董事名單】等：
+   主席/董事變動：
+   - "欣然宣布"、"獲委任為"、"辭任"
+   - "appointment"、"resignation"、"新任主席"
+
+4. **寫入知識圖譜 (Apache AGE)**：
+
+   除了 insert_entity_relation，你還可以：
+   
+   a) 使用 insert_graph_node 創建圖譜節點：
+      - insert_graph_node(label="Company", properties={{"name": "公司名稱"}})
+      - insert_graph_node(label="Person", properties={{"name": "人名"}})
+   
+   b) 使用 insert_graph_edge 創建圖譜關係：
+      - insert_graph_edge(source_label="Company", source_name="A公司", 
+                          target_label="Company", target_name="B公司",
+                          relation_type="SUBSIDIARY_OF")
+      - insert_graph_edge(source_label="Person", source_name="李先生",
+                          target_label="Company", target_name="A公司",
+                          relation_type="EXECUTIVE_OF", 
+                          properties={{"position": "主席"}})
+   
+   c) 常見關係類型：
+      - SUBSIDIARY_OF（子公司）
+      - INVESTED_IN（投資）
+      - PARTNERED_WITH（合作）
+      - EXECUTIVE_OF（高管任職）
+      - DIRECTOR_OF（董事）
+      - ACQUIRED_BY（被收購）
+      - JOINT_VENTURE_WITH（合營）
+
+5. **文本段落 - 用於提取實體關係**
+
+以下係純文本內容，請從中提取公司併購、人事任命、股東關係、董事名單：
 
 {context_result.get("text_content", "")[:5000]}
 
-⚠️ 如果你只搜索而不插入數據，任務將失敗！
+如果你只搜索而不插入數據，任務將失敗！
 
 請開始執行！
 """
@@ -376,12 +425,16 @@ PDF 内容（候选页面）：
 主要年份: {year}
 文档 ID: {document_id}
 
-⚠️ **【關鍵】提取所有年份的數據！**
-- 這個 PDF 的【主要年份】是 {year}
-- 但請提取文檔中【所有年份】的數據！(2023, 2022, 2021, 2020, 2019...)
-- 如果見到「Revenue 40,851 (2023) vs 44,141 (2022)」，要分别insert 2023 和 2022 的數據
-- 如果見到「Five-year summary 2019-2023」，要全部提取 2019, 2020, 2021, 2022, 2023 的數據
+⚠️ **【關鍵】提取【所有年份】的數據，絕對不能只提取部分年份！**
+- 這個 PDF 的【主要年份】是 {year}，但这只是参考，不要限制自己！
+- ❌ 禁止只插入 {year} 和另一年（如 2023 和 2022）！
+- ✅ 必須提取文檔中【每一個】年份的數據！(2019, 2020, 2021, 2022, 2023, 2024... 所有見到的年都要！)
+- 如果見到「Revenue 40,851 (2023) vs 44,141 (2022)」→ 要【同時】insert 所有涉及的年份
+- 如果見到「Five-year summary 2019-2023」→ 要【全部】提取 2019, 2020, 2021, 2022, 2023 的每一年！
+- 如果見到「Ten-year summary 2014-2023」→ 要【全部】提取 2014 到 2023 的每一年！
 - 絕對不要只insert {year}一年！有幾年就insert 幾年！
+
+【關鍵原則】有幾年就 insert 幾年，不要選擇性忽略任何年份！
 
 🌟 重要提示：
 1. 上面的内容是根据 Stage 3 路由结果筛选的候选页面
@@ -675,8 +728,13 @@ PDF 内容：
 {content_text}
 
 公司 ID: {company_id}
-年份: {year}
+主要年份: {year}
 文檔 ID: {document_id}
+
+⚠️ 【關鍵】必須提取【所有年份】的數據！
+- ❌ 禁止只插入 {year} 和另一年！
+- ✅ 必須提取文檔中【每一個】年份！(2019, 2020, 2021, 2022, 2023, 2024... 所有見到的年都要！)
+- 有幾年就 insert 幾年，不要選擇性忽略任何年份！
 
 請提取數據並寫入數據庫！
 """
