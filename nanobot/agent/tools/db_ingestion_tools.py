@@ -1157,8 +1157,7 @@ class InsertFinancialMetricsTool(Tool):
             
             async with db.connection() as conn:
                 for metric in metrics:
-                    # 🌟 v4.15: Fix schema mismatch - remove source_page (column doesn't exist)
-                    # Use ON CONFLICT (company_id, year, metric_name) since fiscal_period may be NULL
+                    # 🌟 v4.15: Fix schema - use ON CONFLICT with the unique constraint
                     result = await conn.execute(
                         """
                         INSERT INTO financial_metrics
@@ -1170,7 +1169,7 @@ class InsertFinancialMetricsTool(Tool):
                             unit = EXCLUDED.unit,
                             standardized_value = EXCLUDED.standardized_value
                         """,
-                        actual_company_id,  # 🌟 使用转换后的 ID
+                        actual_company_id,
                         year,
                         metric.get("metric_name"),
                         metric.get("value"),
