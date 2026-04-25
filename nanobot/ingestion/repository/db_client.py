@@ -1812,16 +1812,16 @@ class DBClient:
                     logger.error(f"❌ 无法获取 document_id")
                     return False
                 
-                # 🌟 v1.3: Bug 修复 - 移除 raw_text 列（表 schema 没有这个列）
+                # 🌟 v4.15: Fix schema mismatch - use metadata (JSONB) instead of parsed_data
                 await conn.execute(
                     """
                     INSERT INTO raw_artifacts (
                         artifact_id, document_id, artifact_type,
-                        content, parsed_data, file_path, page_num
+                        content, metadata, file_path, page_num
                     ) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
                     ON CONFLICT (artifact_id) DO UPDATE SET
                         content = $4,
-                        parsed_data = $5::jsonb,
+                        metadata = $5::jsonb,
                         file_path = $6,
                         page_num = $7
                     """,
@@ -1874,9 +1874,9 @@ class DBClient:
                 if artifact_types:
                     rows = await conn.fetch(
                         """
-                        SELECT artifact_id, artifact_type, content, parsed_data, 
+                        SELECT artifact_id, artifact_type, content, metadata,
                                file_path, page_num, created_at
-                        FROM raw_artifacts 
+                        FROM raw_artifacts
                         WHERE document_id = $1 AND artifact_type = ANY($2)
                         ORDER BY page_num, artifact_id
                         LIMIT $3 OFFSET $4
@@ -1889,9 +1889,9 @@ class DBClient:
                 else:
                     rows = await conn.fetch(
                         """
-                        SELECT artifact_id, artifact_type, content, parsed_data,
+                        SELECT artifact_id, artifact_type, content, metadata,
                                file_path, page_num, created_at
-                        FROM raw_artifacts 
+                        FROM raw_artifacts
                         WHERE document_id = $1
                         ORDER BY page_num, artifact_id
                         LIMIT $2 OFFSET $3
@@ -1900,7 +1900,7 @@ class DBClient:
                         limit,
                         offset
                     )
-                
+
                 # 轉換為 Dict 列表
                 artifacts = []
                 for row in rows:
@@ -1908,7 +1908,7 @@ class DBClient:
                         "artifact_id": row["artifact_id"],
                         "type": row["artifact_type"],
                         "content": row["content"],
-                        "content_json": row["parsed_data"],
+                        "content_json": row["metadata"],  # 🌟 v4.15: use metadata
                         "file_path": row["file_path"],
                         "page": row["page_num"],
                         "created_at": str(row["created_at"]) if row["created_at"] else None
@@ -2097,9 +2097,8 @@ class DBClient:
         """
         try:
             async with self.connection() as conn:
-                # 🌟 v1.2: 修正列名与表 schema 对齐
-                # 表 schema: document_id, stage, status, details, error_message
-                details_json = {
+                # 🌟 v4.15: Fix schema mismatch - use input_params instead of details
+                input_params_json = {
                     "message": message,
                     "duration_ms": duration_ms,
                     "artifacts_count": artifacts_count
@@ -2107,13 +2106,13 @@ class DBClient:
                 await conn.execute(
                     """
                     INSERT INTO document_processing_history 
-                    (document_id, stage, status, details)
+                    (document_id, stage, status, input_params)
                     VALUES ($1, $2, $3, $4::jsonb)
                     """,
                     document_id,
-                    stage,  # 🌟 v1.2: stage_name -> stage
+                    stage,
                     status,
-                    json.dumps(details_json)
+                    json.dumps(input_params_json)
                 )
                 logger.debug(f"✅ Processing history: {stage} - {status}")
                 return True
@@ -2133,23 +2132,23 @@ class DBClient:
             async with self.connection() as conn:
                 rows = await conn.fetch(
                     """
-                    SELECT stage, status, details, created_at
+                    SELECT stage, status, input_params, created_at
                     FROM document_processing_history
                     WHERE document_id = $1
                     ORDER BY created_at
                     """,
                     document_id
                 )
-                
+
                 history = []
                 for row in rows:
                     history.append({
                         "stage": row["stage"],
                         "status": row["status"],
-                        "details": row["details"],
+                        "details": row["input_params"],  # 🌟 v4.15: use input_params
                         "created_at": str(row["created_at"]) if row["created_at"] else None
                     })
-                
+
                 return history
                 
         except Exception as e:
