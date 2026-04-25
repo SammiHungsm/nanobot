@@ -1300,22 +1300,21 @@ class InsertShareholdingTool(Tool):
             
             async with db.connection() as conn:
                 for sh in shareholders:
+                    # 🌟 v4.15: Fix schema - use document_id and share_percentage
                     await conn.execute(
                         """
-                        INSERT INTO shareholding_structure 
-                        (company_id, shareholder_name, shareholder_type, shares_held, percentage,
-                         is_controlling, is_institutional, trust_name, trustee_name, source_document_id)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                        INSERT INTO shareholding_structure
+                        (company_id, shareholder_name, shareholder_type, shares_held, share_percentage,
+                         is_controlling_shareholder, is_ultimate_beneficial_owner, document_id)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                         """,
                         actual_company_id,
                         sh.get("shareholder_name"),
                         sh.get("shareholder_type"),
                         sh.get("shares_held"),
-                        sh.get("percentage"),
+                        sh.get("percentage"),  # Note: field is share_percentage in DB
                         sh.get("is_controlling"),
                         sh.get("is_institutional"),
-                        sh.get("trust_name"),
-                        sh.get("trustee_name"),
                         document_id
                     )
                     inserted_count += 1
@@ -1324,7 +1323,7 @@ class InsertShareholdingTool(Tool):
                 "success": True,
                 "company_id": actual_company_id,
                 "company_name": company_name,
-                "source_document_id": document_id,
+                "document_id": document_id,
                 "inserted_count": inserted_count,
                 "message": f"✅ 寫入 {inserted_count} 個股東 (公司: {company_name or f'ID={actual_company_id}'})"
             }, indent=2, ensure_ascii=False)
@@ -1458,19 +1457,20 @@ class InsertRevenueBreakdownTool(Tool):
             
             async with db.connection() as conn:
                 for seg in segments:
+                    # 🌟 v4.15: Fix schema - use document_id instead of source_document_id
                     await conn.execute(
                         """
-                        INSERT INTO revenue_breakdown 
-                        (company_id, year, segment_name, segment_type, revenue_amount, 
-                         revenue_percentage, currency, source_document_id)
+                        INSERT INTO revenue_breakdown
+                        (company_id, year, segment_name, segment_type, revenue_amount,
+                         revenue_percentage, currency, document_id)
                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                        ON CONFLICT (company_id, year, segment_name, segment_type)  -- 🌟 v1.2: 修正约束名
-                        DO UPDATE SET 
+                        ON CONFLICT (company_id, year, segment_name, segment_type)
+                        DO UPDATE SET
                             revenue_amount = $5,
                             revenue_percentage = $6,
-                            source_document_id = $8
+                            document_id = $8
                         """,
-                        actual_company_id,  # 🌟 v1.3: 已验证为整数类型
+                        actual_company_id,
                         year,
                         seg.get("segment_name"),
                         seg.get("segment_type", "geography"),
@@ -2365,65 +2365,64 @@ class BackfillFromFallbackTool(Tool):
             async with db.connection() as conn:
                 if data_type == "revenue_breakdown":
                     for seg, data in extracted_data.items():
+                        # 🌟 v4.15: Fix schema - use document_id, remove source_page
                         await conn.execute(
                             """
-                            INSERT INTO revenue_breakdown 
-                            (company_id, year, segment_name, segment_type, revenue_amount, 
-                             revenue_percentage, currency, source_document_id, source_page)
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-                            ON CONFLICT (company_id, year, segment_name) 
-                            DO UPDATE SET 
+                            INSERT INTO revenue_breakdown
+                            (company_id, year, segment_name, segment_type, revenue_amount,
+                             revenue_percentage, currency, document_id)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                            ON CONFLICT (company_id, year, segment_name)
+                            DO UPDATE SET
                                 revenue_amount = $5,
-                                revenue_percentage = $6,
-                                source_document_id = $8
+                                revenue_percentage = $6
                             """,
                             company_id, year, seg,
                             data.get("segment_type", "geography"),
                             data.get("amount"),
                             data.get("percentage"),
                             data.get("currency", "HKD"),
-                            document_id, page_num
+                            document_id
                         )
                         count += 1
                 
                 # 👇 新增：处理 financial_metrics 的回填
                 elif data_type == "financial_metrics":
                     for metric_name, data in extracted_data.items():
+                        # 🌟 v4.15: Fix schema - use document_id only, no source_page column
                         await conn.execute(
                             """
-                            INSERT INTO financial_metrics 
-                            (company_id, year, metric_name, value, unit, standardized_value, 
-                             source_document_id, source_page)
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                            ON CONFLICT (company_id, year, metric_name) 
-                            DO UPDATE SET 
+                            INSERT INTO financial_metrics
+                            (company_id, year, metric_name, value, unit, standardized_value,
+                             document_id)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7)
+                            ON CONFLICT (company_id, year, metric_name)
+                            DO UPDATE SET
                                 value = $4,
-                                standardized_value = $6,
-                                source_document_id = $7,
-                                source_page = $8
+                                standardized_value = $6
                             """,
                             company_id, year, metric_name,
                             data.get("value"),
                             data.get("unit", "HKD"),
                             data.get("standardized_value"),
-                            document_id, page_num
+                            document_id
                         )
                         count += 1
                 
                 # 👇 新增：处理 key_personnel 的回填
                 elif data_type == "key_personnel":
                     for person_name, data in extracted_data.items():
+                        # 🌟 v4.15: Fix schema - use document_id, not source_document_id
                         await conn.execute(
                             """
-                            INSERT INTO key_personnel 
-                            (company_id, year, name_en, position_title_en, board_role, 
-                             source_document_id)
+                            INSERT INTO key_personnel
+                            (company_id, year, name_en, position_title_en, board_role,
+                             document_id)
                             VALUES ($1, $2, $3, $4, $5, $6)
-                            ON CONFLICT (company_id, year, name_en) 
-                            DO UPDATE SET 
+                            ON CONFLICT (company_id, year, name_en)
+                            DO UPDATE SET
                                 position_title_en = $4,
-                                board_role = $5,
-                                source_document_id = $6
+                                board_role = $5
                             """,
                             company_id, year, person_name,
                             data.get("position"),
@@ -2435,15 +2434,16 @@ class BackfillFromFallbackTool(Tool):
                 # 👇 新增：处理 shareholding 的回填
                 elif data_type == "shareholding":
                     for shareholder_name, data in extracted_data.items():
+                        # 🌟 v4.15: Fix schema - use document_id, share_percentage
                         await conn.execute(
                             """
-                            INSERT INTO shareholding_structure 
-                            (company_id, year, shareholder_name, shareholder_type, shares_held, 
-                             percentage, source_document_id)
+                            INSERT INTO shareholding_structure
+                            (company_id, year, shareholder_name, shareholder_type, shares_held,
+                             share_percentage, document_id)
                             VALUES ($1, $2, $3, $4, $5, $6, $7)
                             """,
                             company_id, year, shareholder_name,
-                            data.get("shareholder_type"),  # 🌟 修正：shareholder_type
+                            data.get("shareholder_type"),
                             data.get("shares_held"),
                             data.get("percentage"),
                             document_id
