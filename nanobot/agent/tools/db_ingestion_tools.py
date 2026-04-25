@@ -1803,40 +1803,34 @@ class InsertMarketDataTool(Tool):
                     "error": "必须提供 company_id 或 company_name"
                 }, indent=2)
             
-            # 🌟 將字串日期轉換為 date 物件
-            if isinstance(fiscal_period, str):
-                data_date_obj = datetime.strptime(fiscal_period, "%Y-%m-%d").date()
-            elif isinstance(fiscal_period, date_type):
-                data_date_obj = fiscal_period
-            else:
-                data_date_obj = date_type.today()  # Fallback
-            
+            # fiscal_period 已經是字串，直接使用
             async with db.connection() as conn:
                 await conn.execute(
                     """
                     INSERT INTO market_data 
-                    (company_id, fiscal_period, period_type, pe_ratio, pb_ratio, market_cap,
-                     close_price, open_price, high_price, low_price, volume, turnover,
-                     dividend_yield, source)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                    (company_id, fiscal_period, stock_price, pe_ratio, pb_ratio, market_cap,
+                     dividend_yield, additional_data)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                     """,
-                    actual_company_id,  # 🌟 使用转换后的 ID
-                    fiscal_period,  # 🌟 使用 fiscal_period
-                    kwargs.get("period_type"),
+                    actual_company_id,
+                    fiscal_period,
+                    kwargs.get("close_price"),  # stock_price maps from close_price
                     kwargs.get("pe_ratio"),
                     kwargs.get("pb_ratio"),
                     kwargs.get("market_cap"),
-                    kwargs.get("close_price"),
-                    kwargs.get("open_price"),
-                    kwargs.get("high_price"),
-                    kwargs.get("low_price"),
-                    kwargs.get("volume"),
-                    kwargs.get("turnover"),
                     kwargs.get("dividend_yield"),
-                    kwargs.get("source")
+                    json.dumps({
+                        "period_type": kwargs.get("period_type"),
+                        "open_price": kwargs.get("open_price"),
+                        "high_price": kwargs.get("high_price"),
+                        "low_price": kwargs.get("low_price"),
+                        "volume": kwargs.get("volume"),
+                        "turnover": kwargs.get("turnover"),
+                        "source": kwargs.get("source")
+                    })  # Store extra fields in additional_data JSONB
                 )
             
-            logger.info(f"✅ 寫入市場數據: company_id={actual_company_id}, date={fiscal_period}")
+            logger.info(f"✅ 寫入市場數據: company_id={actual_company_id}, fiscal_period={fiscal_period}")
             
             return json.dumps({
                 "success": True,
