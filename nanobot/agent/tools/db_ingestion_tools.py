@@ -1808,19 +1808,17 @@ class InsertMarketDataTool(Tool):
                 await conn.execute(
                     """
                     INSERT INTO market_data 
-                    (company_id, fiscal_period, stock_price, pe_ratio, pb_ratio, market_cap,
+                    (company_id, fiscal_period, stock_price, pe_ratio, market_cap,
                      dividend_yield, additional_data)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
                     """,
                     actual_company_id,
                     fiscal_period,
                     kwargs.get("close_price"),  # stock_price maps from close_price
                     kwargs.get("pe_ratio"),
-                    kwargs.get("pb_ratio"),
                     kwargs.get("market_cap"),
                     kwargs.get("dividend_yield"),
                     json.dumps({
-                        "period_type": kwargs.get("period_type"),
                         "open_price": kwargs.get("open_price"),
                         "high_price": kwargs.get("high_price"),
                         "low_price": kwargs.get("low_price"),
