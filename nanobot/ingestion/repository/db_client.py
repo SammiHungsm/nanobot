@@ -1369,7 +1369,8 @@ class DBClient:
                 
                 # 🌟 刪除所有子表（按依赖顺序）
                 # Fix #3: 补上漏掉的 document_pages, revenue_breakdown, review_queue
-                await conn.execute("DELETE FROM revenue_breakdown WHERE source_document_id = $1", document_id)
+                # 🌟 v4.15: Fix schema - use document_id instead of source_document_id
+                await conn.execute("DELETE FROM revenue_breakdown WHERE document_id = $1", document_id)
                 await conn.execute("DELETE FROM document_pages WHERE document_id = $1", document_id)
                 await conn.execute("DELETE FROM raw_artifacts WHERE document_id = $1", document_id)
                 await conn.execute("DELETE FROM document_companies WHERE document_id = $1", document_id)
