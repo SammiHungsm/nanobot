@@ -31,7 +31,7 @@ from nanobot.ingestion.stages import (
     Stage0Preprocessor,  # 🌟 包含 Vision + Registrar
     Stage2Enrichment,
     Stage4AgenticExtractor,
-    Stage5VectorArchive,
+    Stage5ValidateArchive,
 )
 
 
@@ -335,7 +335,7 @@ class DocumentPipeline(BaseIngestionPipeline):
             if progress_callback:
                 progress_callback(80.0, "Stage 5: Vector Index + Archive")
             
-            stage5_result = await Stage5VectorArchive(db_client=self.db).run(
+            stage5_result = await Stage5ValidateArchive(db_client=self.db).run(
                 extraction_result=stage4_result.get("extracted_data", {}),
                 company_id=company_id,
                 year=year,

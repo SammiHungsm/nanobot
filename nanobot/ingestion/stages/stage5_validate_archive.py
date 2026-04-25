@@ -18,8 +18,8 @@ from datetime import datetime
 from loguru import logger
 
 
-class Stage5VectorArchive:
-    """Stage 5: Vector Index + Archive (v2.0)"""
+class Stage5ValidateArchive:
+    """Stage 5: Validate + Vector Index + Archive"""
     
     def __init__(self, db_client: Any = None):
         self.db_client = db_client
