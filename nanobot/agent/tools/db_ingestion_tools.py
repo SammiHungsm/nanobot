@@ -1157,26 +1157,25 @@ class InsertFinancialMetricsTool(Tool):
             
             async with db.connection() as conn:
                 for metric in metrics:
-                    # 🌟 使用 ON CONFLICT DO UPDATE 避免重複插入
+                    # 🌟 v4.15: Fix schema mismatch - remove source_page (column doesn't exist)
+                    # Use ON CONFLICT (company_id, year, metric_name) since fiscal_period may be NULL
                     result = await conn.execute(
                         """
-                        INSERT INTO financial_metrics 
-                        (company_id, year, metric_name, value, unit, standardized_value, source_page)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7)
-                        ON CONFLICT (company_id, year, fiscal_period, metric_name) 
-                        DO UPDATE SET 
+                        INSERT INTO financial_metrics
+                        (company_id, year, metric_name, value, unit, standardized_value)
+                        VALUES ($1, $2, $3, $4, $5, $6)
+                        ON CONFLICT (company_id, year, metric_name)
+                        DO UPDATE SET
                             value = EXCLUDED.value,
                             unit = EXCLUDED.unit,
-                            standardized_value = EXCLUDED.standardized_value,
-                            source_page = EXCLUDED.source_page
+                            standardized_value = EXCLUDED.standardized_value
                         """,
                         actual_company_id,  # 🌟 使用转换后的 ID
                         year,
                         metric.get("metric_name"),
                         metric.get("value"),
                         metric.get("unit", "HKD"),
-                        metric.get("standardized_value"),
-                        metric.get("source_page")
+                        metric.get("standardized_value")
                     )
                     # 检查是插入还是更新
                     if "INSERT 0 1" in str(result):
