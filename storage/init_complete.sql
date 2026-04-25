@@ -121,6 +121,8 @@ CREATE TABLE IF NOT EXISTS documents (
     -- 【基本資訊】
     filename VARCHAR(500),
     file_path VARCHAR(1000),
+    file_hash VARCHAR(128), -- 文件 SHA256 哈希
+    file_size_bytes BIGINT, -- 文件大小（位元組）
     report_type VARCHAR(50), -- annual_report | index_report
     
     -- 【公司關聯】
@@ -132,6 +134,12 @@ CREATE TABLE IF NOT EXISTS documents (
     
     -- 【處理狀態】
     processing_status VARCHAR(50) DEFAULT 'pending', -- pending | processing | completed | failed
+    processing_completed_at TIMESTAMP, -- 處理完成時間
+    processing_error TEXT, -- 處理錯誤信息
+    
+    -- 【統計欄位】
+    total_chunks INTEGER DEFAULT 0, -- 文本塊數量
+    total_artifacts INTEGER DEFAULT 0, -- 圖表/表格數量
     
     -- 【動態屬性】
     dynamic_attributes JSONB DEFAULT '{}', -- 🌟 v2.3: 彈性擴展欄位
@@ -170,6 +178,8 @@ CREATE TABLE IF NOT EXISTS document_companies (
     is_owner BOOLEAN DEFAULT FALSE, -- 是否是文檔所屬公司
     mention_context TEXT, -- 提及上下文（如段落）
     page_references TEXT, -- 頁碼引用
+    relation_type VARCHAR(50) DEFAULT 'mentioned', -- 關聯類型 (mentioned|subsidiary|competitor|owner)
+    extraction_source VARCHAR(50) DEFAULT 'ai_predict', -- 提取來源 (ai_predict|confirmed|manual)
     
     -- 【AI 提取的行業分類】
     extracted_industries JSONB, -- AI 預測的行業分類列表
