@@ -272,8 +272,8 @@ class ExtractionChecklistPolicy(Policy):
 | 股東結構 | insert_shareholding | ⬜ 未做 | |
 | 市場數據 | insert_market_data | ⬜ 未做 | |
 | 提及的公司 | insert_mentioned_company | ⬜ 未做 | |
-| 實體關係 | insert_entity_relation | ⬜ 未做 | |
-| 多年數據 | 各Tool+多年參數 | ⬜ 未做 | |
+| 實體關係 | insert_entity_relation | ⬜ 未做 | 收購/派息/任命/重組 |
+| 多年趨勢 | extract_multi_year_trends | ⬜ 未做 | 2019-2023, 2014-2023 |
 
 
 完成聲明格式（在開始調用 Tool 之後，每完成一項就更新）：

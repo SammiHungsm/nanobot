@@ -28,9 +28,7 @@ from nanobot.ingestion.stages import (
     Stage0_5_Registrar,
     Stage2Enrichment,
     Stage3Router,
-    Stage4AgenticExtractor,
-    Stage4_5_KGExtractor,
-    Stage4_6_TrendExtractor,  # 🆕 多年趨勢數據提取
+    Stage4AgenticExtractor,  # 🌟 True Agentic Loop - 包含 KG + Trends Tools
     Stage6Validator,
     Stage7VectorIndexer,
     Stage8Archiver,
@@ -380,104 +378,6 @@ class DocumentPipeline(BaseIngestionPipeline):
                 context_result=context_result  # 🌟 v4.10: 传入 Stage 3.5 結構化上下文
             )
             result["stages"]["stage4"] = stage4_result
-            # =================================================================
-            # 🌟 新增：Stage 4.5: KG Extractor (獨立的知識圖譜抽取)
-            # =================================================================
-            if progress_callback:
-                progress_callback(70.0, "Stage 4.5: Knowledge Graph Extractor")
-            
-            # 取得公司全名，幫助 LLM 解決「本公司」等代名詞問題
-            company_name_full = stage0_result.get("name_en") or stage0_result.get("name_zh") or "The Company"
-            
-            try:
-                stage4_5_result = await Stage4_5_KGExtractor.run(
-                    artifacts=all_artifacts,  # 🌟 v4.4: 使用合併後的 artifacts
-                    document_id=document_id,
-                    company_name_full=company_name_full,
-                    db_client=self.db
-                )
-                result["stages"]["stage4_5"] = stage4_5_result
-            except Exception as e:
-                logger.warning(f"⚠️ Stage 4.5 KG 抽取失敗: {e}")
-                result["stages"]["stage4_5"] = {"status": "failed", "error": str(e)}
-            # ===== Stage 4.5: Fallback Check 🌟 終極包底 =====
-            if progress_callback:
-                progress_callback(75.0, "Stage 4.5: Fallback Check")
-            
-            # 🌟 終極包底：如果這些表為空，嘗試直接提取
-            if self.db and document_id:
-                try:
-                    # all_artifacts 已經在上面定義（line ~163）
-                    # 直接使用 local variable
-                    
-                    # 檢查 revenue_breakdown
-                    async with self.db.connection() as conn:
-                        revenue_count = await conn.fetchval(
-                            "SELECT COUNT(*) FROM revenue_breakdown WHERE company_id = $1",
-                            company_id
-                        )
-                        
-                        if revenue_count == 0:
-                            logger.warning("⚠️ Agent 未能提取 Revenue Breakdown，觸發 Fallback 直接提取")
-                            # 調用專門的收入分解提取
-                            from nanobot.ingestion.stages.stage4_fallback_extractor import Stage4FallbackExtractor
-                            fallback_result = await Stage4FallbackExtractor.extract_revenue_breakdown(
-                                artifacts=all_artifacts,
-                                company_id=company_id,
-                                document_id=document_id,
-                                year=year,
-                                db_client=self.db
-                            )
-                            if fallback_result.get("extracted_count", 0) > 0:
-                                logger.info(f"   ✅ Fallback 成功提取 {fallback_result['extracted_count']} 條 revenue_breakdown")
-                        
-                        # 檢查 shareholding
-                        shareholding_count = await conn.fetchval(
-                            "SELECT COUNT(*) FROM shareholding_structure WHERE company_id = $1",
-                            company_id
-                        )
-                        
-                        if shareholding_count == 0:
-                            logger.warning("⚠️ Agent 未能提取 Shareholding，觸發 Fallback 直接提取")
-                            from nanobot.ingestion.stages.stage4_fallback_extractor import Stage4FallbackExtractor
-                            fallback_result = await Stage4FallbackExtractor.extract_shareholding(
-                                artifacts=all_artifacts,
-                                company_id=company_id,
-                                document_id=document_id,
-                                year=year,
-                                db_client=self.db
-                            )
-                            if fallback_result.get("extracted_count", 0) > 0:
-                                logger.info(f"   ✅ Fallback 成功提取 {fallback_result['extracted_count']} 條 shareholding")
-                except Exception as e:
-                    logger.warning(f"   ⚠️ Fallback Check 失敗: {e}")
-            
-            # ===== Stage 4.6: Multi-Year Trend Extractor 🆕 多年趨勢數據自動提取 =====
-            if progress_callback:
-                progress_callback(77.0, "Stage 4.6: Multi-Year Trend Extractor")
-            
-            if self.db and document_id:
-                try:
-                    stage4_6_result = await Stage4_6_TrendExtractor.extract_trends(
-                        document_id=document_id,
-                        company_id=company_id,
-                        db_client=self.db,
-                        doc_id=doc_id
-                    )
-                    result["stages"]["stage4_6"] = stage4_6_result
-                    
-                    # 記錄 processing history
-                    if stage4_6_result.get("metrics_extracted", 0) > 0:
-                        await self.db.insert_processing_history(
-                            document_id=document_id,
-                            stage="stage4_6",
-                            status="success",
-                            message=f"多年趨勢數據提取完成",
-                            artifacts_count=stage4_6_result.get("metrics_extracted", 0)
-                        )
-                except Exception as e:
-                    logger.warning(f"   ⚠️ Stage 4.6 多年趨勢提取失敗: {e}")
-                    result["stages"]["stage4_6"] = {"status": "failed", "error": str(e)}
             
             # ===== Stage 5: Validator =====
             if progress_callback:
@@ -545,16 +445,6 @@ class DocumentPipeline(BaseIngestionPipeline):
                     message=f"Agentic 提取完成",
                     artifacts_count=extracted_count
                 )
-                # 🌟 新增：Stage 4.5 History
-                if result["stages"].get("stage4_5") and result["stages"]["stage4_5"].get("status") == "success":
-                    kg_relations_count = result["stages"]["stage4_5"].get("extracted_relations_count", 0)
-                    await self.db.insert_processing_history(
-                        document_id=document_id,
-                        stage="stage4_5",
-                        status="success",
-                        message=f"知識圖譜實體關係提取完成",
-                        artifacts_count=kg_relations_count
-                    )
                 # Stage 7
                 if result["stages"].get("stage7"):
                     await self.db.insert_processing_history(
@@ -648,8 +538,8 @@ class DocumentPipeline(BaseIngestionPipeline):
         year = doc_info.get("year") or 2025
         
         # 🌟 Step 3: 根據 last_stage 決定從哪裡繼續
-        # Stage 順序: stage0, stage0_5, stage1, stage2, stage3, stage4, stage4_5, stage4_6, stage5, stage6, stage7
-        stage_order = ["stage0", "stage0_5", "stage1", "stage2", "stage3", "stage4", "stage4_5", "stage4_6", "stage5", "stage6", "stage7"]
+        # Stage 順序: stage0, stage0_5, stage1, stage2, stage3, stage4, stage5, stage6, stage7
+        stage_order = ["stage0", "stage0_5", "stage1", "stage2", "stage3", "stage4", "stage5", "stage6", "stage7"]
         
         try:
             last_idx = stage_order.index(last_stage)
@@ -667,7 +557,7 @@ class DocumentPipeline(BaseIngestionPipeline):
         # 這裡需要根據具體 stage 邏輯來實現
         # 簡化版：只支援從 stage3, stage4, stage5 恢復
         
-        if resume_from in ["stage3", "stage4", "stage4_5", "stage4_6", "stage5", "stage6", "stage7"]:
+        if resume_from in ["stage3", "stage4", "stage5", "stage6", "stage7"]:
             # 這些 stages 可以直接從 DB 讀取 artifacts
             result = {"doc_id": doc_id, "document_id": document_id, "company_id": company_id, "status": "resumed", "stages": {}}
             

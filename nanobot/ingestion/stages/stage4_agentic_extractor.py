@@ -79,6 +79,7 @@ class Stage4AgenticExtractor:
             InsertMentionedCompanyTool,
             SearchDocumentPagesTool,
             BackfillFromFallbackTool,
+            ExtractMultiYearTrendsTool,  # 🆕 v4.17: Stage 4.6 as Tool
         )
         # 已移除 RegisterNewKeywordTool, GetKeywordStatsTool - 改為純 Agentic 指令模式
         # 移除 InsertArtifactRelationTool - Agent 无法看到 UUID
@@ -98,6 +99,7 @@ class Stage4AgenticExtractor:
             InsertMentionedCompanyTool,
             SearchDocumentPagesTool,
             BackfillFromFallbackTool,
+            ExtractMultiYearTrendsTool,  # 🆕 v4.17: Stage 4.6 as Tool
             # Apache AGE Graph Tools
             InsertGraphNodeTool,
             InsertGraphEdgeTool,
@@ -155,7 +157,7 @@ class Stage4AgenticExtractor:
 6. insert_entity_relation - 写入实体关系（公司对公司的关系）
 7. insert_market_data - 写入市场数据（PE、市值、股价）
 8. insert_mentioned_company - 写入提及的其他公司
-9. register_new_keyword - 注册新关键词
+9. extract_multi_year_trends - 🆕 提取多年趨勢數據（2019-2023, 2014-2023）
 10. search_document_pages - 搜索包底库找遗漏数据
 11. backfill_from_fallback - 回填数据到结构化表
 12. update_dynamic_attributes - 更新 JSONB 动态属性

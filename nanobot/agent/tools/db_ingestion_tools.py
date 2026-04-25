@@ -67,12 +67,13 @@ async def _resolve_company_id(
     context: dict = None
 ) -> tuple[Optional[int], Optional[str]]:
     """
-    🌟 名称转 ID 的核心魔法 (Method A - v1.4 修正版)
+    🌟 名称转 ID 的核心魔法 (Method A - v1.5 增强版)
     
-    核心邏輯變更（v1.4）：
-    - ❌ 不再創建虛假股票代碼 (SUB_XX, PARENT)
-    - ✅ 先查詢公司是否存在
-    - ✅ 只有當公司真實存在時才返回其 ID
+    核心邏輯變更（v1.5）：
+    - ❌ 不再只做精確匹配
+    - ✅ 支持 fuzzy matching (ILIKE)
+    - ✅ 支持 document_companies 回退
+    - ✅ 如果公司不在 companies 表，但在 document_companies 中有記錄，則使用該 company_id
     
     LLM 只擅长理解文字（公司名称），不擅长记住数据库的 ID。
     这个函数让 Python 负责查 ID，LLM 只需要传公司名称。
@@ -81,7 +82,7 @@ async def _resolve_company_id(
         db_client: 数据库客户端
         company_id: LLM 传入的 company_id（母公司）
         company_name: LLM 传入的公司名称（子公司/竞争对手等）
-        context: 执行上下文（包含默认 company_id）
+        context: 执行上下文（包含默认 company_id 和 document_id）
         
     Returns:
         tuple[company_id, error_message]: 返回解析后的 company_id，或错误信息
@@ -92,15 +93,16 @@ async def _resolve_company_id(
     # 如果 LLM 传入了公司名称（不是母公司）
     if company_name and str(company_name).lower() not in ["", "none", "null"]:
         try:
-            # 🌟 v1.4: 先查询公司是否存在（不创建虚假记录）
-            existing_company = await db_client.search_companies_by_name(company_name)
+            # 🌟 v1.5: 传入 document_id 以支持 document_companies 回退
+            document_id = context.get("document_id") if context else None
+            existing_company = await db_client.search_companies_by_name(company_name, document_id=document_id)
             
             if existing_company:
                 # 公司存在，使用其 ID
                 actual_company_id = existing_company.get("id")
                 logger.info(f"✅ 查詢公司成功: '{company_name}' -> ID={actual_company_id}")
             else:
-                # 🌟 v1.4: 公司不存在，返回错误而不是创建虚假记录
+                # 🌟 v1.5: 公司不存在，返回错误而不是创建虚假记录
                 error_msg = f"公司 '{company_name}' 未找到。请确保该公司已在数据库中註冊。"
                 logger.warning(f"⚠️ {error_msg}")
         except Exception as e:
@@ -1613,34 +1615,51 @@ class InsertEntityRelationTool(Tool):
         # ==================================================
         # 🌟 第 2 層防護：Python 邏輯層過濾 (防止 LLM 繞過 Schema)
         # ==================================================
+                # 🌟 Relaxed validation: normalize relation_type (allow similar names)
         allowed_relations = {
             "executive_of", "subsidiary_of", "acquired_by", 
             "partnered_with", "competitor_of", "invested_in", 
             "supplier_of", "customer_of"
         }
         
-        if relation_type not in allowed_relations:
-            logger.warning(f"⚠️ LLM 試圖寫入非法的關係類型: {relation_type}，已拒絕。")
+        # Normalize common aliases to canonical relation types
+        relation_normalization = {
+            "has_subsidiary": "subsidiary_of",
+            "owns": "invested_in",
+            "owns_stake": "invested_in",
+            "acquired": "acquired_by",
+            "controls": "subsidiary_of",
+            "partner_of": "partnered_with",
+            "competes_with": "competitor_of",
+            "supplies_to": "supplier_of",
+            "supplies": "supplier_of",
+            "is_customer": "customer_of",
+            "is_supplier": "supplier_of",
+        }
+        
+        normalized_relation = relation_normalization.get(relation_type, relation_type)
+        if normalized_relation not in allowed_relations:
             return json.dumps({
                 "success": False,
-                "error": f"STRICT RULE VIOLATION: '{relation_type}' is not allowed. You MUST choose from {list(allowed_relations)}."
+                "error": f"relation_type '{relation_type}' is not recognized. Use one of: executive_of, subsidiary_of, acquired_by, partnered_with, competitor_of, invested_in, supplier_of, customer_of"
             }, ensure_ascii=False)
         
-        # 擋下沒有意義的代名詞實體
-        bad_words = ["the group", "the company", "it", "本公司", "本集團"]
-        if source_company_name and source_company_name.lower() in bad_words:
-            logger.warning(f"⚠️ LLM 試圖寫入代名詞實體: {source_company_name}，已拒絕。")
+        # Update to normalized value
+        relation_type = normalized_relation
+        
+        # 🌟 Relaxed: only block pure pronouns, allow company references like 本公司
+        pure_pronouns = ["the group", "the company", "it"]
+        if source_company_name and source_company_name.lower() in pure_pronouns:
             return json.dumps({
                 "success": False,
-                "error": "STRICT RULE VIOLATION: You cannot use pronouns ('The Company', '本集團') as entity names. Please resolve to the actual proper noun."
+                "error": "Do not use pronouns like 'The Company' or 'The Group'. Use the actual company name."
             }, ensure_ascii=False)
-        if target_company_name and target_company_name.lower() in bad_words:
-            logger.warning(f"⚠️ LLM 試圖寫入代名詞實體: {target_company_name}，已拒絕。")
+        if target_company_name and target_company_name.lower() in pure_pronouns:
             return json.dumps({
                 "success": False,
-                "error": "STRICT RULE VIOLATION: You cannot use pronouns ('The Company', '本集團') as entity names. Please resolve to the actual proper noun."
+                "error": "Do not use pronouns like 'The Company' or 'The Group'. Use the actual company name."
             }, ensure_ascii=False)
-        # ==================================================
+        # ✅ Normal company references (including Chinese 本公司, 本集團) are now allowed
         
         from nanobot.ingestion.repository.db_client import DBClient
         
@@ -2554,8 +2573,9 @@ def register_ingestion_tools(registry) -> None:
     registry.register(InsertArtifactRelationTool())  # 🆕 圖文關聯
     registry.register(InsertMentionedCompanyTool())  # 🆕 提及公司
     registry.register(ExtractShareholdersFromTextTool())  # 🆕 從文本提取股東
+    registry.register(ExtractMultiYearTrendsTool())  # 🆕 多年趨勢數據
     
-    logger.info("✅ Registered 22 ingestion tools (v4.12: +artifact_relation, +mentioned_company, +extract_shareholders)")
+    logger.info("✅ Registered 23 ingestion tools (v4.17: +extract_multi_year_trends)")
 
 
 
@@ -2740,4 +2760,226 @@ class InsertMentionedCompanyTool(Tool):
                 
         except Exception as e:
             logger.error(f"InsertMentionedCompanyTool error: {e}")
+            return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
+
+
+# ============================================================
+# ExtractMultiYearTrendsTool - Stage 4.6 as Tool
+# ============================================================
+
+class ExtractMultiYearTrendsTool(Tool):
+    """
+    [Tool] 提取多年趨勢數據 (Stage 4.6)
+    
+    功能：
+    - 掃描文檔中包含多年數據的表格（2019-2023, 2014-2023 等）
+    - 使用 LLM 識別並提取趨勢數據
+    - 寫入 operational_metrics 表
+    
+    適用場景：
+    - 見到「Ten-year summary 2014-2023」或「Five-year summary 2019-2023」
+    - 需要提取多年營收、EPS、ROE 等趨勢數據
+    """
+    
+    @property
+    def name(self) -> str:
+        return "extract_multi_year_trends"
+    
+    @property
+    def description(self) -> str:
+        return (
+            "Extract multi-year trend data from financial tables. "
+            "Use this when you see tables with 3+ years of data (e.g., 2019-2023, 2014-2023). "
+            "Extracts: revenue, profit, EPS, DPS, ROE, net_debt, ports_revenue, retail_stores, etc. "
+            "Writes to operational_metrics table."
+        )
+    
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    
+    @property
+    def read_only(self) -> bool:
+        return False
+    
+    async def execute(self, **kwargs) -> str:
+        """
+        執行多年趨勢數據提取
+        
+        所有參數從 context 獲取（AgenticExecutor 會自動傳入）
+        """
+        import re
+        import json
+        from nanobot.core.llm_core import chat
+        
+        context = kwargs.get("context", {})
+        db_client = context.get("db_client")
+        document_id = context.get("document_id")
+        company_id = context.get("company_id")
+        
+        if not db_client:
+            return json.dumps({"success": False, "error": "Database client not found in context"}, ensure_ascii=False)
+        
+        if not document_id or not company_id:
+            return json.dumps({"success": False, "error": "document_id and company_id required in context"}, ensure_ascii=False)
+        
+        try:
+            # 🌟 Stage 4.6 核心邏輯
+            YEAR_PATTERN = re.compile(r'\b(20[1-2][0-9])\b')
+            METRIC_KEYWORDS = [
+                'revenue', 'profit', 'ebitda', 'eps', 'dividend', 'dps',
+                'assets', 'equity', 'debt', 'stores', 'income',
+                '營收', '利潤', '盈利', '股息', '資產', '負債', '門店'
+            ]
+            
+            # 1. 查詢所有表格 artifacts
+            async with db_client.connection() as conn:
+                rows = await conn.fetch("""
+                    SELECT artifact_id, page_num, parsed_data
+                    FROM raw_artifacts
+                    WHERE artifact_type = 'table'
+                    ORDER BY page_num
+                """)
+            
+            trend_tables = []
+            for row in rows:
+                parsed_data = row.get("parsed_data", {})
+                if isinstance(parsed_data, str):
+                    try:
+                        parsed_data = json.loads(parsed_data)
+                    except:
+                        continue
+                
+                table_text = parsed_data.get("fixed", "") or parsed_data.get("original", "")
+                if not table_text:
+                    continue
+                
+                years = set(YEAR_PATTERN.findall(table_text))
+                years = [int(y) for y in years if 2010 <= int(y) <= 2030]
+                years = sorted(years)
+                
+                has_metric = any(kw.lower() in table_text.lower() for kw in METRIC_KEYWORDS)
+                
+                if len(years) >= 3 and has_metric:
+                    trend_tables.append({
+                        "artifact_id": row["artifact_id"],
+                        "page_num": row["page_num"],
+                        "table_text": table_text[:4000],
+                        "years": years
+                    })
+            
+            if not trend_tables:
+                return json.dumps({
+                    "success": True,
+                    "message": "No multi-year trend tables found",
+                    "tables_processed": 0,
+                    "metrics_extracted": 0
+                }, ensure_ascii=False)
+            
+            # 🌟 確保 operational_metrics 表存在
+            async with db_client.connection() as conn:
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS operational_metrics (
+                        id SERIAL PRIMARY KEY,
+                        company_id INTEGER REFERENCES companies(id),
+                        document_id INTEGER REFERENCES documents(id),
+                        metric_type VARCHAR(100) NOT NULL,
+                        metric_name VARCHAR(255) NOT NULL,
+                        segment VARCHAR(255),
+                        year INTEGER NOT NULL,
+                        value NUMERIC(20, 2),
+                        unit VARCHAR(50),
+                        source_page INTEGER,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                await conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_operational_metrics_company_year
+                    ON operational_metrics(company_id, year)
+                """)
+            
+            # 🌟 處理每個趨勢表格（限制前 5 個）
+            total_extracted = 0
+            for table in trend_tables[:5]:
+                # 構建 LLM prompt
+                prompt = f"""Extract multi-year trend data from this financial table.
+
+**Table Content:**
+{table['table_text']}
+
+**Years Found:** {table['years']}
+
+Return JSON array:
+```json
+[
+  {{
+    "metric_type": "group_revenue",
+    "metric_name": "Revenue",
+    "segment": "Total",
+    "year": 2023,
+    "value": 275575,
+    "unit": "HK$ million"
+  }}
+]
+```
+
+Extract ALL years and metrics. Use snake_case for metric_type."""
+                
+                response = await chat(prompt=prompt, temperature=0.1, max_tokens=4000)
+                content = response.strip() if isinstance(response, str) else str(response)
+                
+                # 解析 JSON
+                if "```json" in content:
+                    content = content.split("```json")[1].split("```")[0].strip()
+                elif "```" in content:
+                    content = content.split("```")[1].split("```")[0].strip()
+                
+                try:
+                    metrics = json.loads(content)
+                    if not isinstance(metrics, list):
+                        metrics = [metrics]
+                except:
+                    logger.warning(f"Failed to parse LLM response for table {table['page_num']}")
+                    continue
+                
+                # 寫入數據庫
+                async with db_client.connection() as conn:
+                    for m in metrics:
+                        try:
+                            await conn.execute("""
+                                INSERT INTO operational_metrics
+                                (company_id, document_id, metric_type, metric_name, segment, year, value, unit, source_page)
+                                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                                ON CONFLICT (company_id, document_id, metric_type, segment, year)
+                                DO UPDATE SET
+                                    value = EXCLUDED.value,
+                                    unit = EXCLUDED.unit
+                            """,
+                                company_id,
+                                document_id,
+                                m.get("metric_type", "unknown"),
+                                m.get("metric_name", ""),
+                                m.get("segment", "Total"),
+                                m.get("year"),
+                                m.get("value"),
+                                m.get("unit", "HKD"),
+                                table["page_num"]
+                            )
+                            total_extracted += 1
+                        except Exception as e:
+                            logger.debug(f"Insert metric error: {e}")
+            
+            return json.dumps({
+                "success": True,
+                "message": f"Extracted {total_extracted} trend metrics",
+                "tables_processed": len(trend_tables[:5]),
+                "metrics_extracted": total_extracted
+            }, ensure_ascii=False)
+            
+        except Exception as e:
+            logger.error(f"ExtractMultiYearTrendsTool error: {e}")
             return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
