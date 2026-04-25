@@ -3,21 +3,40 @@ Document Pipeline - Main Workflow Coordinator (v4.18)
 
 🌟 Pure Orchestrator: Only handles workflow orchestration, no business logic
 
-Pipeline Flow (v4.18 - 簡化版):
-- Stage 0: Preprocessor + Registrar (Cover Vision + Doc Registration)
-- Stage 1: Parser (LlamaParse)
-- Stage 2: Enrichment (Save Artifacts + Vision Analysis)
-- Stage 3: REMOVED (Agent 自己規劃 - Path A + B)
-- Stage 4: Agentic Extractor 🌟 Single extraction entry point
-- Stage 5: Validate + Vector Index + Archive
+Pipeline Flow (6 Stages - 簡化版):
+1. Stage 0: Preprocessor + Registrar (Vision 分析 Page 1 + Hash + DB Registration)
+   └─ LlamaParse Stage 1 完成後，Vision 分析所有 Page 1 圖片
+   └─ 一次過完成：公司識別、Hash 計算、文檔註冊
 
-🌟 True Agentic Loop (v4.17):
-- Phase 1: Planning → Agent 自己創建任務清單
-- Phase 2: Execute → Tool Calling Loop
-- Phase 3: Mid-Verification (60%)
-- Phase 4: Final-Verification
+2. Stage 1: Parser (LlamaParse)
+   └─ 解析 PDF → 生成 artifacts (text + tables + images)
+   └─ 下載圖片到本地供 Stage 0 Vision 使用
 
-Architecture: Minimalist orchestrator pattern
+3. Stage 2: Enrichment (Save Artifacts + Vision Analysis)
+   └─ 保存所有 artifacts 到 DB
+   └─ Vision 分析圖片（生成 AI summary）
+
+4. Stage 3: Router + Context Builder (REMOVED - Agent 自己規劃)
+   └─ Stage 4 Agent 自己創建任務清單，唔需要預先路由
+
+5. Stage 4: Agentic Extractor 🌟 Single extraction entry point
+   └─ Tool Calling Loop：revenue_breakdown, financial_metrics, key_personnel 等
+   └─ Phase 1: Planning → Agent 創建任務清單
+   └─ Phase 2: Execute → Tool Calling Loop
+   └─ Phase 3: Mid-Verification (60%)
+   └─ Phase 4: Final-Verification
+
+6. Stage 5: Validate + Vector Index + Archive
+   └─ 驗證數據 + 單位換算
+   └─ 文本切塊 + Embedding + 向量入庫
+   └─ 標記完成 + 清理臨時文件 + 生成報告
+
+7. Stage 6: Entity Resolver (圖文關聯)
+   └─ 自動建立圖片和文字的關聯 (artifact_relations)
+
+Flow:
+PDF → Stage 1 (LlamaParse) → Stage 0 (Vision + Registrar) → Stage 2 (Enrichment)
+    → Stage 4 (Agentic Extract) → Stage 5 (Validate + Archive) → Stage 6 (Entity Link)
 """
 
 import os
@@ -27,13 +46,10 @@ from loguru import logger
 
 from nanobot.ingestion.base_pipeline import BaseIngestionPipeline
 from nanobot.ingestion.stages import (
-    Stage0Preprocessor,
-    Stage0_5_Registrar,
+    Stage0Preprocessor,  # 🌟 包含 Vision + Registrar
     Stage2Enrichment,
-    Stage4AgenticExtractor,  # 🌟 True Agentic Loop - 包含 KG + Trends Tools
-    Stage6Validator,
-    Stage7VectorIndexer,
-    Stage8Archiver,
+    Stage4AgenticExtractor,
+    Stage5ValidateArchive,
 )
 
 

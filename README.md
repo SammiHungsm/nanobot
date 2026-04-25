@@ -21,7 +21,7 @@
 
 | 模組 | 版本 | 說明 |
 |------|------|------|
-| **Pipeline** | v4.17 | True Agentic Loop (Path A + Path B) |
+| **Pipeline** | v4.18 | 6-Stage 簡化版（Stage 0 合併 Vision + Registrar） |
 | **Schema** | v2.3 | 橋樑表設計、JSONB 動態屬性、規則分配 |
 | **Apache AGE** | v1.0 | 圖譜查詢服務（關係查詢、控制權追溯） |
 
@@ -122,43 +122,59 @@
 
 ---
 
-## 🔄 處理流程（9-Stage Pipeline）
+## 🔄 處理流程（6-Stage Pipeline）
 
 ```
 PDF 上傳
     │
     ▼
-Stage 1: 解析層 (LlamaParse) → Stage 0: 預處理 (Vision)
+┌─────────────────────────────────────────────────────────────────┐
+│ Stage 1: LlamaParse 解析                                         │
+│ └─ 生成 artifacts (text + tables + images)                      │
+│ └─ 下載圖片到本地供 Stage 0 Vision 使用                           │
+└─────────────────────────────────────────────────────────────────┘
     │
     ▼
-Stage 0.5: 註冊層 (Hash + Document Registration)
+┌─────────────────────────────────────────────────────────────────┐
+│ Stage 0: Vision + Registrar (合併)                               │
+│ └─ Vision 分析 Page 1 所有圖片 → 識別公司名、年份                 │
+│ └─ 計算 PDF Hash（防重複）                                       │
+│ └─ 寫入 companies 表 + documents 表                             │
+└─────────────────────────────────────────────────────────────────┘
     │
     ▼
-Stage 2: 豐富層 (Vision Analysis + Data Enrichment)
+┌─────────────────────────────────────────────────────────────────┐
+│ Stage 2: Enrichment                                              │
+│ └─ 保存所有 artifacts 到 DB (document_pages, raw_artifacts)       │
+│ └─ Vision 分析圖片（生成 AI summary + key_entities）               │
+└─────────────────────────────────────────────────────────────────┘
     │
     ▼
-Stage 3: 關鍵字層 (Keyword Routing)
+┌─────────────────────────────────────────────────────────────────┐
+│ Stage 4: Agentic Extractor 🌟 唯一的提取入口                      │
+│ └─ Agent 自己創建任務清單（Planning Phase）                       │
+│ └─ Tool Calling Loop：提取 revenue_breakdown, financial_metrics, │
+│    key_personnel, shareholding, market_data 等                    │
+│ └─ Mid-Verification (60%) + Final-Verification                   │
+└─────────────────────────────────────────────────────────────────┘
     │
     ▼
-Stage 3.5: 上下文結構構建
+┌─────────────────────────────────────────────────────────────────┐
+│ Stage 5: Validate + Vector Index + Archive (合併)                 │
+│ └─ 驗證數據 + 單位換算                                           │
+│ └─ 文本切塊 + Embedding + 向量入庫 (pgvector)                    │
+│ └─ 標記完成 + 清理臨時文件 + 生成處理報告                        │
+└─────────────────────────────────────────────────────────────────┘
     │
     ▼
-Stage 4: 智能體提取層 (Tool Calling Extraction)
+┌─────────────────────────────────────────────────────────────────┐
+│ Stage 6: Entity Resolver (圖文關聯)                               │
+│ └─ 自動建立圖片和文字的關聯 (artifact_relations)                  │
+│ └─ 匹配 Figure/Table 引用 + 頁面位置                             │
+└─────────────────────────────────────────────────────────────────┘
     │
     ▼
-Stage 4.5: 知識圖譜提取層 (Entity Relations)
-    │
-    ▼
-Stage 6: 驗證層 (Data Validation)
-    │
-    ▼
-Stage 7: 向量索引層 (Vector Indexing)
-    │
-    ▼
-Stage 8: 歸檔層 (Archive + Cleanup)
-    │
-    ▼
-數據庫 (PostgreSQL + pgvector + Apache AGE)
+PostgreSQL + pgvector + Apache AGE
 ```
 
 ---
