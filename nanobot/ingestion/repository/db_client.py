@@ -1091,14 +1091,15 @@ class DBClient:
                     return False
                 
                 # 🌟 直接使用 document_id，移除子查询
+                # 🌟 v4.17: Fix schema - column is 'content' not 'markdown_content'
                 await conn.execute(
                     """
                     INSERT INTO document_pages 
-                    (document_id, page_num, markdown_content, has_images, has_tables, has_charts)
+                    (document_id, page_num, content, has_images, has_tables, has_charts)
                     VALUES ($1, $2, $3, $4, $5, $6)
                     ON CONFLICT (document_id, page_num) 
                     DO UPDATE SET 
-                        markdown_content = $3,
+                        content = $3,
                         has_images = $4,
                         has_tables = $5,
                         has_charts = $6
@@ -2266,9 +2267,11 @@ class DBClient:
         self,
         document_id: int,
         page_num: int,
-        table_index: int,
+        table_index: int,  # Kept for API compat but not used as column
         table_json: Dict[str, Any],
-        table_markdown: str = None
+        table_markdown: str = None,
+        table_type: str = None,
+        title: str = None
     ) -> bool:
         """
         🌟 插入表格数据
@@ -2278,30 +2281,33 @@ class DBClient:
         Args:
             document_id: 文档 ID
             page_num: 页码
-            table_index: 表格索引
+            table_index: 表格索引 (传入但不使用 - 因為 DB 無此列)
             table_json: 表格 JSON 数据
             table_markdown: Markdown 格式
+            table_type: 表格类型 (e.g., 'financial', 'revenue_breakdown')
+            title: 表格标题
             
         Returns:
             bool: 是否成功
         """
         try:
             async with self.connection() as conn:
-                # 🌟 v4.15: Fix schema mismatch - use page_num instead of page_number
+                # 🌟 v4.16: Fix schema - document_tables has no table_index column
+                # Use (document_id, page_num) as unique constraint, no ON CONFLICT needed
+                # since we're inserting fresh records for each document
                 await conn.execute(
                     """
                     INSERT INTO document_tables
-                    (document_id, page_num, table_index, rows, created_at)
-                    VALUES ($1, $2, $3, $4::jsonb, NOW())
-                    ON CONFLICT (document_id, page_num, table_index) DO UPDATE SET
-                        rows = $4::jsonb
+                    (document_id, page_num, table_type, title, rows, created_at)
+                    VALUES ($1, $2, $3, $4, $5::jsonb, NOW())
                     """,
                     document_id,
-                    page_num,  # 🌟 v1.1: 修正 - page_num 对应 page_num 列
-                    table_index,
+                    page_num,
+                    table_type,
+                    title,
                     json.dumps(table_json)
                 )
-                logger.debug(f"✅ Table {page_num}-{table_index} 已保存")
+                logger.debug(f"✅ Table {page_num} (type={table_type}) 已保存")
                 return True
                 
         except Exception as e:

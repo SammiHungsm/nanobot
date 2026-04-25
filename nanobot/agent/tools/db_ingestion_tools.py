@@ -991,8 +991,14 @@ class InsertKeyPersonnelTool(Tool):
                     if not name_en:
                         continue  # 🌟 v1.2: 跳过没有 name_en 的记录
                     
-                    # committee_membership 需要转为 JSON
-                    committee_json = json.dumps(person.get("committee_membership", [])) if person.get("committee_membership") else None
+                    # 🌟 v4.15: Fix schema - committee_membership goes inside background JSONB, not as separate column
+                    # Build background JSON with committee_membership
+                    background_data = {}
+                    if person.get("committee_membership"):
+                        background_data["committee_membership"] = person.get("committee_membership")
+                    if person.get("biography"):
+                        background_data["biography"] = person.get("biography")
+                    background_json = json.dumps(background_data) if background_data else '{}'
                     
                     # 🌟 v1.2: 先检查是否存在，再决定 INSERT 或 UPDATE
                     existing = await conn.fetchval(
@@ -1007,22 +1013,22 @@ class InsertKeyPersonnelTool(Tool):
                             UPDATE key_personnel SET
                                 position_title_en = $1,
                                 board_role = $2,
-                                committee_membership = $3::jsonb,
+                                background = $3::jsonb,
                                 document_id = $4
                             WHERE id = $5
                             """,
                             person.get("position_title_en"),
                             person.get("board_role"),
-                            committee_json,
+                            background_json,
                             document_id,
                             existing
                         )
                     else:
                         await conn.execute(
                             """
-                            INSERT INTO key_personnel 
-                            (company_id, document_id, name_en, name_zh, position_title_en, board_role, committee_membership, biography)
-                            VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
+                            INSERT INTO key_personnel
+                            (company_id, document_id, name_en, name_zh, position_title_en, board_role, background)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
                             """,
                             actual_company_id,  # 🌟 使用转换后的 ID
                             document_id,
@@ -1030,8 +1036,7 @@ class InsertKeyPersonnelTool(Tool):
                             person.get("name_zh"),
                             person.get("position_title_en"),
                             person.get("board_role"),
-                            committee_json,
-                            person.get("biography")
+                            background_json
                         )
                     inserted_count += 1
             
@@ -1504,7 +1509,9 @@ from loguru import logger
 
 class InsertEntityRelationTool(Tool):
     """
-    [Tool] 写入实体关系（知识图谱） 🌟 知识图谱遗漏修复 (严格强约束版)
+    [Tool] 写入实体关系（知识图谱） 🌟 v4.6
+    
+    ⚠️ entity_relations 表使用 company_id (INTEGER FK)，不是 entity_type/name (STRING)
     """
     
     @property
@@ -1526,18 +1533,24 @@ class InsertEntityRelationTool(Tool):
             "type": "object",
             "properties": {
                 "document_id": {"type": "integer", "description": "Source document ID"},
-                "source_entity_type": {
-                    "type": "string",
-                    "enum": ["person", "company", "event", "location"],
-                    "description": "Type of the source entity"
+                "source_company_id": {
+                    "type": "integer", 
+                    "description": "Source company ID (use this for company-to-company relations)"
                 },
-                "source_entity_name": {
+                "source_company_name": {
                     "type": "string", 
-                    "description": "Name of the source entity (e.g., 'Tencent Holdings' NOT 'The Group')"
+                    "description": "Source company name (alternative to source_company_id, system will resolve)"
+                },
+                "target_company_id": {
+                    "type": "integer", 
+                    "description": "Target company ID (use this for company-to-company relations)"
+                },
+                "target_company_name": {
+                    "type": "string", 
+                    "description": "Target company name (alternative to target_company_id, system will resolve)"
                 },
                 "relation_type": {
                     "type": "string",
-                    # 🌟 第 1 層防護：在 Schema 中嚴格鎖死 Enum，不讓 LLM 亂作夢！
                     "enum": [
                         "executive_of",      # 董事/高管
                         "subsidiary_of",     # 子公司
@@ -1550,14 +1563,13 @@ class InsertEntityRelationTool(Tool):
                     ],
                     "description": "Type of relation. YOU MUST STRICTLY CHOOSE FROM THIS LIST ONLY."
                 },
-                "target_entity_type": {
-                    "type": "string",
-                    "enum": ["person", "company", "event", "location"],
-                    "description": "Type of the target entity"
+                "ownership_percentage": {
+                    "type": "number", 
+                    "description": "Ownership percentage if applicable"
                 },
-                "target_entity_name": {
-                    "type": "string", 
-                    "description": "Name of the target entity"
+                "details": {
+                    "type": "object", 
+                    "description": "Additional details as JSON object"
                 },
                 "confidence_score": {
                     "type": "number",
@@ -1566,8 +1578,7 @@ class InsertEntityRelationTool(Tool):
                 },
                 "event_year": {"type": ["integer", "null"], "description": "Year of the event/relation"}
             },
-            "required": ["document_id", "source_entity_type", "source_entity_name", 
-                         "relation_type", "target_entity_type", "target_entity_name"]
+            "required": ["document_id", "relation_type"]
         }
     
     @property
@@ -1577,11 +1588,13 @@ class InsertEntityRelationTool(Tool):
     async def execute(
         self,
         document_id: int,
-        source_entity_type: str,
-        source_entity_name: str,
         relation_type: str,
-        target_entity_type: str,
-        target_entity_name: str,
+        source_company_id: int = None,
+        source_company_name: str = None,
+        target_company_id: int = None,
+        target_company_name: str = None,
+        ownership_percentage: float = None,
+        details: dict = None,
         confidence_score: float = 0.8,
         event_year: Optional[Any] = None,
         context: dict = None,  # 🌟 v4.5: Context fallback for document_id
@@ -1612,11 +1625,17 @@ class InsertEntityRelationTool(Tool):
                 "success": False,
                 "error": f"STRICT RULE VIOLATION: '{relation_type}' is not allowed. You MUST choose from {list(allowed_relations)}."
             }, ensure_ascii=False)
-            
+        
         # 擋下沒有意義的代名詞實體
         bad_words = ["the group", "the company", "it", "本公司", "本集團"]
-        if source_entity_name.lower() in bad_words or target_entity_name.lower() in bad_words:
-            logger.warning(f"⚠️ LLM 試圖寫入代名詞實體: {source_entity_name} -> {target_entity_name}，已拒絕。")
+        if source_company_name and source_company_name.lower() in bad_words:
+            logger.warning(f"⚠️ LLM 試圖寫入代名詞實體: {source_company_name}，已拒絕。")
+            return json.dumps({
+                "success": False,
+                "error": "STRICT RULE VIOLATION: You cannot use pronouns ('The Company', '本集團') as entity names. Please resolve to the actual proper noun."
+            }, ensure_ascii=False)
+        if target_company_name and target_company_name.lower() in bad_words:
+            logger.warning(f"⚠️ LLM 試圖寫入代名詞實體: {target_company_name}，已拒絕。")
             return json.dumps({
                 "success": False,
                 "error": "STRICT RULE VIOLATION: You cannot use pronouns ('The Company', '本集團') as entity names. Please resolve to the actual proper noun."
@@ -1636,30 +1655,47 @@ class InsertEntityRelationTool(Tool):
         db = _get_db_client(context)
         
         try:
+            # 🌟 Resolve company names to IDs if needed
+            actual_source_id = source_company_id
+            actual_target_id = target_company_id
+            
+            if source_company_name and not actual_source_id:
+                actual_source_id, err = await _resolve_company_id(db, company_name=source_company_name, context=context)
+                if err:
+                    return json.dumps({"success": False, "error": f"Cannot resolve source company: {err}"}, indent=2)
+            
+            if target_company_name and not actual_target_id:
+                actual_target_id, err = await _resolve_company_id(db, company_name=target_company_name, context=context)
+                if err:
+                    return json.dumps({"success": False, "error": f"Cannot resolve target company: {err}"}, indent=2)
+            
+            if not actual_source_id or not actual_target_id:
+                return json.dumps({"success": False, "error": "Both source_company_id and target_company_id must be provided (or resolved from names)"}, indent=2)
+            
             async with db.connection() as conn:
                 await conn.execute(
                     """
                     INSERT INTO entity_relations 
-                    (document_id, source_entity_type, source_entity_name, 
-                     relation_type, target_entity_type, target_entity_name,
+                    (document_id, source_company_id, target_company_id, 
+                     relation_type, ownership_percentage, details,
                      extraction_confidence, event_year)
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                     """,
                     document_id,
-                    source_entity_type,
-                    source_entity_name.strip(),
+                    actual_source_id,
+                    actual_target_id,
                     relation_type,
-                    target_entity_type,
-                    target_entity_name.strip(),
+                    ownership_percentage,
+                    json.dumps(details) if details else None,
                     confidence_score,
                     actual_event_year
                 )
             
-            logger.info(f"✅ 写入实体关系: {source_entity_name} → {relation_type} → {target_entity_name}")
+            logger.info(f"✅ 写入实体关系: company {actual_source_id} → {relation_type} → company {actual_target_id}")
             
             return json.dumps({
                 "success": True,
-                "relation": f"{source_entity_name} → {relation_type} → {target_entity_name}",
+                "relation": f"company {actual_source_id} → {relation_type} → company {actual_target_id}",
                 "confidence": confidence_score,
                 "message": f"✅ 知识图谱关系已写入"
             }, indent=2, ensure_ascii=False)
@@ -1709,7 +1745,7 @@ class InsertMarketDataTool(Tool):
                     "type": ["string", "null"], 
                     "description": "🌟 如果数据属于子公司、关联公司或竞争对手，请填写他们的公司名称，系统会自动查找或创建对应的 ID"
                 },
-                "data_date": {"type": "string", "description": "Data date (YYYY-MM-DD format, e.g., '2023-12-31')"},
+                "fiscal_period": {"type": "string", "description": "Fiscal period (e.g., 'FY2023', 'Q1 2023', '2023-12-31')"},
                 "period_type": {"type": ["string", "null"], "description": "Period type (e.g., 'daily', 'yearly')"},
                 "pe_ratio": {"type": ["number", "null"], "description": "Price-to-Earnings ratio"},
                 "pb_ratio": {"type": ["number", "null"], "description": "Price-to-Book ratio"},
@@ -1723,14 +1759,14 @@ class InsertMarketDataTool(Tool):
                 "dividend_yield": {"type": ["number", "null"], "description": "Dividend yield (%)"},
                 "source": {"type": ["string", "null"], "description": "Data source"}
             },
-            "required": ["data_date"]
+            "required": ["fiscal_period"]
         }
     
     @property
     def read_only(self) -> bool:
         return False
     
-    async def execute(self, data_date: str, company_id: int = None, company_name: str = None, 
+    async def execute(self, fiscal_period: str, company_id: int = None, company_name: str = None, 
                       document_id: int = None, context: dict = None, **kwargs) -> str:
         """寫入市場數據
         
@@ -1779,13 +1815,13 @@ class InsertMarketDataTool(Tool):
                 await conn.execute(
                     """
                     INSERT INTO market_data 
-                    (company_id, data_date, period_type, pe_ratio, pb_ratio, market_cap,
+                    (company_id, fiscal_period, period_type, pe_ratio, pb_ratio, market_cap,
                      close_price, open_price, high_price, low_price, volume, turnover,
                      dividend_yield, source)
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
                     """,
                     actual_company_id,  # 🌟 使用转换后的 ID
-                    data_date_obj,  # 🌟 使用 date 物件
+                    fiscal_period,  # 🌟 使用 fiscal_period
                     kwargs.get("period_type"),
                     kwargs.get("pe_ratio"),
                     kwargs.get("pb_ratio"),
