@@ -1804,10 +1804,10 @@ class InsertMarketDataTool(Tool):
                 }, indent=2)
             
             # 🌟 將字串日期轉換為 date 物件
-            if isinstance(data_date, str):
-                data_date_obj = datetime.strptime(data_date, "%Y-%m-%d").date()
-            elif isinstance(data_date, date_type):
-                data_date_obj = data_date
+            if isinstance(fiscal_period, str):
+                data_date_obj = datetime.strptime(fiscal_period, "%Y-%m-%d").date()
+            elif isinstance(fiscal_period, date_type):
+                data_date_obj = fiscal_period
             else:
                 data_date_obj = date_type.today()  # Fallback
             
@@ -1836,13 +1836,13 @@ class InsertMarketDataTool(Tool):
                     kwargs.get("source")
                 )
             
-            logger.info(f"✅ 寫入市場數據: company_id={actual_company_id}, date={data_date}")
+            logger.info(f"✅ 寫入市場數據: company_id={actual_company_id}, date={fiscal_period}")
             
             return json.dumps({
                 "success": True,
                 "company_id": actual_company_id,
                 "company_name": company_name,
-                "data_date": data_date,
+                "fiscal_period": fiscal_period,
                 "message": f"✅ 成功寫入市場數據 (公司: {company_name or f'ID={actual_company_id}'})"
             }, indent=2, ensure_ascii=False)
             
