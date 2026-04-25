@@ -1,14 +1,14 @@
 """
-Stage 5: Validate + Vector Index + Archive (v1.0)
+Stage 5: Vector Index + Archive (v2.0)
 
-合并了原有的 Stage 6 (Validator), Stage 7 (Vector Indexer), Stage 8 (Archiver)
+合并了原有的 Stage 7 (VectorIndexer), Stage 8 (Archiver)
+Validator 已移除 - Agent Path B 自己验证
 
 职责：
-- 数据验证与单位换算
 - 文本切块 + Embedding + 向量入库
 - 标记文档完成 + 清理临时文件 + 生成处理报告
 
-🌟 合并后的单一 Stage：减少 Pipeline 复杂度
+🌟 v4.20: 移除 Validator，简化 Pipeline
 """
 
 import json
@@ -18,21 +18,13 @@ from datetime import datetime
 from loguru import logger
 
 
-class Stage5ValidateArchive:
-    """Stage 5: Validate + Vector Index + Archive"""
+class Stage5VectorArchive:
+    """Stage 5: Vector Index + Archive (v2.0)"""
     
     def __init__(self, db_client: Any = None):
         self.db_client = db_client
         # 延迟导入以避免循环依赖
-        self._validator = None
         self._vector_indexer = None
-    
-    @property
-    def validator(self):
-        if self._validator is None:
-            from nanobot.ingestion.stages.stage6_validator import Stage6Validator
-            self._validator = Stage6Validator(db_client=self.db_client)
-        return self._validator
     
     @property
     def vector_indexer(self):
@@ -72,40 +64,22 @@ class Stage5ValidateArchive:
             
         Returns:
             Dict: {
-                "validation": {...},
                 "vector_index": {...},
                 "archive": {...},
                 "status": "success"
             }
         """
-        logger.info(f"🎯 Stage 5: Validate + Vector Index + Archive 开始...")
+        logger.info(f"🎯 Stage 5: Vector Index + Archive 开始...")
         
         result = {
-            "validation": None,
             "vector_index": None,
             "archive": None,
             "status": "success"
         }
         
-        # ===== 1. Validation =====
-        if extraction_result and document_id:
-            logger.info("   📋 Step 1: 数据验证与单位换算...")
-            try:
-                validation_result = await self.validator.run(
-                    extraction_result=extraction_result,
-                    company_id=company_id,
-                    year=year,
-                    document_id=document_id
-                )
-                result["validation"] = validation_result
-                logger.info(f"   ✅ Validation 完成")
-            except Exception as e:
-                logger.warning(f"   ⚠️ Validation 失败: {e}")
-                result["validation"] = {"status": "failed", "error": str(e)}
-        
-        # ===== 2. Vector Index =====
+        # ===== 1. Vector Index =====
         if document_id:
-            logger.info("   📋 Step 2: 向量索引...")
+            logger.info("   📋 Step 1: 向量索引...")
             try:
                 vector_result = await self.vector_indexer.run(
                     document_id=document_id,
@@ -117,8 +91,8 @@ class Stage5ValidateArchive:
                 logger.warning(f"   ⚠️ Vector Index 失败: {e}")
                 result["vector_index"] = {"status": "failed", "error": str(e)}
         
-        # ===== 3. Archive =====
-        logger.info("   📋 Step 3: 归档...")
+        # ===== 2. Archive =====
+        logger.info("   📋 Step 2: 归档...")
         try:
             archive_result = await self._archive(
                 doc_id=doc_id,

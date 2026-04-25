@@ -17,11 +17,11 @@ Internal Stages (called within Stage 5):
 from .stage0_preprocessor import Stage0Preprocessor
 from .stage2_enrichment import Stage2Enrichment
 from .stage4_agentic_extractor import Stage4AgenticExtractor
-from .stage5_validate_archive import Stage5ValidateArchive
+from .stage5_validate_archive import Stage5VectorArchive
 
 __all__ = [
     "Stage0Preprocessor",
     "Stage2Enrichment",
     "Stage4AgenticExtractor",
-    "Stage5ValidateArchive",
+    "Stage5VectorArchive",
 ]
