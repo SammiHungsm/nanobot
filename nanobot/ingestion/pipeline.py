@@ -10,10 +10,9 @@ Pipeline Flow (Linear):
 - Stage 2: Enrichment (Save Artifacts + RAGAnything Vision)
 - Stage 3: Router (Keyword Routing)
 - Stage 4: Agentic Extractor (Tool Calling Extraction) 🌟 Single extraction entry point
-- Stage 5: Vanna Training (Text-to-SQL Training)
-- Stage 6: Validator (Data Validation + Unit Conversion)
-- Stage 7: Vector Indexer (Chunking + Embedding)
-- Stage 8: Archiver (Archive + Cleanup + Report) 🆕
+- Stage 5: Validator (Data Validation + Unit Conversion)
+- Stage 6: Vector Indexer (Chunking + Embedding)
+- Stage 7: Archiver (Archive + Cleanup + Report) 🆕
 
 Architecture: Minimalist orchestrator pattern (~250 lines)
 """
@@ -32,7 +31,6 @@ from nanobot.ingestion.stages import (
     Stage4AgenticExtractor,
     Stage4_5_KGExtractor,
     Stage4_6_TrendExtractor,  # 🆕 多年趨勢數據提取
-    Stage5VannaTraining,
     Stage6Validator,
     Stage7VectorIndexer,
     Stage8Archiver,
@@ -481,20 +479,9 @@ class DocumentPipeline(BaseIngestionPipeline):
                     logger.warning(f"   ⚠️ Stage 4.6 多年趨勢提取失敗: {e}")
                     result["stages"]["stage4_6"] = {"status": "failed", "error": str(e)}
             
-            # ===== Stage 5: Vanna Training =====
+            # ===== Stage 5: Validator =====
             if progress_callback:
-                progress_callback(80.0, "Stage 5: Vanna Training")
-            
-            await Stage5VannaTraining.train_vanna(
-                doc_id=doc_id,
-                company_id=company_id,
-                year=year,
-                db_client=self.db
-            )
-            
-            # ===== Stage 6: Validator =====
-            if progress_callback:
-                progress_callback(85.0, "Stage 6: Validator")
+                progress_callback(80.0, "Stage 5: Validator")
             
             extraction_result = result["stages"].get("stage4", {}).get("extracted_data", {})
             
@@ -661,8 +648,8 @@ class DocumentPipeline(BaseIngestionPipeline):
         year = doc_info.get("year") or 2025
         
         # 🌟 Step 3: 根據 last_stage 決定從哪裡繼續
-        # Stage 順序: stage0, stage0_5, stage1, stage2, stage3, stage4, stage5, stage6, stage7
-        stage_order = ["stage0", "stage0_5", "stage1", "stage2", "stage3", "stage4", "stage5", "stage6", "stage7"]
+        # Stage 順序: stage0, stage0_5, stage1, stage2, stage3, stage4, stage4_5, stage4_6, stage5, stage6, stage7
+        stage_order = ["stage0", "stage0_5", "stage1", "stage2", "stage3", "stage4", "stage4_5", "stage4_6", "stage5", "stage6", "stage7"]
         
         try:
             last_idx = stage_order.index(last_stage)
@@ -680,7 +667,7 @@ class DocumentPipeline(BaseIngestionPipeline):
         # 這裡需要根據具體 stage 邏輯來實現
         # 簡化版：只支援從 stage3, stage4, stage5 恢復
         
-        if resume_from in ["stage3", "stage4", "stage5", "stage6", "stage7"]:
+        if resume_from in ["stage3", "stage4", "stage4_5", "stage4_6", "stage5", "stage6", "stage7"]:
             # 這些 stages 可以直接從 DB 讀取 artifacts
             result = {"doc_id": doc_id, "document_id": document_id, "company_id": company_id, "status": "resumed", "stages": {}}
             

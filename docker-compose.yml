@@ -39,6 +39,45 @@ services:
       -c shared_preload_libraries=vector 
       -c max_connections=200
 
+  # Neo4j Graph Database - Entity Relations & Knowledge Graph
+  neo4j:
+    image: neo4j:5-community
+    container_name: neo4j
+    restart: unless-stopped
+    ports:
+      - "7474:7474"  # Browser UI
+      - "7687:7687"  # Bolt protocol
+    environment:
+      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:-password}
+      - BLOBS_STORAGE__ENABLED=false
+      - NEO4J_PLUGINS=["apoc"]
+      - NEO4J_dbms_memory_heap_initial__size=256M
+      - NEO4J_dbms_memory_heap_max__size=512M
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+      - ./storage/neo4j_import:/import
+      - ./storage/neo4j_import/init.sh:/startup/init.sh
+    environment:
+      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD:-password}
+      - BLOBS_STORAGE__ENABLED=false
+      - NEO4J_PLUGINS=["apoc"]
+      - NEO4J_dbms_memory_heap_initial__size=256M
+      - NEO4J_dbms_memory_heap_max__size=512M
+      - NEO4J_dbms_security_procedures_unrestricted=apoc.*
+      - NEO4J_dbms_startup_max_wait_time=60
+    command: "/startup/init.sh"
+    healthcheck:
+      test: ["CMD", "neo4j", "status", "--health-status"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+
   # Nanobot Gateway - Main bot service
   nanobot-gateway:
     container_name: nanobot-gateway
@@ -58,11 +97,10 @@ services:
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
       - DASHSCOPE_API_BASE=${DASHSCOPE_API_BASE:-https://coding.dashscope.aliyuncs.com/v1}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      # 🌟 LlamaParse API Key
       - LLAMA_CLOUD_API_KEY=${LLAMA_CLOUD_API_KEY}
       - LLAMAPARSE_TIER=${LLAMAPARSE_TIER:-agentic}
-      # 🌟 Vanna Service URL (HTTP Client)
-      - VANNA_SERVICE_URL=http://vanna-service:8082
+      - NEO4J_HOST=neo4j
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-password}
     volumes:
       - ./config:/app/config
       - ~/.nanobot:/root/.nanobot
@@ -71,8 +109,8 @@ services:
     depends_on:
       postgres-financial:
         condition: service_healthy
-      vanna-service:
-        condition: service_started
+      neo4j:
+        condition: service_healthy
     deploy:
       resources:
         limits:
@@ -107,59 +145,21 @@ services:
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
       - DASHSCOPE_API_BASE=${DASHSCOPE_API_BASE:-https://qianfan.baidubce.com/v2/coding}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      # 🌟 LlamaParse API Key
       - LLAMA_CLOUD_API_KEY=${LLAMA_CLOUD_API_KEY}
       - LLAMAPARSE_TIER=${LLAMAPARSE_TIER:-agentic}
-      # 🌟 Vanna Service URL (HTTP Client)
-      - VANNA_SERVICE_URL=http://vanna-service:8082
+      - NEO4J_HOST=neo4j
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-password}
     depends_on:
       postgres-financial:
         condition: service_healthy
-      vanna-service:
-        condition: service_started
+      neo4j:
+        condition: service_healthy
     restart: unless-stopped
     deploy:
       resources:
         limits:
           cpus: '2'
           memory: 2G
-  
-  # Vanna AI Service - Text-to-SQL with persistence
-  vanna-service:
-    build:
-      context: ./vanna-service
-      dockerfile: Dockerfile
-    container_name: vanna-service
-    env_file:           
-      - .env  
-    volumes:
-      - vanna_data:/app/data
-      - vanna_onnx_cache:/root/.cache/chroma
-      - ./data/vanna:/app/data/chromadb
-      - ./config:/app/config
-      - ~/.nanobot:/root/.nanobot
-      - ./vanna-service/start.py:/app/start.py:ro
-      - ./vanna-service/vanna_training.py:/app/vanna_training.py:ro
-    environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres_password_change_me}@postgres-financial:5432/${POSTGRES_DB:-annual_reports}
-      - VANNA_MODEL=${VANNA_MODEL:-financial-sql}
-      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
-      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
-      - DASHSCOPE_API_BASE=${DASHSCOPE_API_BASE:-https://coding.dashscope.aliyuncs.com/v1}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - ANONYMIZED_TELEMETRY=False
-      - CHROMA_TELEMETRY=False
-    # ports:  # 🌟 不對外暴露，只使用內部網絡
-    #   - "8082:8082"
-    depends_on:
-      postgres-financial:
-        condition: service_healthy
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
   
   # Ingestion Service - PDF Processing
   ingestion-worker:
@@ -178,11 +178,15 @@ services:
       - BATCH_SIZE=${BATCH_SIZE:-10}
       - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      # 🌟 LlamaParse API Key
       - LLAMA_CLOUD_API_KEY=${LLAMA_CLOUD_API_KEY}
       - LLAMAPARSE_TIER=${LLAMAPARSE_TIER:-agentic}
+      - NEO4J_HOST=neo4j
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-password}
     depends_on:
-      - postgres-financial
+      postgres-financial:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
     restart: unless-stopped
     deploy:
       resources:
@@ -201,11 +205,11 @@ services:
 volumes:
   postgres_data:
     driver: local
-  vanna_data:
-    driver: local
-  vanna_onnx_cache:
-    driver: local
   pdf_upload_data:
+    driver: local
+  neo4j_data:
+    driver: local
+  neo4j_logs:
     driver: local
 
 networks:

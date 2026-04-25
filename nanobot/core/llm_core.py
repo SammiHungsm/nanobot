@@ -21,6 +21,9 @@ Usage:
     # 视觉解析
     result = await llm_core.vision(img_base64, "提取表格")
     
+    # Embedding 生成
+    vector = await llm_core.get_embedding("分析这句文本")
+    
     # Provider 检测
     provider_name = detect_provider("gpt-4o")  # 返回 "openai"
 """
@@ -396,6 +399,64 @@ class UnifiedLLMCore:
         except Exception as e:
             logger.error(f"❌ Vision call failed: {e}")
             raise
+    
+    async def get_embedding(
+        self,
+        text: str,
+        model: str = "text-embedding-3-small"
+    ) -> Optional[List[float]]:
+        """
+        🎯 统一的 Embedding 接口
+        
+        Args:
+            text: 文本内容
+            model: Embedding 模型（默认 text-embedding-3-small）
+            
+        Returns:
+            Optional[List[float]]: Embedding 向量
+        """
+        if not NANOBOT_CONFIG_AVAILABLE:
+            logger.warning("⚠️ nanobot config not available")
+            return None
+        
+        try:
+            import httpx
+            
+            api_key = self.config.get_api_key() if self.config else None
+            api_base = self.config.get_api_base() if self.config else "https://api.openai.com/v1"
+            
+            if not api_key:
+                logger.warning("⚠️ No API key for embedding")
+                return None
+            
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    f"{api_base.rstrip('/')}/embeddings",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "input": text[:2000],
+                        "model": model
+                    }
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    embedding = data["data"][0]["embedding"]
+                    logger.debug(f"✅ Embedding generated: {len(embedding)} dimensions")
+                    return embedding
+                else:
+                    logger.warning(f"⚠️ Embedding API error: {response.status_code}")
+                    return None
+                    
+        except ImportError:
+            logger.warning("⚠️ httpx not available")
+            return None
+        except Exception as e:
+            logger.warning(f"⚠️ Embedding failed: {e}")
+            return None
     
     async def batch_chat(
         self,

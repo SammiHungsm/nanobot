@@ -1,89 +1,87 @@
-# Vanna 微服务架构重构
+# Vanna 微服務架構文檔
 
 ## 📋 概述
 
-将 Vanna AI 从单体架构重构为真正的微服务架构，实现 Gateway 与 Vanna 的解耦。
+Vanna AI Text-to-SQL 微服務，基於 [Vanna.ai](https://vanna.ai/) 框架，結合 ChromaDB 向量存儲和 Alibaba Cloud LLM。
 
-## 🌟 功能迁移对照表
+**注意：** 本專案是 `nanobot` 的兄弟項目，位於 `SFC_AI/sfc_poc/vanna/`
 
-| 原本 vanna_tool.py | 现在 vanna-service/start.py |
-|-------------------|----------------------------|
-| `VannaSQL.discover_dynamic_keys()` | `GET /api/discover_dynamic_keys` |
-| `VannaSQL.build_enhanced_prompt()` | 内置在 `POST /api/ask_with_dynamic_schema` |
-| `VannaSQL.generate_sql_with_dynamic_schema()` | `POST /api/ask_with_dynamic_schema` |
-| `VannaSQL.query_with_dynamic_schema()` | `POST /api/ask_with_dynamic_schema` |
-| `VannaSQL.train_schema()` | `POST /api/train` |
-| `VannaSQL.generate_sql()` | `POST /api/ask` |
-| `VannaSQL.execute()` | 内置在 `/api/ask` 和 `/api/ask_with_dynamic_schema` |
+## 📁 實際檔案結構
 
-## 🆕 新增 API Endpoints
+```
+SFC_AI/sfc_poc/vanna/
+├── README.md
+├── docker-compose.yml
+└── vanna_backend/
+    ├── app_alicloud_mysql.py    # Flask API 服務器 (~391行)
+    ├── training_data.py         # 訓練數據（DDL/SQL/Docs）(~461行)
+    ├── utility.py               # 工具函數 (~153行)
+    ├── vanna_config.py          # Vanna 配置 (~18行)
+    ├── test_chart.py
+    ├── requirements.txt
+    └── chroma_db/               # ChromaDB 向量存儲
+```
 
-### 1. `GET /api/discover_dynamic_keys`
+## 🔧 技術棧
 
-发现 JSONB 字段中的所有动态 Keys：
+| 組件 | 技術 |
+|------|------|
+| Text-to-SQL | Vanna 0.7.9 |
+| 向量數據庫 | ChromaDB |
+| LLM | Alibaba Cloud (Qwen-plus) |
+| 資料庫 | MySQL |
+| API 框架 | Flask |
+
+## 🌟 API Endpoints
+
+### 現有的 API Endpoints (`app_alicloud_mysql.py`)
+
+| Endpoint | 方法 | 說明 |
+|----------|------|------|
+| `/api/get_training_data` | GET | 獲取訓練數據 |
+| `/api/delete_training_data` | DELETE | 刪除訓練數據 |
+| `/api/train_with_ddl` | POST | 使用 DDL 訓練 |
+| `/api/train_with_queries` | POST | 使用 Question-SQL 對訓練 |
+| `/api/pre_train` | POST | 預訓練（DDL + SQL 對） |
+| `/api/generate_sql` | POST | 生成 SQL 查詢 |
+| `/api/health` | GET | 健康檢查 |
+
+## ⚠️ DDL 同步問題
+
+**重要：** `training_data.py` 中的 DDL 與 `nanobot/storage/init_complete.sql` 不一致
+
+| 問題 | 說明 |
+|------|------|
+| 欄位不存在 | `index_theme`, `parent_company`, `is_index_report` |
+| 向量維度錯誤 | `VECTOR(1536)` 應為 `VECTOR(384)` |
+| 表結構過時 | `document_companies` 使用 `company_name` 而非 `company_id` FK |
+
+**參見：** [CODE_REVIEW_2026-04-25.md](CODE_REVIEW_2026-04-25.md)
+
+## 🚀 部署
 
 ```bash
-curl http://localhost:8082/api/discover_dynamic_keys
+cd SFC_AI/sfc_poc/vanna/vanna_backend
+
+# 安裝依賴
+pip install -r requirements.txt
+
+# 運行服務
+flask --app app_alicloud_mysql.py run --port 5000
 ```
 
-返回：
-```json
-{
-  "discovered_keys": ["index_quarter", "index_theme", "is_audited"],
-  "total_keys": 3,
-  "sample_values": {
-    "index_quarter": "Q3",
-    "index_theme": "Biotech"
-  },
-  "key_frequency": {
-    "index_quarter": 50,
-    "index_theme": 45
-  },
-  "discovered_industries": ["Biotech", "Healthcare", "Fintech"],
-  "status": "success"
-}
-```
+## 📊 服務狀態
 
-### 2. `POST /api/ask_with_dynamic_schema`
+| 端口 | 服務 |
+|------|------|
+| 5000 | Vanna Flask API (本地) |
+| 8082 | Vanna Service (Docker) |
 
-带 Just-in-Time Schema Injection 的查询：
+## ✅ 總結
 
-```bash
-curl -X POST http://localhost:8082/api/ask_with_dynamic_schema \
-  -H "Content-Type: application/json" \
-  -d '{"question": "Find all Q3 Biotech companies"}'
-```
-
-## 🚀 部署步骤
-
-```bash
-cd C:\Users\sammi_hung\Desktop\SFC_AI\sfc_poc\nanobot
-
-# 重建所有镜像
-docker-compose build
-
-# 启动服务
-docker-compose up -d
-
-# 验证 Vanna Service
-curl http://localhost:8082/health
-curl http://localhost:8082/api/discover_dynamic_keys
-```
-
-## 📊 效果对比
-
-| 指标 | 重构前 | 重构后 |
-|------|--------|--------|
-| Gateway 镜像大小 | ~2.5 GB | ~1.8 GB |
-| WebUI 镜像大小 | ~2.3 GB | ~1.6 GB |
-| 依赖冲突风险 | 高 (vanna + torch) | 低 (纯 HTTP) |
-| 资源利用率 | 低 (Vanna 容器空闲) | 高 (各司其职) |
-
-## ✅ 总结
-
-所有原本的功能都已迁移到 vanna-service，包括：
-- ✅ 动态 Schema 发现 (`discover_dynamic_keys`)
-- ✅ Just-in-Time Schema Injection (`ask_with_dynamic_schema`)
-- ✅ Text-to-SQL 生成 (`ask`)
-- ✅ Vanna 训练 (`train`)
-- ✅ Embedding 生成 (`embed`)
+當前 Vanna Service 實現：
+- ✅ ChromaDB 向量存儲
+- ✅ Alibaba Cloud LLM 集成
+- ✅ MySQL 資料庫連接
+- ✅ 預訓練 + 查詢生成
+- ❌ **DDL 需要與 nanobot 同步**

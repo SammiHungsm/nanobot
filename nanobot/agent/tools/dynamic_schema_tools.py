@@ -1,15 +1,19 @@
 """
-Dynamic Schema Tools - Just-in-Time Schema Injection for Vanna
+Dynamic Schema Tools - Just-in-Time Schema Discovery
 
 這些 Tools 讓 Agent 能夠：
 1. 動態發現 JSONB 欄位中的所有 Keys
-2. 將隱藏屬性注入到 Vanna 的 Prompt 中
+2. 將隱藏屬性注入到查詢 Prompt 中
 3. 支持 PostgreSQL JSONB 查詢語法
 
 設計理念：
 - 不再需要人工維護 JSON Key 清單
 - Agent 在查詢前自動掃描資料庫
 - 實現真正的全動態閉環
+
+用於：
+- DirectSQLTool 的 Schema 發現
+- SemanticSearchTool 的內容檢索
 """
 
 from __future__ import annotations

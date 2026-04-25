@@ -1,34 +1,30 @@
 """
-Stage 7: Vector Indexer (v4.3 結構化圖表索引)
+Stage 7: Vector Indexer (v4.4 簡化架構)
 
-职责：
-- 文本切块 (Semantic Chunking)
-- Embedding 生成（通过 Vanna Service API，无需本地模型）
-- 向量入库 (PgVector)
-- 多模态 RAG 准备（图片 + 文本）
+職責：
+- 文本切塊 (Semantic Chunking)
+- Embedding 生成（使用 OpenAI Embedding API）
+- 向量入庫 (PgVector)
 
-🌟 v4.3: 配合 Stage 2 v4.1 的結構化圖表數據
-- 優先讀取 markdown_representation 作為核心數據
-- 添加 [結構化數據 - 可直接查詢] 段落，確保精確匹配
+🌟 v4.4: 移除 Vanna Service 依賴
+- 直接使用 OpenAI API 做 embedding
+- 簡化架構，移除 vanna-service 依賴
 
-🌟 v4.2: 使用 Vanna Service 的 Embedding API
-- 无需在 nanobot-webui 安装 sentence-transformers
-- 复用 Vanna 的 embedding model，避免重复
-- 通过 HTTP 调用 vanna-service:8000/api/embed
+架構：
+- 之前：Stage 7 → Vanna Service (:8082) → OpenAI
+- 現在：Stage 7 → OpenAI API (direct)
 """
 
 import os
 import json
 import asyncio
-import httpx
-from pathlib import Path
 from typing import Dict, Any, List, Optional
 from loguru import logger
 
 from nanobot.core.llm_core import llm_core
 
-# 🌟 v4.2: Vanna Service URL (Docker network)
-VANNA_SERVICE_URL = os.environ.get("VANNA_SERVICE_URL", "http://vanna-service:8082")  # 🌟 使用正確端口
+# OpenAI Embedding
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 
 
 class Stage7VectorIndexer:
@@ -119,9 +115,9 @@ class Stage7VectorIndexer:
         """
         生成 Embedding
         
-        🌟 v4.2: 调用 Vanna Service 的 Embedding API
-        - 无需本地安装 sentence-transformers
-        - 复用 Vanna 的 embedding model
+        🌟 v4.4: 直接使用 OpenAI Embedding API
+        - 不再依賴 Vanna Service
+        - 簡化架構
         
         Args:
             text: 文本内容
@@ -130,32 +126,13 @@ class Stage7VectorIndexer:
             Optional[List[float]]: Embedding 向量
         """
         try:
-            # 🌟 v4.2: 调用 Vanna Service API
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(
-                    f"{VANNA_SERVICE_URL}/api/embed",
-                    json={"texts": [text[:2000]]}  # 限制长度
-                )
-                
-                if response.status_code == 200:
-                    result = response.json()
-                    embedding = result["embeddings"][0]
-                    logger.debug(f"   ✅ Vanna Service Embedding: {len(embedding)} 维")
-                    return embedding
-                else:
-                    logger.warning(f"   ⚠️ Vanna Service 返回错误: {response.status_code}")
-                    return None
-                    
-        except httpx.ConnectError:
-            logger.warning(f"   ⚠️ 无法连接 Vanna Service: {VANNA_SERVICE_URL}")
-            return None
-        except Exception as e:
-            logger.warning(f"   ⚠️ Embedding 生成失败: {e}")
+            # 使用 llm_core 的 embedding 功能
+            embedding = await llm_core.get_embedding(text[:2000])
+            if embedding:
+                logger.debug(f"   ✅ OpenAI Embedding: {len(embedding)} 维")
+                return embedding
             return None
                     
-        except httpx.ConnectError:
-            logger.warning(f"   ⚠️ 无法连接 Vanna Service: {VANNA_SERVICE_URL}")
-            return None
         except Exception as e:
             logger.warning(f"   ⚠️ Embedding 生成失败: {e}")
             return None
@@ -287,6 +264,8 @@ class Stage7VectorIndexer:
 [核心數據表格]:
 {md_repr or analysis.get('description', '無數據')}
 [關鍵實體]: {', '.join(analysis.get('key_entities', analysis.get('key_metrics', [])))}
+[顯式搜索關鍵詞]: {', '.join(analysis.get("search_keywords", [])) if analysis.get("search_keywords") else "無"}
+[常見問題答案對]: {analysis.get("qa_pairs", []) if analysis.get("qa_pairs") else "無"}
 """
             
             # 🌟 v4.1: 如果有明確的 markdown_representation，額外添加純數據段落

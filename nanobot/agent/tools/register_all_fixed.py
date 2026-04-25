@@ -62,15 +62,45 @@ def register_all_tools(registry) -> None:
         logger.warning(f"⚠️ Failed to import dynamic_schema_tools: {e}")
     
     # ============================================================
-    # 3. 註冊 Vanna 工具 (Text-to-SQL) 🌟 使用新的 Tool Wrapper
+    # 3. 註冊 Direct SQL 工具（取代 Vanna）🌟
     # ============================================================
     try:
-        from nanobot.agent.tools.vanna_tool import VannaQueryTool
-        registry.register(VannaQueryTool())
-        logger.info("✅ Registered VannaQueryTool")
+        from nanobot.agent.tools.direct_sql_tool import DirectSQLTool, GetTableInfoTool
+        registry.register(DirectSQLTool())
+        registry.register(GetTableInfoTool())
+        logger.info("✅ Registered DirectSQL tools (replaces Vanna)")
         
     except ImportError as e:
-        logger.warning(f"⚠️ Failed to import vanna_tool: {e}")
+        logger.warning(f"⚠️ Failed to import direct_sql_tool: {e}")
+    
+    # ============================================================
+    # 3.5 註冊語意搜索工具（雙軌制）🌟
+    # ============================================================
+    try:
+        from nanobot.agent.tools.semantic_search_tool import SemanticSearchTool, GetDocumentContentTool
+        registry.register(SemanticSearchTool())
+        registry.register(GetDocumentContentTool())
+        logger.info("✅ Registered SemanticSearch tools (dual-track: SQL + Vector)")
+        
+    except ImportError as e:
+        logger.warning(f"⚠️ Failed to import semantic_search_tool: {e}")
+    
+    # ============================================================
+    # 3.6 註冊 Neo4j 圖譜查詢工具 🌟
+    # ============================================================
+    try:
+        from nanobot.agent.tools.neo4j_tool import (
+            Neo4jGraphQueryTool,
+            GetPersonHoldingsTool,
+            GetCompanyControllersTool
+        )
+        registry.register(Neo4jGraphQueryTool())
+        registry.register(GetPersonHoldingsTool())
+        registry.register(GetCompanyControllersTool())
+        logger.info("✅ Registered Neo4j graph query tools")
+        
+    except ImportError as e:
+        logger.warning(f"⚠️ Failed to import neo4j_tool: {e}")
     
     # ============================================================
     # 4. 註冊多模態 RAG 工具 (跨模態圖文關聯) 🌟 使用新的 Tool Wrapper

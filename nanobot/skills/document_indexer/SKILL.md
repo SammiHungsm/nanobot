@@ -20,23 +20,25 @@ metadata: {"nanobot":{"emoji":"📑"}}
 
 **這是關鍵！根據問題類型選擇正確的工具：**
 
-### 使用 `vanna_tool` (Text-to-SQL) 當：
+### 使用 `direct_sql` (SQL 查詢) 當：
 - 問題涉及**具體財務指標**（營收、利潤、資產、負債、現金流等）
 - 需要**計算**（增長率、比率、平均值、總和）
 - 需要**排行**（前 10 大、最高、最低）
 - 需要**跨年比較**或**趨勢分析**
 - 問題可以用數字回答
+- 持股量、公司關係等結構化數據
 
 **示例：**
 - "Show Tencent's revenue for 2020-2023"
 - "Which company has the highest net margin?"
 - "What is the average ROE for technology companies?"
-- "Compare Alibaba's profit growth year-over-year"
+- "Who holds more than 5% shares in this company?"
 
-### 使用語義檢索 (RagAnything / MongoDB text search) 當：
+### 使用 `semantic_search` (語義搜索) 當：
 - 問題涉及**主觀描述**或**政策解釋**
 - 需要**業務描述**或**戰略分析**
 - 需要**非結構化文本**（管理層討論、風險因素）
+- 需要**未來展望**、**管理層評論**
 - 問題無法用單一數字回答
 
 **示例：**
@@ -44,6 +46,7 @@ metadata: {"nanobot":{"emoji":"📑"}}
 - "Explain the company's risk management strategy"
 - "What did management say about AI investment?"
 - "Describe the impact of regulatory changes"
+- "How does the chairman explain the revenue decline?"
 
 ### 使用文檔索引 (document-indexer) 當：
 - 需要**精確頁碼**引用
@@ -103,5 +106,6 @@ python -c "from pathlib import Path; text = Path('workspace/indexes/<doc_name>/t
 - **證據綁定**：所有提取的數據必須附帶 `(Data from Physical Page: X)`。
 - **分層思考**：主 Agent 負責「看地圖」和「猜頁碼」；Sub-agent 負責「讀原始頁面」和「拿數」。
 - **禁止猜測**：若目錄不明確，請先讀取 `navigation_context.md` 尋找線索或詢問用戶。
-- **工具選擇**：具體數字問題優先使用 `vanna_tool`，主觀描述先用語義檢索。
-- **SQL 安全**：Vanna 生成的 SQL 必須經過 `financial_storage.py` 執行，防止 SQL 注入。
+- **工具選擇**：具體數字問題優先使用 `direct_sql`，主觀描述先用語義搜索 `semantic_search`。
+- **雙軌制**：數字型問題 → `direct_sql` | 策略型問題 → `semantic_search`
+- **SQL 安全**：`direct_sql` 執行查詢時使用參數化查詢防止 SQL 注入。

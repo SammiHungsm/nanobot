@@ -476,38 +476,41 @@ class Stage2Enrichment:
                         )
 
                         if db_client:
-                            # 🌟 v4.3: 從統一結果中提取
-                            md_repr = vision_result.get("markdown_representation", "")
+                            # 🌟 v5.0: 提取 structured_data（層級結構化數據）
+                            structured_data = vision_result.get("structured_data", {})
                             semantic_desc = vision_result.get("semantic_description", "")
                             vision_type = vision_result.get("type", art_type)
                             vision_title = vision_result.get("title", "")
                             
-                            # 🌟 v4.12: 完美組合 + 元數據標籤（解決上下文丟失問題）
-                            if md_repr and semantic_desc:
-                                primary_content = f"""[圖表語意描述]
-{semantic_desc}
+                            # 🌟 v5.0: 直接存 structured_data 入 content_json
+                            if structured_data:
+                                primary_content = f"""[圖表標題]
+{vision_title}
 
-[結構化數據 - 可直接查詢]
-{md_repr}
+[結構化數據]
+{json.dumps(structured_data, ensure_ascii=False, indent=2)}
+
+[語意描述]
+{semantic_desc}
 
 [元數據]
 - 原始類型: {vision_type}
 - 頁碼: {page_num}
 - 上下文標題: {precise_context.get('closest_heading', 'N/A')}
-- 圖表標題: {vision_title}
 - 檔案名: {filename}
 """
                             else:
-                                primary_content = md_repr or semantic_desc or ""
+                                primary_content = semantic_desc or json.dumps(vision_result, ensure_ascii=False)
                             
                             content_json = {
                                 "filename": filename,
                                 "local_path": local_path,
                                 "url": url,
                                 "analysis": vision_result,
+                                "structured_data": structured_data,
                                 "structural_context": precise_context,
                                 "semantic_description": semantic_desc,
-                                "markdown_representation": md_repr
+                                "title": vision_title
                             }
                             
                             await db_client.insert_raw_artifact(
@@ -573,8 +576,7 @@ class Stage2Enrichment:
         - type, title, markdown_representation, key_entities
         - semantic_description (語意描述，用於 Vector Search)
         """
-        prompt = f"""
-你是一個專業的數據分析 Agent，負責將文件中的圖片/圖表轉換為高質量的可搜索數據庫。
+        prompt = f"""你是一個專業的數據分析 Agent，負責從文件中的圖片/圖表提取結構化數據。
 
 【結構化上下文】
 - 所屬章節標題：{context_data['closest_heading']}
@@ -582,41 +584,78 @@ class Stage2Enrichment:
 - 圖表前的引言：{context_data['previous_text']}
 - 圖表後的分析：{context_data['next_text']}
 
-請仔細觀察圖片，輸出一個高精度的 JSON：
+請仔細觀察圖片，並輸出結構化的 JSON：
 
-1. "type": chart(圖表), table(表格), diagram(架構圖), photo(照片)
+1. "type": chart/table/diagram/photo
 
 2. "title": 精確標題
 
-3. "markdown_representation": 直接可查詢的結構化格式：
-   - Chart: | 類別 | 數值 |\n|---|---|\n   - Table: | 列名 | 列名 |\n|---|---|\n   - 折線圖: | 年份 | 數值 |\n|---|---|\n   - Diagram: 用條列式描述結構
+3. "structured_data": 🌟 核心輸出！直接可入庫的結構化數據
+   
+   【對於 Pie Chart（營收分佈、地區佔比）】
+   {{
+     "chart_type": "pie",
+     "data": [
+       {{"category": "Asia, Australia & Others", "value": 15, "unit": "%", "raw_label": "15%"}},
+       {{"category": "Hong Kong", "value": 45, "unit": "%", "raw_label": "45%"}}
+     ],
+     "metadata": {{"source_page": {context_data.get('page_num', 'unknown')}, "source_figure": "圖 6"}}
+   }}
+   
+   【對於 Bar Chart（比較不同項目的數值）】
+   {{
+     "chart_type": "bar",
+     "data": [
+       {{"item": "2023", "value": 275575, "unit": "HK$ million"}},
+       {{"item": "2022", "value": 267448, "unit": "HK$ million"}}
+     ]
+   }}
+   
+   【對於複雜 Chart（多層次，例如：地區 → 業務）】
+   {{
+     "chart_type": "hierarchical",
+     "level_1": [
+       {{"region": "Asia, Australia & Others", "percentage": 15, "amount_hk_million": 41239}},
+       {{"region": "Hong Kong", "percentage": 45, "amount_hk_million": 124000}}
+     ],
+     "level_2": {{
+       "Asia, Australia & Others": [
+         {{"sector": "Retail", "percentage_of_region": 38}},
+         {{"sector": "Ports", "percentage_of_region": 25}}
+       ]
+     }}
+   }}
+   
+   【重要】每個 value 必須是數字（int/float），唔好係字串 "15%"
 
-4. "key_entities": 重要實體列表 (公司、地區、指標)
+4. "key_entities": 提取的重要實體（公司名、地區、指標名）
 
-5. "semantic_description": 🌟 高可搜索性描述，包含：
-   - 年份 + 數據類型 + 關鍵詞（讓「2023年營收」「Canada percentage」可以匹配）
-   - 例如：「2023年全球營收分佈圓餅圖，Asia佔15%最高，Canada佔1%，Europe佔8%」
+5. "semantic_description": 簡短描述（唔超過 100 字）
 
-6. "search_keywords": 🌟 显式搜索關鍵詞陣列（確保各種查詢方式都能命中）：
-   - 包括標題、年份、指標、數值、佔比、趨勢等
-   - 例如：["2023", "營收", "分佈", "圓餅圖", "Canada 1%", "Asia 15%", "收入比例", "區域佔比"]
-
-7. "qa_pairs": 🌟 預先生成常見關係性問題 Q&A（覆蓋「邊個最大」「佔幾多」「趨勢」等問題）：
-   - 每個 chart 至少生成 3-5 個 Q&A
-   - 格式：[{{"Q": "問題", "A": "答案"}}]
-   - 例如：[{{"Q": "Canada 佔幾多百分比？", "A": "1%"}}, {{"Q": "邊個地區佔比最高？", "A": "Asia (15%)"}}]
+6. "chart_position": 圖片喺邊一頁
 
 輸出格式（純 JSON）：
 {{
  "type": "chart",
- "title": "2023年各區域收入分佈",
- "markdown_representation": "| 地區 | 百分比 |\\n|---|---|\n| Asia | 15% |\\n| Canada | 1% |",
- "key_entities": ["Asia", "Canada", "Europe", "營收"],
- "semantic_description": "2023年全球營收分佈圓餅圖，Asia佔15%最高，Canada佔1%...",
- "search_keywords": ["2023", "營收", "分佈", "圓餅圖", "Canada 1%", "Asia 15%", "收入比例", "區域佔比"],
- "qa_pairs": [{{"Q": "Canada 佔幾多百分比？", "A": "1%"}}, {{"Q": "邊個地區佔比最高？", "A": "Asia (15%)"}}]
+ "title": "Revenue by Region (2023)",
+ "structured_data": {{
+   "chart_type": "hierarchical",
+   "level_1": [
+     {{"region": "Asia, Australia & Others", "percentage": 15, "amount_hk_million": 41239}},
+     {{"region": "Hong Kong", "percentage": 45, "amount_hk_million": 124000}}
+   ],
+   "level_2": {{
+     "Asia, Australia & Others": [
+       {{"sector": "Retail", "percentage_of_region": 38}},
+       {{"sector": "Ports", "percentage_of_region": 25}}
+     ]
+   }}
+ }},
+ "key_entities": ["Asia", "Hong Kong", "Revenue"],
+ "semantic_description": "2023年營收分佈，亞洲佔15%，香港佔45%"
 }}
-""""""
+"""
+
         try:
             response = await llm_core.vision(
                 image_base64=image_base64,
