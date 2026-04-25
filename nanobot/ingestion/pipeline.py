@@ -1,42 +1,24 @@
 """
-Document Pipeline - Main Workflow Coordinator (v4.18)
+Document Pipeline - Main Workflow Coordinator (v4.19)
 
 🌟 Pure Orchestrator: Only handles workflow orchestration, no business logic
 
-Pipeline Flow (6 Stages - 簡化版):
-1. Stage 0: Preprocessor + Registrar (Vision 分析 Page 1 + Hash + DB Registration)
-   └─ LlamaParse Stage 1 完成後，Vision 分析所有 Page 1 圖片
-   └─ 一次過完成：公司識別、Hash 計算、文檔註冊
-
+Pipeline Flow (5 Stages - v4.19 最終版):
+1. Stage 0: Preprocessor + Registrar (Cover Vision + Doc Registration)
 2. Stage 1: Parser (LlamaParse)
-   └─ 解析 PDF → 生成 artifacts (text + tables + images)
-   └─ 下載圖片到本地供 Stage 0 Vision 使用
-
-3. Stage 2: Enrichment (Save Artifacts + Vision Analysis)
-   └─ 保存所有 artifacts 到 DB
-   └─ Vision 分析圖片（生成 AI summary）
-
-4. Stage 3: Router + Context Builder (REMOVED - Agent 自己規劃)
-   └─ Stage 4 Agent 自己創建任務清單，唔需要預先路由
-
+3. Stage 2: Enrichment + Vision Analysis + ImageTextLinker
+4. Stage 3: REMOVED (Agent self-planning via Path A + B)
 5. Stage 4: Agentic Extractor 🌟 Single extraction entry point
-   └─ Tool Calling Loop：revenue_breakdown, financial_metrics, key_personnel 等
-   └─ Phase 1: Planning → Agent 創建任務清單
-   └─ Phase 2: Execute → Tool Calling Loop
-   └─ Phase 3: Mid-Verification (60%)
-   └─ Phase 4: Final-Verification
-
 6. Stage 5: Validate + Vector Index + Archive
-   └─ 驗證數據 + 單位換算
-   └─ 文本切塊 + Embedding + 向量入庫
-   └─ 標記完成 + 清理臨時文件 + 生成報告
 
-7. Stage 6: Entity Resolver (圖文關聯)
-   └─ 自動建立圖片和文字的關聯 (artifact_relations)
+🌟 True Agentic Loop (v4.17):
+- Phase 1: Planning → Agent creates task list
+- Phase 2: Execute → Tool Calling Loop
+- Phase 3: Mid-Verification (60%)
+- Phase 4: Final-Verification
 
 Flow:
-PDF → Stage 1 (LlamaParse) → Stage 0 (Vision + Registrar) → Stage 2 (Enrichment)
-    → Stage 4 (Agentic Extract) → Stage 5 (Validate + Archive) → Stage 6 (Entity Link)
+PDF → Stage 0 → Stage 1 → Stage 2 → Stage 4 → Stage 5
 """
 
 import os
@@ -168,12 +150,12 @@ class DocumentPipeline(BaseIngestionPipeline):
         confirmed_doc_industry: str = None
     ) -> Dict[str, Any]:
         """
-        🌟 完整 PDF 处理流程
+        🌟 完整 PDF 处理流程 (v4.19)
         
         Pipeline 直线化（无 Toggle，无分支）：
-        Stage 0 → Stage 0.5 → Stage 1 → Stage 2 → Stage 3 → Stage 4 → Stage 5 → Stage 6 → Stage 7
+        Stage 0 → Stage 1 → Stage 2 (+ ImageTextLinker) → Stage 4 → Stage 5
         
-        🌟 v4.3: 新增 original_filename 参数，用于保存原始上传文件名
+        注意：Stage 3 已移除 (Agent self-planning)
         """
         pdf_path = Path(pdf_path)
         if not pdf_path.exists():
@@ -292,6 +274,17 @@ class DocumentPipeline(BaseIngestionPipeline):
             )
             result["stages"]["stage2"] = stage2_result
             
+            # ===== Stage 2.5: ImageTextLinker (圖文關聯) 🌟 v4.19 合併到 Stage 2 =====
+            if self.db and document_id:
+                try:
+                    from nanobot.ingestion.extractors.image_text_linker import ImageTextLinker
+                    linker = ImageTextLinker(db_client=self.db)
+                    links_count = await linker.link_image_and_text_context(document_id=document_id)
+                    logger.info(f"   ✅ 圖文關聯完成: 成功寫入 {links_count} 條關聯到 artifact_relations")
+                    result["stages"]["stage2_5"] = {"links_count": links_count}
+                except Exception as e:
+                    logger.warning(f"   ⚠️ 圖文關聯失敗: {e}")
+            
             # 🌟 v4.4: 记录 processing history (Stage 1 + Stage 2)
             if self.db and document_id:
                 # Stage 1
@@ -354,21 +347,7 @@ class DocumentPipeline(BaseIngestionPipeline):
             )
             result["stages"]["stage5"] = stage5_result
             
-            # ===== Stage 6: Entity Resolver (圖文關聯) =====
-            if progress_callback:
-                progress_callback(95.0, "Stage 6: Image Text Linker")
-            
-            if self.db and document_id:
-                try:
-                    from nanobot.ingestion.extractors.image_text_linker import ImageTextLinker
-                    linker = ImageTextLinker(db_client=self.db)
-                    links_count = await linker.link_image_and_text_context(document_id=document_id)
-                    logger.info(f"   ✅ 圖文關聯完成: 成功寫入 {links_count} 條關聯到 artifact_relations")
-                    result["stages"]["stage6"] = {"links_count": links_count}
-                except Exception as e:
-                    logger.warning(f"   ⚠️ 圖文關聯失敗: {e}")
-            
-            # 🌟 v4.5: 记录 processing history (Stage 4 + Stage 5 + Stage 6)
+            # 🌟 v4.5: 记录 processing history (Stage 4 + Stage 5)
             if self.db and document_id:
                 # Stage 4
                 extracted_count = len(stage4_result.get("extracted_data", {}))
@@ -387,15 +366,6 @@ class DocumentPipeline(BaseIngestionPipeline):
                         status="success",
                         message="Validate + Vector + Archive 完成",
                         artifacts_count=result["stages"]["stage5"].get("vector_index", {}).get("total_vectors", 0)
-                    )
-                # Stage 6
-                if result["stages"].get("stage6"):
-                    await self.db.insert_processing_history(
-                        document_id=document_id,
-                        stage="stage6",
-                        status="success",
-                        message="圖文關聯完成",
-                        artifacts_count=result["stages"]["stage6"].get("links_count", 0)
                     )
             
             if progress_callback:
@@ -473,8 +443,8 @@ class DocumentPipeline(BaseIngestionPipeline):
         year = doc_info.get("year") or 2025
         
         # 🌟 Step 3: 根據 last_stage 決定從哪裡繼續
-        # Stage 順序: stage0, stage0_5, stage1, stage2, stage4, stage5, stage6, stage7
-        stage_order = ["stage0", "stage0_5", "stage1", "stage2", "stage4", "stage5", "stage6", "stage7"]
+        # Stage 順序: stage0, stage0_5, stage1, stage2, stage2_5, stage4, stage5
+        stage_order = ["stage0", "stage0_5", "stage1", "stage2", "stage2_5", "stage4", "stage5"]
         
         try:
             last_idx = stage_order.index(last_stage)
@@ -489,9 +459,9 @@ class DocumentPipeline(BaseIngestionPipeline):
         logger.info(f"   🔄 從 {resume_from} 繼續...")
         
         # 🌟 Step 4: 根據 resume_from 執行後續 stages
-        # 🌟 v4.18: 移除 stage3，簡化為只支援 stage4, stage5, stage6, stage7
+        # 🌟 v4.19: 簡化為只支援 stage4, stage5 (stage6/7/8 合併到 stage5)
         
-        if resume_from in ["stage4", "stage5", "stage6", "stage7"]:
+        if resume_from in ["stage4", "stage5"]:
             # 這些 stages 可以直接從 DB 讀取 artifacts
             result = {"doc_id": doc_id, "document_id": document_id, "company_id": company_id, "status": "resumed", "stages": {}}
             
