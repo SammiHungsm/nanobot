@@ -1,10 +1,11 @@
 """
-統一工具註冊模組 (修復版)
+統一工具註冊模組 (v4.9)
 
-修復內容：
-1. 添加 VannaSQLTool Wrapper
-2. 移除不存在的 document_tools 导入
-3. 确保所有工具正确注册
+功能：
+1. 註冊 DirectSQLTool（取代 Vanna）
+2. 註冊 SemanticSearchTool（向量搜索）
+3. 註冊 Neo4j Graph Query Tools
+4. 確保所有工具正確註冊
 
 Usage:
     from nanobot.agent.tools.register_all_fixed import register_all_tools

@@ -131,7 +131,7 @@ class GetDynamicKeysTool(Tool):
                     "sample_values": sample_values,
                     "key_frequency": key_frequency,
                     "query_hint": f"""
-📌 Vanna SQL Query Hint (Schema v2.3):
+📌 SQL Query Hint (Schema v2.3):
 當查詢動態屬性時，請使用 PostgreSQL JSONB 語法：
 
 -- 提取單一值 (companies.extra_data)
