@@ -81,6 +81,13 @@ class Stage4AgenticExtractor:
             BackfillFromFallbackTool,
             ExtractMultiYearTrendsTool,  # 🆕 v4.17: Stage 4.6 as Tool
         )
+        
+        # 🌟 v4.21: LinkImageTextTool - LLM-powered Image-Text Linker
+        try:
+            from nanobot.agent.tools.db_ingestion_tools_link_image import LinkImageTextTool
+        except ImportError:
+            logger.warning("⚠️ LinkImageTextTool not available")
+            LinkImageTextTool = None
         # 已移除 RegisterNewKeywordTool, GetKeywordStatsTool - 改為純 Agentic 指令模式
         # 移除 InsertArtifactRelationTool - Agent 无法看到 UUID
         
@@ -100,12 +107,16 @@ class Stage4AgenticExtractor:
             SearchDocumentPagesTool,
             BackfillFromFallbackTool,
             ExtractMultiYearTrendsTool,  # 🆕 v4.17: Stage 4.6 as Tool
+            LinkImageTextTool,  # 🆕 v4.21: LLM Image-Text Linker
             # Apache AGE Graph Tools
             InsertGraphNodeTool,
             InsertGraphEdgeTool,
             QueryGraphTool,
             SyncToGraphTool,
         ]
+        
+        # 🌟 v4.21: Filter out None (failed imports)
+        tool_classes = [tc for tc in tool_classes if tc is not None]
         
         return build_tools_registry_from_classes(tool_classes)
     

@@ -2576,6 +2576,14 @@ def register_ingestion_tools(registry) -> None:
     registry.register(ExtractMultiYearTrendsTool())  # 🆕 多年趨勢數據
     
     logger.info("✅ Registered 23 ingestion tools (v4.17: +extract_multi_year_trends)")
+    
+    # 🌟 v4.21: LinkImageTextTool - LLM-powered Image-Text Linker
+    try:
+        from nanobot.agent.tools.db_ingestion_tools_link_image import LinkImageTextTool
+        registry.register(LinkImageTextTool())
+        logger.info("✅ Registered LinkImageTextTool (LLM semantic matching)")
+    except ImportError as e:
+        logger.warning(f"⚠️ LinkImageTextTool not available: {e}")
 
 
 

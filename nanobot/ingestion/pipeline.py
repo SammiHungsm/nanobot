@@ -1,14 +1,17 @@
 """
-Document Pipeline - Main Workflow Coordinator (v4.19)
+Document Pipeline - Main Workflow Coordinator (v4.21)
 
 🌟 Pure Orchestrator: Only handles workflow orchestration, no business logic
 
-Pipeline Flow (5 Stages - v4.20 最終版):
+Pipeline Flow (5 Stages - v4.21 最終版):
 1. Stage 0: Preprocessor + Registrar (Cover Vision + Doc Registration)
 2. Stage 1: Parser (LlamaParse)
-3. Stage 2: Enrichment + Vision Analysis + ImageTextLinker
+3. Stage 2: Enrichment + Vision Analysis
 4. Stage 3: REMOVED (Agent self-planning via Path A + B)
 5. Stage 4: Agentic Extractor 🌟 Single extraction entry point
+   └─ link_image_text tool (LLM semantic matching)
+   └─ extract_multi_year_trends tool
+   └─ insert_entity_relation tool
 6. Stage 5: Vector Index + Archive (Validator removed)
 
 🌟 True Agentic Loop (v4.17):
@@ -274,16 +277,8 @@ class DocumentPipeline(BaseIngestionPipeline):
             )
             result["stages"]["stage2"] = stage2_result
             
-            # ===== Stage 2.5: ImageTextLinker (圖文關聯) 🌟 v4.19 合併到 Stage 2 =====
-            if self.db and document_id:
-                try:
-                    from nanobot.ingestion.extractors.image_text_linker import ImageTextLinker
-                    linker = ImageTextLinker(db_client=self.db)
-                    links_count = await linker.link_image_and_text_context(document_id=document_id)
-                    logger.info(f"   ✅ 圖文關聯完成: 成功寫入 {links_count} 條關聯到 artifact_relations")
-                    result["stages"]["stage2_5"] = {"links_count": links_count}
-                except Exception as e:
-                    logger.warning(f"   ⚠️ 圖文關聯失敗: {e}")
+            # 🌟 v4.21: 圖文關聯改由 Agent call link_image_text tool
+            # 舊的 Stage 2.5 (Regex ImageTextLinker) 已移除
             
             # 🌟 v4.4: 记录 processing history (Stage 1 + Stage 2)
             if self.db and document_id:
@@ -443,8 +438,9 @@ class DocumentPipeline(BaseIngestionPipeline):
         year = doc_info.get("year") or 2025
         
         # 🌟 Step 3: 根據 last_stage 決定從哪裡繼續
-        # Stage 順序: stage0, stage0_5, stage1, stage2, stage2_5, stage4, stage5
-        stage_order = ["stage0", "stage0_5", "stage1", "stage2", "stage2_5", "stage4", "stage5"]
+        # Stage 順序: stage0, stage0_5, stage1, stage2, stage4, stage5
+        # 注意：圖文關聯由 Agent call link_image_text tool 完成
+        stage_order = ["stage0", "stage0_5", "stage1", "stage2", "stage4", "stage5"]
         
         try:
             last_idx = stage_order.index(last_stage)
