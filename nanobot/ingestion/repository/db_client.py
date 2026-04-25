@@ -2295,16 +2295,17 @@ class DBClient:
         """
         try:
             async with self.connection() as conn:
+                # 🌟 v4.15: Fix schema mismatch - use page_num instead of page_number
                 await conn.execute(
                     """
-                    INSERT INTO document_tables 
-                    (document_id, page_number, table_index, rows, created_at)
+                    INSERT INTO document_tables
+                    (document_id, page_num, table_index, rows, created_at)
                     VALUES ($1, $2, $3, $4::jsonb, NOW())
-                    ON CONFLICT (document_id, page_number, table_index) DO UPDATE SET
+                    ON CONFLICT (document_id, page_num, table_index) DO UPDATE SET
                         rows = $4::jsonb
                     """,
                     document_id,
-                    page_num,  # 🌟 v1.1: 修正 - page_num 对应 page_number 列
+                    page_num,  # 🌟 v1.1: 修正 - page_num 对应 page_num 列
                     table_index,
                     json.dumps(table_json)
                 )
