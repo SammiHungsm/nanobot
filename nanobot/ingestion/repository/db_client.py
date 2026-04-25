@@ -1769,38 +1769,26 @@ class DBClient:
         artifact_id: str,
         doc_id: str = None,
         document_id: int = None,
-        artifact_type: str = None,  # 🌟 修正：使用 artifact_type
-        content: str = None,  # 🌟 新增：Markdown 原文内容（修复 Bug）
-        content_json: Dict[str, Any] = None,  # 🌟 新增：结构化内容
-        file_path: str = None,
+        artifact_type: str = None,
+        content: str = None,
+        content_json: Dict[str, Any] = None,
+        file_path: str = None,  # 🌟 Kept for backward compat but not written to DB
         page_num: int = None,
-        raw_text: str = None  # 🌟 新增：纯文本摘要
+        raw_text: str = None
     ) -> bool:
         """
         插入 Raw Artifact 記錄
         
-        🌟 Bug 修复：添加 content 欄位，支持 Markdown 原文存储
-        
-        Args:
-            artifact_id: Artifact ID
-            doc_id: 文檔 ID（字串，用于向后兼容）
-            document_id: 文檔 ID（整數，推薦使用）
-            artifact_type: Artifact 类型（table, image, vision_analysis, text_chunk）
-            content: Markdown 原文内容 🌟 新增
-            content_json: 结构化内容（JSON） 🌟 新增
-            file_path: 文件路徑
-            page_num: 頁碼
-            raw_text: 纯文本摘要
-            
-        Returns:
-            bool: 是否成功
+        🌟 v4.15: Fix schema mismatch - use correct column names:
+        - source_page (not page_num)
+        - metadata (JSONB, not parsed_data)
+        - markdown_representation for markdown content
+        - No file_path column exists
         """
         try:
             import json
             
-            # 🌟 使用连接池（避免并发冲突）
             async with self.connection() as conn:
-                # N+1 效能優化：优先使用传入的 document_id
                 actual_document_id = document_id
                 
                 if actual_document_id is None and doc_id:
@@ -1812,26 +1800,29 @@ class DBClient:
                     logger.error(f"❌ 无法获取 document_id")
                     return False
                 
-                # 🌟 v4.15: Fix schema mismatch - use metadata (JSONB) instead of parsed_data
+                # 🌟 v4.15: Fix schema - use correct column names
+                # content -> markdown_representation, page_num -> source_page
                 await conn.execute(
                     """
                     INSERT INTO raw_artifacts (
                         artifact_id, document_id, artifact_type,
-                        content, metadata, file_path, page_num
-                    ) VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
+                        content, markdown_representation, source_page,
+                        metadata, semantic_description
+                    ) VALUES ($1, $2, $3, $4, $4, $5, $6::jsonb, $7)
                     ON CONFLICT (artifact_id) DO UPDATE SET
                         content = $4,
-                        metadata = $5::jsonb,
-                        file_path = $6,
-                        page_num = $7
+                        markdown_representation = $4,
+                        source_page = $5,
+                        metadata = $6::jsonb,
+                        semantic_description = $7
                     """,
                     artifact_id,
                     actual_document_id,
                     artifact_type,
-                    content,  # 🌟 使用 content 列（Markdown 原文）
+                    content,
+                    page_num,
                     json.dumps(content_json) if content_json else '{}',
-                    file_path,
-                    page_num
+                    raw_text
                 )
             
             logger.debug(f"✅ Artifact {artifact_id} ({artifact_type}) 已保存")
@@ -1871,14 +1862,15 @@ class DBClient:
         """
         try:
             async with self.connection() as conn:
+                # 🌟 v4.15: Fix schema - use source_page instead of page_num
                 if artifact_types:
                     rows = await conn.fetch(
                         """
                         SELECT artifact_id, artifact_type, content, metadata,
-                               file_path, page_num, created_at
+                               source_page, created_at
                         FROM raw_artifacts
                         WHERE document_id = $1 AND artifact_type = ANY($2)
-                        ORDER BY page_num, artifact_id
+                        ORDER BY source_page, artifact_id
                         LIMIT $3 OFFSET $4
                         """,
                         document_id,
@@ -1890,10 +1882,10 @@ class DBClient:
                     rows = await conn.fetch(
                         """
                         SELECT artifact_id, artifact_type, content, metadata,
-                               file_path, page_num, created_at
+                               source_page, created_at
                         FROM raw_artifacts
                         WHERE document_id = $1
-                        ORDER BY page_num, artifact_id
+                        ORDER BY source_page, artifact_id
                         LIMIT $2 OFFSET $3
                         """,
                         document_id,
@@ -1908,9 +1900,8 @@ class DBClient:
                         "artifact_id": row["artifact_id"],
                         "type": row["artifact_type"],
                         "content": row["content"],
-                        "content_json": row["metadata"],  # 🌟 v4.15: use metadata
-                        "file_path": row["file_path"],
-                        "page": row["page_num"],
+                        "content_json": row["metadata"],
+                        "page": row["source_page"],
                         "created_at": str(row["created_at"]) if row["created_at"] else None
                     }
                     artifacts.append(artifact)
@@ -2236,24 +2227,24 @@ class DBClient:
         """
         try:
             async with self.connection() as conn:
-                # 🌟 v2.4 修复: 正确的列名是 page_number 和 embedding_vector
-                # 注意: 表没有 (document_id, page_number, chunk_index) 的唯一约束
+                # 🌟 v4.15: Fix schema mismatch - use page_num, chunk_text, embedding
+                # 注意: 表没有 (document_id, page_num, chunk_index) 的唯一约束
                 # 所以先删除可能存在的重复记录，再插入
                 await conn.execute(
                     """
-                    DELETE FROM document_chunks 
-                    WHERE document_id = $1 AND page_number = $2 AND chunk_index = $3
+                    DELETE FROM document_chunks
+                    WHERE document_id = $1 AND page_num = $2 AND chunk_index = $3
                     """,
                     document_id,
                     page_num,
                     chunk_index
                 )
-                # 🌟 v2.4 修复: asyncpg 需要 vector 类型参数为字符串格式
+                # 🌟 v4.15: Fix - asyncpg needs vector type as string format
                 embedding_str = '[' + ','.join(map(str, embedding or [])) + ']' if embedding else '[]'
                 await conn.execute(
                     """
-                    INSERT INTO document_chunks 
-                    (document_id, page_number, chunk_index, content, embedding_vector, metadata, created_at)
+                    INSERT INTO document_chunks
+                    (document_id, page_num, chunk_index, chunk_text, embedding, metadata, created_at)
                     VALUES ($1, $2, $3, $4, $5::vector, $6::jsonb, NOW())
                     """,
                     document_id,
