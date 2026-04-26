@@ -24,8 +24,9 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres_password_change_me}
       POSTGRES_INITDB_ARGS: "-E UTF8"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./storage/init_complete.sql:/docker-entrypoint-initdb.d/init.sql
+      - postgres_data:/var/lib/postgresql
+      - ./storage/init_complete.sql:/docker-entrypoint-initdb.d/01-init_complete.sql
+      - ./storage/init_sfc_schema.sql:/docker-entrypoint-initdb.d/02-init_sfc_schema.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
@@ -37,8 +38,7 @@ services:
           cpus: '1'
           memory: 1G
     command: >
-      postgres 
-      -c shared_preload_libraries='age,vector' 
+      postgres
       -c max_connections=200
 
   # Nanobot Gateway - Main bot service
